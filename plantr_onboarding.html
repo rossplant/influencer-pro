@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PlantR — Influencer Onboarding</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --green: #1a5c38;
+      --green-light: #2d8a54;
+      --bg: #f7faf8;
+      --card: #ffffff;
+      --text: #1a2e22;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 40px 16px;
+    }
+    .container {
+      max-width: 520px;
+      margin: 0 auto;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 4px 24px rgba(26, 92, 56, 0.08);
+    }
+    .logo {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--green);
+      margin-bottom: 4px;
+    }
+    .tagline {
+      color: #5a7a68;
+      margin-bottom: 28px;
+      font-size: 15px;
+    }
+    label {
+      display: block;
+      margin-top: 16px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin-top: 6px;
+      border: 1px solid #d0e0d8;
+      border-radius: 8px;
+      font-size: 15px;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--green-light);
+    }
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 14px;
+      background: var(--green);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: var(--green-light); }
+    .result {
+      margin-top: 24px;
+      background: #f0f7f3;
+      padding: 16px;
+      border-radius: 10px;
+      white-space: pre-wrap;
+      font-size: 13px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">PlantR</div>
+    <div class="tagline">Match products to your expertise. Grow with better signals.</div>
+
+    <form id="onboard">
+      <label>Handle
+        <input name="handle" placeholder="@yourhandle" required>
+      </label>
+      <label>Name
+        <input name="name" placeholder="Your name">
+      </label>
+      <label>Areas of Interest (comma separated)
+        <input name="areas_of_interest" placeholder="houseplants, low light, beginner friendly" required>
+      </label>
+      <label>Preferred Promotion Styles (comma separated)
+        <input name="preferred_promotion_styles" placeholder="educational, lifestyle, unboxing" required>
+      </label>
+      <label>Availability
+        <select name="availability">
+          <option value="open">Open to collaborations</option>
+          <option value="selective">Selective</option>
+          <option value="paused">Paused</option>
+        </select>
+      </label>
+      <button type="submit">Join PlantR & Get Matches</button>
+    </form>
+
+    <div id="result" class="result"></div>
+  </div>
+
+  <script>
+    document.getElementById("onboard").onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const payload = {
+        handle: form.get("handle"),
+        name: form.get("name"),
+        areas_of_interest: form.get("areas_of_interest").split(",").map(s => s.trim()).filter(Boolean),
+        preferred_promotion_styles: form.get("preferred_promotion_styles").split(",").map(s => s.trim()).filter(Boolean),
+        availability: form.get("availability")
+      };
+      const res = await fetch("http://localhost:8000/onboard-influencer", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      const result = document.getElementById("result");
+      result.style.display = "block";
+      result.textContent = JSON.stringify(data, null, 2);
+    };
+  </script>
+</body>
+</html>
