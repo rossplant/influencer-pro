@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PlantR Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f7faf8; margin: 0; padding: 24px; color: #1a2e22; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { color: #1a5c38; }
+    .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    button { background: #1a5c38; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; margin-right: 8px; }
+    button:hover { background: #2d8a54; }
+    pre { background: #f0f7f3; padding: 12px; border-radius: 8px; overflow: auto; font-size: 13px; }
+    .status { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>PlantR Admin</h1>
+    <div class="card">
+      <h2>Shopify Sync</h2>
+      <p>Pull products from Shopify, enrich, and save to Notion.</p>
+      <button onclick="syncShopify()">Sync Now</button>
+      <div id="sync-status" class="status"></div>
+      <pre id="sync-result"></pre>
+    </div>
+    <div class="card">
+      <h2>Quick Enrich Test</h2>
+      <button onclick="testEnrich()">Test Enrich</button>
+      <pre id="enrich-result"></pre>
+    </div>
+    <div class="card">
+      <h2>API Status</h2>
+      <button onclick="checkStatus()">Check</button>
+      <pre id="status-result"></pre>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://localhost:8000"; // change to your Railway URL after deploy
+
+    async function syncShopify() {
+      document.getElementById("sync-status").textContent = "Syncing...";
+      const r = await fetch(`${API}/sync-shopify`, { method: "POST" });
+      const data = await r.json();
+      document.getElementById("sync-status").textContent = `Synced ${data.synced} products`;
+      document.getElementById("sync-result").textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function testEnrich() {
+      const r = await fetch(`${API}/enrich`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Test Snake Plant", description_short: "Easy care", images: ["a","b","c"] })
+      });
+      document.getElementById("enrich-result").textContent = JSON.stringify(await r.json(), null, 2);
+    }
+
+    async function checkStatus() {
+      const r = await fetch(API);
+      document.getElementById("status-result").textContent = JSON.stringify(await r.json(), null, 2);
+    }
+  </script>
+</body>
+</html>
