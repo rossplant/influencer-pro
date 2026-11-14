@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PlantR — Influencer Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --green: #1a5c38;
+      --green-light: #2d8a54;
+      --bg: #f7faf8;
+      --card: #ffffff;
+      --text: #1a2e22;
+      --muted: #5a7a68;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 24px 16px;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .logo {
+      width: 40px;
+      height: 40px;
+      background: var(--green);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 20px;
+    }
+    h1 { margin: 0; font-size: 28px; color: var(--green); }
+    .tagline { color: var(--muted); margin-bottom: 28px; }
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 24px rgba(26, 92, 56, 0.08);
+      margin-bottom: 20px;
+    }
+    label { display: block; margin-top: 14px; font-weight: 600; font-size: 14px; }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin-top: 6px;
+      border: 1px solid #d0e0d8;
+      border-radius: 8px;
+      font-size: 15px;
+    }
+    button {
+      width: 100%;
+      margin-top: 20px;
+      padding: 14px;
+      background: var(--green);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: var(--green-light); }
+    .match {
+      border-left: 4px solid var(--green);
+      padding: 12px 16px;
+      margin-top: 12px;
+      background: #f0f7f3;
+      border-radius: 8px;
+    }
+    .score { font-weight: 700; color: var(--green); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">P</div>
+      <h1>PlantR</h1>
+    </div>
+    <div class="tagline">Match products to your expertise. Better signals, better collaborations.</div>
+
+    <div class="card" id="onboard-card">
+      <h2 style="margin-top:0;">Influencer Profile</h2>
+      <form id="onboard">
+        <label>Handle <input name="handle" placeholder="@yourhandle" required></label>
+        <label>Name <input name="name" placeholder="Your name"></label>
+        <label>Areas of Interest (comma separated)
+          <input name="areas_of_interest" placeholder="houseplants, low light, beginner friendly" required>
+        </label>
+        <label>Preferred Promotion Styles (comma separated)
+          <input name="preferred_promotion_styles" placeholder="educational, lifestyle, unboxing" required>
+        </label>
+        <label>Availability
+          <select name="availability">
+            <option value="open">Open to collaborations</option>
+            <option value="selective">Selective</option>
+            <option value="paused">Paused</option>
+          </select>
+        </label>
+        <button type="submit">Save Profile & Get Matches</button>
+      </form>
+    </div>
+
+    <div class="card hidden" id="results-card">
+      <h2 style="margin-top:0;">Your Top Matches</h2>
+      <div id="matches"></div>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://localhost:8000";
+
+    document.getElementById("onboard").onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const influencer = {
+        handle: form.get("handle"),
+        name: form.get("name"),
+        areas_of_interest: form.get("areas_of_interest").split(",").map(s => s.trim()).filter(Boolean),
+        preferred_promotion_styles: form.get("preferred_promotion_styles").split(",").map(s => s.trim()).filter(Boolean),
+        availability: form.get("availability")
+      };
+
+      await fetch(`${API}/onboard-influencer`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(influencer)
+      });
+
+      // Demo products for matching (in production these come from /sync-shopify or Notion)
+      const demoProducts = [
+        { title: "Snake Plant – Low Light", category: "Houseplants", target_audience: ["beginners"], occasions: ["home decor"], care_instructions: "Water every 2-3 weeks" },
+        { title: "Pothos Golden", category: "Houseplants", target_audience: ["beginners", "gift buyers"], occasions: ["home office"], care_instructions: "Water when dry" },
+        { title: "Orchid Phalaenopsis", category: "Houseplants", target_audience: ["experts"], occasions: ["gift"] }
+      ];
+
+      const matchRes = await fetch(`${API}/match`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ influencer, products: demoProducts })
+      });
+      const data = await matchRes.json();
+
+      const matchesEl = document.getElementById("matches");
+      matchesEl.innerHTML = data.matches.map(m => `
+        <div class="match">
+          <strong>${m.product.title}</strong>
+          <div class="score">Match score: ${m.match_score}</div>
+          <div style="color:#5a7a68;font-size:14px;margin-top:4px;">${m.product.category || ""} • ${m.product.care_instructions || ""}</div>
+        </div>
+      `).join("");
+
+      document.getElementById("results-card").classList.remove("hidden");
+    };
+  </script>
+</body>
+</html>
