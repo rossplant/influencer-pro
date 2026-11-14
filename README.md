@@ -1,39 +1,27 @@
-# Influencer Pro
+# Plant Influencer Enablement Platform
 
-Influencer Pro is a project for building tools and workflows for influencer marketing.
+AI-powered overlay for TikTok Shop and other platforms.
 
-## Overview
+## What's in this repo
 
-This repository provides a lightweight starting point for influencer marketing tooling, including:
-- campaign planning helpers
-- content creator tracking utilities
-- quick reporting summaries
-
-## Project structure
-
-```text
-.
-├── README.md
-├── pyproject.toml
-├── pytest.ini
-├── .gitignore
-├── src/
-│   └── influencer_pro/
-│       ├── __init__.py
-│       └── cli.py
-└── tests/
-    └── test_cli.py
-```
+- `product_schema.json` — Product data schema optimized for TikTok Shopping Assistant
+- `influencer_schema.json` — Influencer profile schema (interests, expertise, promo styles)
+- `Plant_Influencer_Platform_Overview.md` — Full blueprint, matching logic, AI signal layer, unit economics
+- `ai_enrichment_example.py` — Signal scoring + enrichment skeleton
+- `matching_example.py` — Product-to-influencer matching
 
 ## Quick start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-influencer-pro --campaign "summer-launch" --influencers "@creatorone" "@creatortwo"
+python ai_enrichment_example.py
+python matching_example.py
 ```
 
-## Contributing
+## Next build steps
 
-Contributions and suggestions are welcome. Please open an issue to discuss a change before submitting a pull request.
+1. Import schemas into Notion
+2. Connect Shopify for product sync
+3. Turn enrichment + matching into a FastAPI service
+4. Add influencer onboarding flow
+
+See `Plant_Influencer_Platform_Overview.md` for the full model.
