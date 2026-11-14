@@ -1,0 +1,58 @@
+{
+  "influencer_schema_version": "1.0",
+  "description": "Influencer profile for targeted product matching in Plant app",
+  "fields": {
+    "influencer_id": {"type": "string", "required": true},
+    "handle": {"type": "string", "required": true},
+    "name": {"type": "string"},
+    "bio": {"type": "string"},
+    "areas_of_interest": {
+      "type": "array",
+      "items": "string",
+      "description": "e.g. houseplants, urban gardening, sustainable living, pet-friendly plants",
+      "required": true
+    },
+    "expertise_level": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["beginner", "intermediate", "expert"]
+      },
+      "description": "Map of interest area to expertise level"
+    },
+    "preferred_promotion_styles": {
+      "type": "array",
+      "items": "string",
+      "enum": ["educational", "unboxing", "before-after", "lifestyle", "gift guide", "review", "LIVE demo", "storytelling"],
+      "required": true
+    },
+    "audience_demographics": {
+      "type": "object",
+      "properties": {
+        "age_range": "string",
+        "gender_skew": "string",
+        "location_focus": "string"
+      }
+    },
+    "content_formats": {
+      "type": "array",
+      "items": "string"
+    },
+    "average_engagement_rate": {"type": "number"},
+    "past_categories": {"type": "array", "items": "string"},
+    "restrictions": {
+      "type": "array",
+      "items": "string",
+      "description": "e.g. no live animals, only organic, no pesticides"
+    },
+    "availability": {
+      "type": "string",
+      "enum": ["open", "selective", "paused"],
+      "default": "open"
+    },
+    "commission_preference": {
+      "type": "string",
+      "enum": ["standard", "higher_for_exclusives"]
+    }
+  }
+}

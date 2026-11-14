@@ -1,0 +1,76 @@
+{
+  "product_schema_version": "1.0",
+  "description": "Plant product data schema optimized for TikTok Shopping Assistant and influencer matching",
+  "parent_fields": {
+    "product_id": {"type": "string", "required": true},
+    "title": {"type": "string", "required": true, "ai_weight": "high"},
+    "brand": {"type": "string", "required": true, "ai_weight": "high"},
+    "category": {"type": "string", "required": true, "ai_weight": "high"},
+    "subcategory": {"type": "string", "required": false},
+    "description_short": {"type": "string", "required": true, "ai_weight": "high"},
+    "description_long": {"type": "string", "required": true, "ai_weight": "high"},
+    "key_features": {"type": "array", "items": "string", "required": true, "ai_weight": "high"},
+    "materials": {"type": "array", "items": "string", "required": false},
+    "dimensions": {
+      "type": "object",
+      "properties": {
+        "length": "number",
+        "width": "number",
+        "height": "number",
+        "unit": "string"
+      }
+    },
+    "weight": {
+      "type": "object",
+      "properties": {
+        "value": "number",
+        "unit": "string"
+      }
+    },
+    "care_instructions": {"type": "string", "required": false, "ai_weight": "high"},
+    "target_audience": {"type": "array", "items": "string", "required": false, "ai_weight": "high"},
+    "occasions": {"type": "array", "items": "string", "required": false, "ai_weight": "high"},
+    "claims": {
+      "type": "array",
+      "items": {
+        "claim": "string",
+        "evidence": "string",
+        "confidence": "string"
+      }
+    },
+    "images": {"type": "array", "items": "string", "required": true},
+    "video_urls": {"type": "array", "items": "string"},
+    "price": {"type": "number", "required": true},
+    "compare_at_price": {"type": "number"},
+    "currency": {"type": "string", "required": true, "default": "USD"},
+    "inventory_status": {"type": "string", "enum": ["in_stock", "low_stock", "out_of_stock"], "required": true},
+    "shipping": {
+      "type": "object",
+      "properties": {
+        "ships_from": "string",
+        "handling_time_days": "integer",
+        "free_shipping_threshold": "number",
+        "estimated_delivery_days": "string"
+      }
+    },
+    "signal_score": {"type": "number", "computed": true, "min": 0, "max": 100},
+    "creator_talking_points": {"type": "array", "items": "string", "computed": true},
+    "common_questions": {
+      "type": "array",
+      "items": {
+        "question": "string",
+        "answer": "string"
+      },
+      "computed": true
+    }
+  },
+  "variant_fields": {
+    "sku": {"type": "string", "required": true},
+    "variant_title": {"type": "string"},
+    "option1_name": {"type": "string"},
+    "option1_value": {"type": "string"},
+    "price": {"type": "number"},
+    "inventory_quantity": {"type": "integer"},
+    "barcode": {"type": "string"}
+  }
+}
