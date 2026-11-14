@@ -1,0 +1,52 @@
+{
+  "sample_products": [
+    {
+      "title": "Snake Plant – Low Light Indoor",
+      "brand": "Plant Co",
+      "category": "Houseplants",
+      "description_short": "Hardy snake plant that thrives in low light.",
+      "description_long": "The classic snake plant is nearly impossible to kill. Perfect for beginners and low-light apartments.",
+      "key_features": ["Low light tolerant", "Low water needs", "Air purifying", "Pet caution"],
+      "target_audience": ["beginners", "apartment dwellers"],
+      "occasions": ["home decor", "gift"],
+      "care_instructions": "Water every 2-3 weeks. Avoid direct sun.",
+      "images": ["https://example.com/snake1.jpg", "https://example.com/snake2.jpg"],
+      "price": 24.99,
+      "inventory_status": "in_stock"
+    },
+    {
+      "title": "Pothos Golden – Trailing",
+      "brand": "Plant Co",
+      "category": "Houseplants",
+      "description_short": "Easy trailing pothos with golden variegation.",
+      "description_long": "Fast-growing pothos that looks great on shelves or hanging.",
+      "key_features": ["Trailing", "Fast growing", "Easy care"],
+      "target_audience": ["beginners", "gift buyers"],
+      "occasions": ["home office", "gift"],
+      "care_instructions": "Water when top inch of soil is dry.",
+      "images": ["https://example.com/pothos1.jpg"],
+      "price": 18.50,
+      "inventory_status": "in_stock"
+    }
+  ],
+  "sample_influencers": [
+    {
+      "handle": "@plantlover",
+      "name": "Alex",
+      "areas_of_interest": ["houseplants", "low light plants", "beginner friendly"],
+      "preferred_promotion_styles": ["educational", "lifestyle"],
+      "expertise_level": {"houseplants": "intermediate"},
+      "restrictions": [],
+      "availability": "open"
+    },
+    {
+      "handle": "@urbangreen",
+      "name": "Sam",
+      "areas_of_interest": ["urban gardening", "sustainable living"],
+      "preferred_promotion_styles": ["before-after", "gift guide"],
+      "expertise_level": {"urban gardening": "expert"},
+      "restrictions": ["only organic"],
+      "availability": "selective"
+    }
+  ]
+}
