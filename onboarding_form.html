@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Plant — Influencer Onboarding</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+    label { display: block; margin-top: 12px; font-weight: 600; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px; }
+    button { margin-top: 20px; padding: 10px 20px; background: #111; color: white; border: none; cursor: pointer; }
+    .result { margin-top: 20px; background: #f5f5f5; padding: 12px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Plant Influencer Onboarding</h1>
+  <form id="onboard">
+    <label>Handle
+      <input name="handle" placeholder="@plantlover" required>
+    </label>
+    <label>Name
+      <input name="name" placeholder="Alex">
+    </label>
+    <label>Areas of Interest (comma separated)
+      <input name="areas_of_interest" placeholder="houseplants, low light plants, beginner friendly" required>
+    </label>
+    <label>Preferred Promotion Styles (comma separated)
+      <input name="preferred_promotion_styles" placeholder="educational, lifestyle" required>
+    </label>
+    <label>Availability
+      <select name="availability">
+        <option value="open">Open</option>
+        <option value="selective">Selective</option>
+        <option value="paused">Paused</option>
+      </select>
+    </label>
+    <button type="submit">Save Profile & Get Matches</button>
+  </form>
+  <div id="result" class="result" style="display:none;"></div>
+
+  <script>
+    document.getElementById("onboard").onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const payload = {
+        handle: form.get("handle"),
+        name: form.get("name"),
+        areas_of_interest: form.get("areas_of_interest").split(",").map(s => s.trim()).filter(Boolean),
+        preferred_promotion_styles: form.get("preferred_promotion_styles").split(",").map(s => s.trim()).filter(Boolean),
+        availability: form.get("availability")
+      };
+      const res = await fetch("http://localhost:8000/onboard-influencer", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      const result = document.getElementById("result");
+      result.style.display = "block";
+      result.textContent = JSON.stringify(data, null, 2);
+    };
+  </script>
+</body>
+</html>
