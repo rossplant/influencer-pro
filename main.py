@@ -1,4 +1,4 @@
-# plantr-collab API — Hybrid Matching + Optional Grok Talking Points
+# plantr-collab API — Lightweight (no local embedding model)
 # Run: uvicorn main:app --host 0.0.0.0 --port $PORT
 # Requires grok_helper.py in the same directory
 
@@ -10,20 +10,11 @@ from pydantic import BaseModel
 from notion_client import Client
 import requests
 from dotenv import load_dotenv
-import numpy as np
-from sentence_transformers import SentenceTransformer
 from grok_helper import generate_with_grok
 
 load_dotenv()
 
-app = FastAPI(title="plantr-collab API", version="0.8")
-
-EMBED_MODEL = None
-try:
-    EMBED_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-    print("Embedding model loaded")
-except Exception as e:
-    print(f"Embedding model failed to load: {e}")
+app = FastAPI(title="plantr-collab API", version="0.8-light")
 
 notion = None
 if os.getenv("NOTION_TOKEN"):
@@ -72,16 +63,6 @@ def weighted_interest_score(product_text: str, interest: str) -> float:
 def has_negative(product_text: str, interest: str) -> bool:
     pattern = NEGATIVE_PATTERNS.get(interest.lower())
     return bool(pattern and re.search(pattern, product_text, re.IGNORECASE))
-
-def embed(text: str):
-    if not EMBED_MODEL or not text:
-        return np.zeros(384)
-    return EMBED_MODEL.encode(text, normalize_embeddings=True)
-
-def semantic_similarity(text_a: str, text_b: str) -> float:
-    if not text_a or not text_b or EMBED_MODEL is None:
-        return 0.0
-    return float(np.dot(embed(text_a), embed(text_b)))
 
 class ProductIn(BaseModel):
     title: str
@@ -138,10 +119,6 @@ def hybrid_match_score(product: Dict[str, Any], influencer: Dict[str, Any]) -> f
 
     score += product.get("signal_score", 0) * 0.15
 
-    interest_text = " ".join(influencer.get("areas_of_interest", []))
-    if interest_text:
-        score += semantic_similarity(product_text, interest_text) * 25
-
     if influencer.get("availability") == "paused":
         score *= 0.3
 
@@ -195,7 +172,11 @@ def map_shopify_to_plant(sp):
 
 @app.get("/")
 def root():
-    return {"status": "plantr-collab API running", "version": "0.8", "grok_enabled": bool(os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY"))}
+    return {
+        "status": "plantr-collab API running",
+        "version": "0.8-light",
+        "grok_enabled": bool(os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY"))
+    }
 
 @app.post("/enrich", response_model=EnrichResponse)
 def enrich(product: ProductIn):
