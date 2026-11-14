@@ -1,0 +1,16 @@
+[project]
+name = "influencer-pro"
+version = "0.1.0"
+description = "Tools and workflows for influencer marketing"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "rossplant" }]
+
+[project.scripts]
+influencer-pro = "influencer_pro.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
