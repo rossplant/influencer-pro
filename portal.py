@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 import attribution
@@ -647,18 +647,41 @@ def _link_for(creator_id: Optional[str], product_id: Optional[str]) -> Optional[
     return None
 
 
+def _brief_matches(brief, item: dict) -> bool:
+    item_id = item.get("id")
+    product_id = item.get("product_id")
+    creator_id = item.get("creator_id")
+    brief_item = getattr(brief, "shortlist_item_id", None)
+    brief_product = getattr(brief, "product_id", None)
+    brief_creator = getattr(brief, "creator_id", None)
+    if item_id and product_id and brief_product == product_id and brief_item == item_id:
+        return True
+    if item_id and brief_item == item_id:
+        return True
+    return bool(creator_id and product_id and brief_product == product_id and brief_creator == creator_id)
+
+
 def _brief_for(item: dict) -> Optional[dict]:
     if db.configured():
         with db.session_scope() as session:
-            query = select(Brief).where(Brief.product_id == item.get("product_id")).order_by(Brief.created_at.desc())
-            if item.get("creator_id"):
-                query = query.where(Brief.creator_id == item["creator_id"])
-            brief = session.scalars(query).first()
+            clauses = []
+            item_id = item.get("id")
+            product_id = item.get("product_id")
+            creator_id = item.get("creator_id")
+            if item_id and product_id:
+                clauses.append((Brief.product_id == product_id) & (Brief.shortlist_item_id == item_id))
+            if item_id:
+                clauses.append(Brief.shortlist_item_id == item_id)
+            if creator_id and product_id:
+                clauses.append((Brief.product_id == product_id) & (Brief.creator_id == creator_id))
+            if not clauses:
+                return None
+            brief = session.scalars(select(Brief).where(or_(*clauses)).order_by(Brief.created_at.desc())).first()
             if brief is None:
                 return None
             return {"id": brief.id, "content": brief.content}
     for brief in reversed(db.memory_briefs):
-        if getattr(brief, "product_id", None) == item.get("product_id") and getattr(brief, "creator_id", None) == item.get("creator_id"):
+        if _brief_matches(brief, item):
             return {"id": brief.id, "content": brief.content}
     return None
 

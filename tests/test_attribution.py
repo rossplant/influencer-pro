@@ -28,6 +28,31 @@ def _session(monkeypatch):
     return _cookie_header(_login())
 
 
+def test_accept_issues_the_link_and_backfill_is_idempotent(monkeypatch):
+    import attribution
+
+    shop, creator, product_id = _catalogue()
+    headers = _session(monkeypatch)
+    matched = client.post(
+        "/match",
+        json={"product_id": product_id, "shop_id": shop["id"], "all_onboarded": True},
+        headers=headers,
+    )
+    assert matched.status_code == 200
+    item_id = matched.json()["matches"][0]["shortlist_item_id"]
+    assert client.post(f"/shortlist-items/{item_id}/accept", headers=headers).status_code == 200
+    links = client.get("/creator-product-links", params={"creator_id": creator["id"]}, headers=headers)
+    assert links.status_code == 200
+    assert len(links.json()) == 1
+    assert links.json()[0]["shortlist_item_id"] == item_id
+    assert links.json()[0]["link_url"] == "https://brand.example/products/sample"
+    db.memory_creator_product_links.clear()
+    assert attribution.backfill_accepted_links() == 1
+    assert attribution.backfill_accepted_links() == 0
+    assert len(db.memory_creator_product_links) == 1
+    assert db.memory_creator_product_links[0].shortlist_item_id == item_id
+
+
 def test_link_is_idempotent_and_redirect_logs_a_click(monkeypatch):
     shop, creator, product_id = _catalogue()
     headers = _session(monkeypatch)

@@ -426,6 +426,7 @@ def decide_shortlist_item(item_id: str, event_name: str, reason: Optional[str] =
             raise HTTPException(status_code=404, detail="Shortlist item not found")
         _reject_if_decided(item)
         events.emit(event_name, item, "api", decline_reason=reason)
+        _issue_link_for_acceptance(item, event_name)
         return _decision_payload(item)
     with db.session_scope() as session:
         item = session.get(ShortlistItem, item_id)
@@ -436,7 +437,21 @@ def decide_shortlist_item(item_id: str, event_name: str, reason: Optional[str] =
         if item.creator_id:
             item.creator = session.get(Creator, item.creator_id)
         events.emit(event_name, item, "api", decline_reason=reason)
+        _issue_link_for_acceptance(item, event_name)
         return _decision_payload(item)
+
+
+def _issue_link_for_acceptance(item, event_name: str) -> None:
+    if event_name != "match_accepted":
+        return
+    import attribution
+
+    shortlist = getattr(item, "shortlist", None)
+    attribution.ensure_link_for_acceptance(
+        creator_id=getattr(item, "creator_id", None),
+        product_id=getattr(shortlist, "product_id", None),
+        shortlist_item_id=getattr(item, "id", None),
+    )
 
 
 def _reject_if_decided(item) -> None:

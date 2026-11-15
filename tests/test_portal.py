@@ -1,7 +1,7 @@
 """Seller and creator pilot apps."""
 
 import db
-from test_api import INFLUENCER, client
+from test_api import INFLUENCER, PRODUCT, client
 from tests.test_admin import _setup
 
 
@@ -53,6 +53,30 @@ def test_operator_api_key_creates_logins_without_csrf(monkeypatch):
     )
     assert creator_login.status_code == 200
     assert creator_login.json()["role"] == "creator"
+    enriched = client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": shop["id"], "attributes": {"url": "https://brand.example/keyed"}},
+        headers={"X-API-Key": "operator-key"},
+    )
+    assert enriched.status_code == 200
+    linked = client.post(
+        "/creator-product-links",
+        json={"creator_id": creator["id"], "product_id": enriched.json()["product_id"]},
+        headers={"X-API-Key": "operator-key"},
+    )
+    assert linked.status_code == 200
+    listed = client.get(
+        "/creator-product-links",
+        params={"shop_id": shop["id"]},
+        headers={"X-API-Key": "operator-key"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()[0]["discount_code"] == linked.json()["discount_code"]
+    assert client.post(
+        "/creator-product-links",
+        json={"creator_id": creator["id"], "product_id": enriched.json()["product_id"]},
+        headers={"X-API-Key": "nope"},
+    ).status_code == 401
     wrong = client.post(
         f"/admin/api/shops/{shop['id']}/login",
         json={"email": "other@example.com", "password": PASSWORD, "password_confirm": PASSWORD},
@@ -175,8 +199,21 @@ def test_seller_and_creator_apps(monkeypatch):
         headers=admin_cookie,
     )
     assert link.status_code == 200
+    assert link.json()["created"] is False
+    assert link.json()["shortlist_item_id"] == item_id
     code = link.json()["discount_code"]
     assert code in client.get("/seller/accepted", headers=seller_cookie).text
+    from types import SimpleNamespace
+
+    db.memory_briefs.append(
+        SimpleNamespace(
+            id="brief-offer",
+            product_id=product_id,
+            shortlist_item_id=item_id,
+            creator_id=None,
+            content='{"talking_points": ["Mention the cord"]}',
+        )
+    )
 
     creator_login = client.get("/creator")
     signed = client.post(
@@ -185,7 +222,9 @@ def test_seller_and_creator_apps(monkeypatch):
         follow_redirects=False,
     )
     creator_cookie = _cookie(signed, "plantr_creator")
-    assert "Lamp" in client.get("/creator/offers", headers=creator_cookie).text
+    offers = client.get("/creator/offers", headers=creator_cookie)
+    assert "Lamp" in offers.text
+    assert "Mention the cord" in offers.text
     assert code in client.get("/creator/links", headers=creator_cookie).text
 
 

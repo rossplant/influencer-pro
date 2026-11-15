@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import secrets
 import uuid
 from datetime import date, datetime, timezone
@@ -22,6 +23,8 @@ import db
 import events
 from models import AttributedOrder, Brief, Creator, CreatorProductLink, Product, Shop, Shortlist, ShortlistItem, utcnow
 from services import _currency_code
+
+logger = logging.getLogger("plantr.attribution")
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 HEADER_ALIASES = {
@@ -61,6 +64,71 @@ def issue_link(
     if db.configured():
         return _issue_db(creator_id, product_id, destination_url, shortlist_item_id, platform)
     return _issue_memory(creator_id, product_id, destination_url, shortlist_item_id, platform)
+
+
+def ensure_link_for_acceptance(
+    *,
+    creator_id: Optional[str],
+    product_id: Optional[str],
+    shortlist_item_id: Optional[str],
+) -> bool:
+    """Issue the tracking link for an accepted item. Missing data is skipped.
+
+    Returns True only when a new link row is created. Repeating the call keeps
+    the same code and fills shortlist_item_id when it was empty.
+    """
+    if not creator_id or not product_id or not shortlist_item_id:
+        return False
+    destination = product_destination(product_id)
+    if destination is None:
+        logger.warning(
+            "Skipped tracking link for shortlist item %s because product %s has no http(s) URL",
+            shortlist_item_id,
+            product_id,
+        )
+        return False
+    try:
+        _row, created = issue_link(
+            creator_id=str(creator_id),
+            product_id=str(product_id),
+            destination_url=destination,
+            shortlist_item_id=str(shortlist_item_id),
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "Skipped tracking link for shortlist item %s: %s",
+            shortlist_item_id,
+            exc.detail,
+        )
+        return False
+    return created
+
+
+def backfill_accepted_links() -> int:
+    """Create missing links for shortlist items that are already accepted."""
+    created = 0
+    for creator_id, product_id, item_id in _accepted_pairs():
+        if ensure_link_for_acceptance(
+            creator_id=creator_id,
+            product_id=product_id,
+            shortlist_item_id=item_id,
+        ):
+            created += 1
+    logger.info("Accepted-link backfill created %s tracking link(s)", created)
+    return created
+
+
+def product_destination(product_id: str) -> Optional[str]:
+    if db.configured():
+        with db.session_scope() as session:
+            product = session.get(Product, product_id)
+            attributes = product.attributes if product is not None else None
+    else:
+        product = db.memory_products.get(product_id)
+        attributes = getattr(product, "attributes", None) if product is not None else None
+    if not isinstance(attributes, dict):
+        return None
+    return safe_destination(attributes.get("url") or attributes.get("product_url"))
 
 
 def list_links(*, shop_id: Optional[str], creator_id: Optional[str]) -> list[dict]:
@@ -161,6 +229,9 @@ def _issue_db(creator_id, product_id, destination_url, shortlist_item_id, platfo
             )
         )
         if existing is not None:
+            if shortlist_item_id and not existing.shortlist_item_id:
+                existing.shortlist_item_id = shortlist_item_id
+                session.flush()
             return _link_dict(existing), False
         item_id = _checked_item(session, shortlist_item_id, product.id, creator.id)
         destination = _destination(destination_url, product.attributes)
@@ -205,6 +276,8 @@ def _issue_memory(creator_id, product_id, destination_url, shortlist_item_id, pl
         None,
     )
     if existing is not None:
+        if shortlist_item_id and not existing.shortlist_item_id:
+            existing.shortlist_item_id = shortlist_item_id
         return _link_dict(existing), False
     item_id = _checked_item_memory(shortlist_item_id, product_id, creator_id)
     destination = _destination(destination_url, getattr(product, "attributes", None))
@@ -222,6 +295,26 @@ def _issue_memory(creator_id, product_id, destination_url, shortlist_item_id, pl
     )
     db.memory_creator_product_links.append(link)
     return _link_dict(link), True
+
+
+def _accepted_pairs() -> list[tuple]:
+    if db.configured():
+        with db.session_scope() as session:
+            rows = session.execute(
+                select(ShortlistItem.creator_id, Shortlist.product_id, ShortlistItem.id)
+                .join(Shortlist, Shortlist.id == ShortlistItem.shortlist_id)
+                .where(ShortlistItem.accepted_at.is_not(None))
+            ).all()
+            return [(creator_id, product_id, item_id) for creator_id, product_id, item_id in rows]
+    pairs = []
+    for item in db.memory_shortlist_items:
+        if not getattr(item, "accepted_at", None):
+            continue
+        shortlist = getattr(item, "shortlist", None)
+        if shortlist is None:
+            shortlist = next((row for row in db.memory_shortlists if row.id == item.shortlist_id), None)
+        pairs.append((getattr(item, "creator_id", None), getattr(shortlist, "product_id", None), item.id))
+    return pairs
 
 
 def _import_row(raw: dict, *, dry_run: bool, seen: set[tuple[str, str]]) -> dict:
