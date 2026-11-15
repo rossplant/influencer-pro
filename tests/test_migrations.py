@@ -53,3 +53,12 @@ def test_alembic_upgrade_head_on_postgres():
         if default is None:
             continue
         assert default.strip().lower() in {"false", "true"}, f"{table_name}.{column_name} default {default}"
+    os.environ["DATABASE_URL"] = url
+    os.environ["SESSION_SECRET"] = "test-session-secret"
+    import main
+    from fastapi.testclient import TestClient
+
+    main.init_storage()
+    page = TestClient(main.app).get("/founding-curators")
+    assert page.status_code == 200
+    assert "Earn from products your audience will actually buy." in page.text

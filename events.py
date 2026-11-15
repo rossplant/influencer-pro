@@ -193,7 +193,10 @@ def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
         raise ValueError("actor must be 'system', 'operator', or 'api'")
 
     entity_type, entity_id, shop = _resolve(entity)
-    session = None if getattr(entity, "memory_kind", None) else object_session(entity)
+    if getattr(entity, "memory_kind", None) or getattr(entity, "emit_detached", False):
+        session = None
+    else:
+        session = object_session(entity)
     if shop is not None and name in USAGE_COUNTERS:
         counter = USAGE_COUNTERS[name]
         setattr(shop, counter, int(getattr(shop, counter) or 0) + 1)
