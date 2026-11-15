@@ -39,6 +39,7 @@ PILOT_TABLES = {
     "monthly_mrr_snapshots",
     "attributed_orders",
     "admin_users",
+    "portal_accounts",
 }
 
 

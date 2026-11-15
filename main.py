@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 import admin_data
 import attribution
 import auth
+import portal
 import db
 import events
 import services
@@ -37,9 +38,8 @@ ROOT = Path(__file__).resolve().parent
 HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
-    "plantr_dashboard.html",
 )
-APP_VERSION = "0.13"
+APP_VERSION = "0.14.1"
 
 PromotionStyle = Literal[
     "educational",
@@ -92,6 +92,8 @@ class InfluencerIn(BaseModel):
     commission_preference: Optional[CommissionPreference] = None
     platforms: List[str] = Field(default_factory=list)
     follower_band: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
 
 
 class ClaimIn(BaseModel):
@@ -287,11 +289,51 @@ def rate_limit_public(request: Request) -> None:
     enforce_rate_limit(f"ip:{client_ip(request)}")
 
 
+def rate_limit_portal(request: Request) -> None:
+    enforce_rate_limit(f"portal:{client_ip(request)}")
+
+
 def require_admin(request: Request) -> str:
     if not _admin_available():
         raise HTTPException(status_code=503, detail="Admin area is disabled")
     email = auth.session_email(request)
     if not email:
+        raise HTTPException(status_code=401, detail="Admin session required")
+    enforce_rate_limit(f"session:{email}")
+    return email
+
+
+def _api_key_status(request: Request) -> str:
+    """Return valid, invalid, or absent. A header is ignored when API_KEYS is unset."""
+    provided = request.headers.get("x-api-key", "")
+    if not provided:
+        return "absent"
+    keys = configured_api_keys()
+    if not keys:
+        return "absent"
+    if _key_matches(provided, keys):
+        return "valid"
+    return "invalid"
+
+
+def require_login_operator(request: Request) -> str:
+    """Admin session for the browser, or a valid API key for operator automation.
+
+    The key path is only for creating shop and creator logins. It does not
+    open the rest of the admin area.
+    """
+    status = _api_key_status(request)
+    if status == "valid":
+        enforce_rate_limit(f"key:{api_key_label(request.headers.get('x-api-key'))}")
+        return "api-key"
+    email = auth.session_email(request) if _admin_available() else None
+    if status == "invalid" and not email:
+        enforce_rate_limit(f"ip:{client_ip(request)}")
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not _admin_available():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    if not email:
+        enforce_rate_limit(f"ip:{client_ip(request)}")
         raise HTTPException(status_code=401, detail="Admin session required")
     enforce_rate_limit(f"session:{email}")
     return email
@@ -329,6 +371,7 @@ def reset_runtime_state() -> None:
     """Clear process-local data and rate-limit buckets, then re-read DATABASE_URL."""
     db.reset_memory()
     auth.reset_login_limits()
+    portal.reset_limits()
     with _rate_lock:
         _rate_buckets.clear()
     init_storage()
@@ -358,6 +401,8 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
     if record.get("engagement_rate") is None and record.get("average_engagement_rate") is not None:
         record["engagement_rate"] = record["average_engagement_rate"]
     record.pop("average_engagement_rate", None)
+    record.pop("password", None)
+    record.pop("email", None)
     if not record.get("platforms"):
         record.pop("platforms", None)
     if not record.get("follower_band"):
@@ -568,7 +613,7 @@ def onboarding_form_page():
 
 @app.get("/plantr_dashboard.html")
 def plantr_dashboard_page():
-    return _html("plantr_dashboard.html")
+    return RedirectResponse(url="/creator", status_code=302)
 
 
 @app.get("/plantr_admin.html")
@@ -580,7 +625,9 @@ def plantr_admin_page():
 def admin_page():
     if not _admin_available():
         raise HTTPException(status_code=503, detail="Admin area is disabled")
-    return _html("admin.html")
+    page = (ROOT / "admin.html").read_text(encoding="utf-8")
+    token = html.escape(auth.issue_form_token("admin"), quote=True)
+    return HTMLResponse(page.replace("__CSRF__", token))
 
 
 @app.get("/admin/setup")
@@ -729,7 +776,7 @@ def admin_event(event_id: str, _: str = Depends(require_admin)):
 
 
 @app.post("/creator-product-links")
-def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends(require_admin)):
+def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends(require_login_operator)):
     row, created = attribution.issue_link(
         creator_id=body.creator_id,
         product_id=body.product_id,
@@ -746,7 +793,7 @@ def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends
 def get_creator_product_links(
     shop_id: Optional[str] = None,
     creator_id: Optional[str] = None,
-    _: str = Depends(require_admin),
+    _: str = Depends(require_login_operator),
 ):
     return attribution.list_links(shop_id=shop_id, creator_id=creator_id)
 
@@ -804,6 +851,220 @@ def admin_order(order_id: str, _: str = Depends(require_admin)):
     if row is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return row
+
+
+@app.post("/admin/api/shops/{shop_id}/login")
+async def admin_create_seller_login(shop_id: str, request: Request, actor: str = Depends(require_login_operator)):
+    fields = await _request_fields(request)
+    if actor != "api-key":
+        portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    result = portal.create_login(
+        role="seller",
+        email=str(fields.get("email") or ""),
+        password=str(fields.get("password") or ""),
+        password_confirm=str(fields.get("password_confirm") or ""),
+        shop_id=shop_id,
+    )
+    return _portal_result(request, result, "/admin")
+
+
+@app.post("/admin/api/creators/{creator_id}/login")
+async def admin_create_creator_login(creator_id: str, request: Request, actor: str = Depends(require_login_operator)):
+    fields = await _request_fields(request)
+    if actor != "api-key":
+        portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    result = portal.create_login(
+        role="creator",
+        email=str(fields.get("email") or ""),
+        password=str(fields.get("password") or ""),
+        password_confirm=str(fields.get("password_confirm") or ""),
+        creator_id=creator_id,
+    )
+    return _portal_result(request, result, "/admin")
+
+
+@app.post("/admin/api/shops/{shop_id}/view-as")
+async def admin_view_shop(shop_id: str, request: Request, admin: str = Depends(require_admin)):
+    fields = await _request_fields(request)
+    portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    if services.fetch_shop(shop_id) is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    response = _portal_result(request, {"ok": True, "redirect": "/seller"}, "/seller")
+    portal.set_role_cookie(response, "seller", admin, shop_id, impersonator=admin)
+    return response
+
+
+@app.post("/admin/api/creators/{creator_id}/view-as")
+async def admin_view_creator(creator_id: str, request: Request, admin: str = Depends(require_admin)):
+    fields = await _request_fields(request)
+    portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    if services.fetch_creator(creator_id) is None:
+        raise HTTPException(status_code=404, detail="Creator not found")
+    response = _portal_result(request, {"ok": True, "redirect": "/creator"}, "/creator")
+    portal.set_role_cookie(response, "creator", admin, creator_id, impersonator=admin)
+    return response
+
+
+@app.get("/seller")
+@app.get("/seller/profile")
+def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_seller(portal.seller_context(request), "profile", base_url=str(request.base_url))
+
+
+@app.get("/seller/products")
+def seller_products(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    products = portal.seller_products(session["subject_id"]) if session else []
+    return portal.render_seller(session, "products", base_url=str(request.base_url), products=products)
+
+
+@app.post("/seller/products")
+async def seller_save_product(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.save_product(
+        session["subject_id"],
+        product_id=str(form.get("product_id") or ""),
+        title=str(form.get("title") or ""),
+        category=str(form.get("category") or ""),
+        price=str(form.get("price") or ""),
+        url=str(form.get("url") or ""),
+        description=str(form.get("description") or ""),
+    )
+    return RedirectResponse("/seller/products", status_code=303)
+
+
+@app.get("/seller/find")
+def seller_find(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    products = portal.seller_products(session["subject_id"]) if session else []
+    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=[])
+
+
+@app.post("/seller/find")
+async def seller_run_match(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    outcome = portal.run_match(session["subject_id"], str(form.get("product_id") or ""))
+    products = portal.seller_products(session["subject_id"])
+    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=outcome["matches"])
+
+
+@app.post("/seller/shortlist-items/{item_id}/accept")
+async def seller_accept(item_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.decide(session["subject_id"], item_id, "match_accepted")
+    return RedirectResponse("/seller/accepted", status_code=303)
+
+
+@app.post("/seller/shortlist-items/{item_id}/decline")
+async def seller_decline(item_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.decide(session["subject_id"], item_id, "match_declined")
+    return RedirectResponse("/seller/find", status_code=303)
+
+
+@app.get("/seller/accepted")
+def seller_accepted(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    accepted = portal.accepted_for_shop(session["subject_id"]) if session else []
+    return portal.render_seller(session, "accepted", base_url=str(request.base_url), accepted=accepted)
+
+
+@app.post("/seller/login")
+async def seller_login(request: Request, _: None = Depends(rate_limit_portal)):
+    form = await request.form()
+    portal.check_login_csrf(str(form.get("csrf_token") or ""), "seller-login")
+    account = portal.authenticate("seller", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    response = RedirectResponse("/seller/profile", status_code=303)
+    portal.set_role_cookie(response, "seller", account.email, account.shop_id)
+    return response
+
+
+@app.post("/seller/logout")
+async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    response = RedirectResponse("/seller", status_code=303)
+    portal.clear_role_cookie(response, "seller")
+    return response
+
+
+@app.get("/creator")
+@app.get("/creator/profile")
+def creator_profile_page(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_creator(portal.creator_context(request), "profile", base_url=str(request.base_url))
+
+
+@app.post("/creator/profile")
+async def creator_save_profile(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    active = [part.strip().lower() for part in str(form.get("active_categories") or "").split(",") if part.strip()]
+    desired = [part.strip().lower() for part in str(form.get("desired_categories") or "").split(",") if part.strip()]
+    portal.update_creator_categories(session["subject_id"], active, desired)
+    return RedirectResponse("/creator/profile", status_code=303)
+
+
+@app.get("/creator/offers")
+def creator_offers_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.creator_context(request)
+    offers = portal.creator_offers(session["subject_id"]) if session else []
+    return portal.render_creator(session, "offers", base_url=str(request.base_url), offers=offers)
+
+
+@app.get("/creator/links")
+def creator_links_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.creator_context(request)
+    links = portal.creator_links(session["subject_id"]) if session else []
+    return portal.render_creator(session, "links", base_url=str(request.base_url), links=links)
+
+
+@app.post("/creator/login")
+async def creator_login(request: Request, _: None = Depends(rate_limit_portal)):
+    form = await request.form()
+    portal.check_login_csrf(str(form.get("csrf_token") or ""), "creator-login")
+    account = portal.authenticate("creator", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    response = RedirectResponse("/creator/profile", status_code=303)
+    portal.set_role_cookie(response, "creator", account.email, account.creator_id)
+    return response
+
+
+@app.post("/creator/logout")
+async def creator_logout(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    response = RedirectResponse("/creator", status_code=303)
+    portal.clear_role_cookie(response, "creator")
+    return response
+
+
+async def _request_fields(request: Request) -> dict:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    form = await request.form()
+    return {key: form.get(key) for key in form.keys()}
+
+
+def _portal_result(request: Request, payload: dict, redirect_to: str):
+    if "application/json" in request.headers.get("content-type", ""):
+        return JSONResponse(payload)
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 def _paged(rows: list, q: str, page: int, page_size: int) -> dict:
@@ -997,9 +1258,23 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
 
 @app.post("/onboard-influencer")
 def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_public)):
+    if influencer.email or influencer.password:
+        if not influencer.email or not influencer.password or len(influencer.password) < portal.MIN_PASSWORD:
+            raise HTTPException(
+                status_code=422,
+                detail="Creator login needs an email and a password of at least 12 characters",
+            )
     influencer_id = str(uuid.uuid4())
     record = public_profile(influencer, influencer_id)
     services.persist_creator(record)
+    if influencer.email and influencer.password:
+        portal.create_login(
+            role="creator",
+            email=influencer.email,
+            password=influencer.password,
+            password_confirm=influencer.password,
+            creator_id=influencer_id,
+        )
     return {"id": influencer_id, "influencer": record}
 
 
