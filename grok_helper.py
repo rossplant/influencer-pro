@@ -4,7 +4,7 @@ import json
 from typing import List, Dict, Any
 
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
-GROK_MODEL = os.getenv("GROK_MODEL") or "grok-2-latest"
+GROK_MODEL = os.getenv("GROK_MODEL") or "grok-4.3"
 GROK_URL = "https://api.x.ai/v1/chat/completions"
 
 def generate_with_grok(product: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,6 +39,7 @@ Return ONLY valid JSON:
   ]
 }}"""
 
+    resp = None
     try:
         resp = requests.post(
             GROK_URL,
@@ -58,5 +59,14 @@ Return ONLY valid JSON:
         data = json.loads(content)
         return data
     except Exception as e:
-        print(f"Grok failed: {e}")
+        body = ""
+        if resp is not None:
+            try:
+                body = resp.text[:500]
+            except Exception:
+                body = ""
+        if body:
+            print(f"Grok failed: {e} | {body}")
+        else:
+            print(f"Grok failed: {e}")
         return fallback

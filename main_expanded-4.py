@@ -31,7 +31,7 @@ app = FastAPI(title="plantr-collab API", version="0.7")
 
 # Optional Grok / xAI integration
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
-GROK_MODEL = os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-2-latest"
+GROK_MODEL = os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-4.3"
 
 # Embedding model (loaded once)
 EMBED_MODEL = None

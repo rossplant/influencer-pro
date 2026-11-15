@@ -23,10 +23,10 @@ This repo now supports an optional Grok integration via the xAI API. Add one of 
 
 ```bash
 GROK_API_KEY=your_xai_api_key
-GROK_MODEL=grok-2-latest
+GROK_MODEL=grok-4.3
 # or
 XAI_API_KEY=your_xai_api_key
-XAI_MODEL=grok-2-latest
+XAI_MODEL=grok-4.3
 ```
 
 Then start the API:
