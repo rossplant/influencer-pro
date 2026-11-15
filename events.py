@@ -153,6 +153,41 @@ def record_admin(name: str, **props: Any) -> Any:
         return event
 
 
+def record_link_click(link: Any) -> Any:
+    """Append a click for a tracking code. This does not change plan counters."""
+    from types import SimpleNamespace
+
+    def value(name: str):
+        if isinstance(link, dict):
+            return link.get(name)
+        return getattr(link, name, None)
+
+    payload = {
+        "id": _new_id(),
+        "occurred_at": utcnow(),
+        "event_name": "link_clicked",
+        "entity_type": "creator_product_link",
+        "entity_id": str(value("id")),
+        "shop_id": value("shop_id"),
+        "actor": "api",
+        "request_id": db.current_request_id(),
+        "properties": {
+            "discount_code": value("discount_code"),
+            "creator_id": value("creator_id"),
+            "product_id": value("product_id"),
+        },
+    }
+    if not db.configured():
+        event = SimpleNamespace(**payload)
+        db.memory_events.append(event)
+        return event
+    with db.session_scope() as session:
+        event = Event(**payload)
+        session.add(event)
+        session.flush()
+        return event
+
+
 def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
     """Insert an event and update counters and milestones for that event name."""
     if actor not in ACTORS:

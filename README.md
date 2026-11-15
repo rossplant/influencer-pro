@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.12
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.13
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -65,7 +65,10 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.12`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.13`.
+- `POST /creator-product-links` and `GET /creator-product-links` — admin session. One tracking code per creator and product. A second create returns the same code.
+- `GET /r/{code}` — public redirect. Logs `link_clicked`, then sends the browser to the product URL.
+- `POST /attributed-orders/import` — admin session. CSV of order id, date, code or link, gross amount, currency, and shop. Idempotent on shop and order id. `dry_run` writes nothing. Row errors are returned with the row.
 - `GET /admin/setup` and `POST /admin/setup` — set the admin password once. Afterwards these return 410.
 - `POST /admin/login` and `POST /admin/logout` — signed HttpOnly session cookie, 12 hours.
 - `GET /admin` — login and the read-only dashboard. Shop pilot and underserved flags, and shortlist accept or decline, are the only writes.

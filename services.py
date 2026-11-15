@@ -321,11 +321,13 @@ def save_enrichment(
             )
             session.flush()
             events.emit("product_enriched", product, "api", source=brief_source)
+            stored_creator = _existing_creator_id(session, creator_id)
             brief = Brief(
                 id=str(uuid.uuid4()),
                 shop_id=shop.id,
                 product_id=product.id,
-                creator_id=_existing_creator_id(session, creator_id),
+                creator_id=stored_creator,
+                shortlist_item_id=_matching_shortlist_item_id(session, product.id, stored_creator),
                 content=content,
                 source=brief_source,
                 disclosure_line=DISCLOSURE_LINE,
@@ -366,6 +368,9 @@ def save_enrichment(
         product_id=product.id,
         product=product,
         creator_id=creator_id if creator_id in db.memory_creators else None,
+        shortlist_item_id=_matching_shortlist_item_memory(
+            product.id, creator_id if creator_id in db.memory_creators else None
+        ),
         content=content,
         source=brief_source,
         disclosure_line=DISCLOSURE_LINE,
@@ -374,6 +379,28 @@ def save_enrichment(
     )
     db.memory_briefs.append(brief)
     return {"product_id": product.id, "brief_id": brief.id}
+
+
+def _matching_shortlist_item_id(session, product_id: Optional[str], creator_id: Optional[str]) -> Optional[str]:
+    if not product_id or not creator_id:
+        return None
+    item = session.scalars(
+        select(ShortlistItem)
+        .join(Shortlist, Shortlist.id == ShortlistItem.shortlist_id)
+        .where(Shortlist.product_id == product_id, ShortlistItem.creator_id == creator_id)
+        .order_by(Shortlist.created_at.desc())
+    ).first()
+    return item.id if item is not None else None
+
+
+def _matching_shortlist_item_memory(product_id: Optional[str], creator_id: Optional[str]) -> Optional[str]:
+    if not product_id or not creator_id:
+        return None
+    shortlists = {row.id for row in db.memory_shortlists if getattr(row, "product_id", None) == product_id}
+    matches = [
+        row for row in db.memory_shortlist_items if row.creator_id == creator_id and row.shortlist_id in shortlists
+    ]
+    return matches[-1].id if matches else None
 
 
 def _store_exclusions(session, shortlist_id: str, excluded: list) -> None:
