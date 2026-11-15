@@ -7,6 +7,7 @@ STRIPE_SECRET_KEY_TEST and will not use a live key.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -183,14 +184,27 @@ def construct_event(payload: bytes, signature: str) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid Stripe signature") from exc
     if hasattr(event, "to_dict"):
-        return event.to_dict()
-    return dict(event)
+        # for_json turns Decimal fields such as unit_amount_decimal into strings.
+        # A plain to_dict() cannot be stored in the JSON payload column.
+        try:
+            data = event.to_dict(for_json=True)
+        except TypeError:
+            data = event.to_dict()
+    else:
+        data = dict(event)
+    return _json_safe(data)
 
 
 def record_event(event: dict) -> bool:
+    """Store the event and report whether the caller should apply it.
+
+    A duplicate that was stored but not applied is applied again. A duplicate
+    that was already applied is skipped.
+    """
     event_id = str(event.get("id") or "")
     if not event_id:
         raise HTTPException(status_code=400, detail="Stripe event id is missing")
+    event = _json_safe(event)
     if db.configured():
         try:
             with db.session_scope() as session:
@@ -206,10 +220,13 @@ def record_event(event: dict) -> bool:
                 )
                 session.flush()
         except IntegrityError:
-            return False
+            with db.session_scope() as session:
+                row = session.scalar(select(StripeEvent).where(StripeEvent.stripe_event_id == event_id))
+                return row is not None and not row.processed
         return True
-    if event_id in db.memory_stripe_events:
-        return False
+    stored = db.memory_stripe_events.get(event_id)
+    if stored is not None:
+        return not stored.get("processed")
     db.memory_stripe_events[event_id] = {"processed": False, "event_type": event.get("type")}
     return True
 
@@ -298,7 +315,7 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     role = str(_attr(metadata, "role") or "")
     subject_id = str(_attr(metadata, "subject_id") or "")
     if not role or not subject_id:
-        found = _find_by_customer(str(_attr(subscription, "customer") or ""))
+        found = _find_by_customer(_customer_id(subscription))
         if found is None:
             return
         role, subject_id = found
@@ -423,7 +440,7 @@ def _apply_invoice_paid(invoice: Any) -> None:
     subject_id = str(_attr(metadata, "subject_id") or "")
     tier = str(_attr(metadata, "tier") or "")
     interval = str(_attr(metadata, "interval") or "")
-    found = _find_by_customer(str(_attr(invoice, "customer") or ""))
+    found = _find_by_customer(_customer_id(invoice))
     if found and not role:
         role, subject_id = found
     account = _account(role, subject_id) if role and subject_id else {}
@@ -479,6 +496,11 @@ def _apply_invoice_paid(invoice: Any) -> None:
             **common,
         )
         _mark_converted(role, subject_id)
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a structure json.dumps can encode. Stripe leaves some amounts as Decimal."""
+    return json.loads(json.dumps(value, default=str))
 
 
 def _customer_id(obj: Any) -> str:

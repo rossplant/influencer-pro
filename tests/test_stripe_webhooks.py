@@ -1,5 +1,6 @@
 """Webhook fixtures for the current Stripe API and the previous field names."""
 
+import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -8,8 +9,10 @@ import db
 import main
 import stripe_billing
 from models import utcnow
+from stripe._webhook import WebhookSignature
 
 client = TestClient(main.app)
+SECRET = "whsec_placeholder"
 
 
 def _shop(shop_id="shop-1"):
@@ -57,15 +60,13 @@ def _creator(creator_id="creator-1"):
 
 
 def _post(monkeypatch, event):
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_placeholder")
-
-    def fake_event(payload, signature, secret):
-        return event
-
-    import stripe
-
-    monkeypatch.setattr(stripe.Webhook, "construct_event", fake_event)
-    return client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "good"})
+    """Sign the payload and let the real Stripe parser build the event."""
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", SECRET)
+    raw = json.dumps(event).encode()
+    header = WebhookSignature.generate_signature_header(raw.decode(), SECRET)
+    parsed = stripe_billing.construct_event(raw, header)
+    json.dumps(parsed)
+    return client.post("/stripe/webhook", content=raw, headers={"stripe-signature": header})
 
 
 def _basil_subscription(subscription_id, customer, metadata, status="active"):
@@ -83,7 +84,12 @@ def _basil_subscription(subscription_id, customer, metadata, status="active"):
                     "object": "subscription_item",
                     "current_period_start": 1763200000,
                     "current_period_end": 1765792000,
-                    "price": {"id": "price_test", "object": "price", "recurring": {"interval": "month"}},
+                    "price": {
+                        "id": "price_test",
+                        "object": "price",
+                        "unit_amount_decimal": "7900",
+                        "recurring": {"interval": "month"},
+                    },
                 }
             ],
         },
@@ -177,6 +183,7 @@ def test_current_api_events_update_status_and_do_not_500(monkeypatch):
                                 "id": "il_basil",
                                 "pricing": {
                                     "type": "price_details",
+                                    "unit_amount_decimal": "950",
                                     "price_details": {"price": "price_curator", "product": "prod_curator"},
                                 },
                             }
@@ -193,11 +200,14 @@ def test_current_api_events_update_status_and_do_not_500(monkeypatch):
     assert subscribe.properties["currency"] == "aud"
     assert subscribe.properties["period"] == "monthly"
     assert subscribe.properties["tier"] == "curator"
+    assert subscribe.properties["event_id"] == "sub:in_basil"
     assert founding.properties["event_id"] == "founding:in_basil"
-    assert stripe_billing._line_price_id(invoice.json() or {}) == ""
+    assert "sub-first:sub_1UbyobF1UkkKMhl3H6MR9UkA" in db.memory_tracked_subjects
+    assert "founding-first:sub_1UbyobF1UkkKMhl3H6MR9UkA" in db.memory_tracked_subjects
     assert stripe_billing._line_price_id(
         {"pricing": {"price_details": {"price": "price_curator"}}}
     ) == "price_curator"
+    assert stripe_billing._line_price_id({"price": {"id": "price_old"}}) == "price_old"
 
     failed = _post(
         monkeypatch,
@@ -243,3 +253,33 @@ def test_current_api_events_update_status_and_do_not_500(monkeypatch):
         {"id": "evt_broken", "type": "customer.subscription.created", "data": {"object": {"customer": {"unexpected": True}}}},
     )
     assert broken.status_code == 200
+
+    legacy = _post(
+        monkeypatch,
+        {
+            "id": "evt_legacy_invoice",
+            "type": "invoice.paid",
+            "data": {
+                "object": {
+                    "id": "in_legacy",
+                    "object": "invoice",
+                    "amount_paid": 7900,
+                    "currency": "aud",
+                    "subscription": "sub_legacy",
+                    "customer": "cus_seller",
+                    "metadata": {"role": "seller", "subject_id": shop.id, "tier": "growth", "interval": "year"},
+                    "lines": {"data": [{"price": {"id": "price_old"}}]},
+                }
+            },
+        },
+    )
+    assert legacy.status_code == 200
+    legacy_event = next(row for row in db.memory_events if row.properties.get("event_id") == "sub:in_legacy")
+    assert legacy_event.properties["period"] == "annual"
+    assert "sub-first:sub_legacy" in db.memory_tracked_subjects
+
+
+def test_bad_signature_is_rejected(monkeypatch):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", SECRET)
+    response = client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "t=1,v1=dead"})
+    assert response.status_code == 400
