@@ -56,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr Collab API running"
-    assert body["version"] == "0.11"
+    assert body["version"] == "0.12"
     assert body["grok_enabled"] is False
 
 
@@ -64,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.11"
+    assert response.json()["version"] == "0.12"
 
 
 def test_enrich_fallback_without_xai_key():
@@ -236,14 +236,20 @@ def test_body_size_limit(monkeypatch):
 
 def test_cors_allows_configured_origins():
     response = client.get("/", headers={"Origin": "https://brand.example"})
-    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.headers.get("access-control-allow-origin") != "*"
+    assert "access-control-allow-credentials" not in response.headers
 
 
 def test_cors_origins_parser(monkeypatch):
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
-    assert main.cors_origins() == ["*"]
-    monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example")
-    assert main.cors_origins() == ["https://a.example", "https://b.example"]
+    assert main.cors_policy() == ([], False)
+    assert main.cors_policy("*") == (["*"], False)
+    assert main.cors_policy("https://a.example, https://b.example") == (
+        ["https://a.example", "https://b.example"],
+        True,
+    )
+    monkeypatch.setenv("CORS_ORIGINS", "https://a.example, *")
+    assert main.cors_policy() == (["https://a.example"], True)
 
 
 def test_html_pages_use_the_same_origin():
@@ -253,3 +259,8 @@ def test_html_pages_use_the_same_origin():
         assert "localhost:8000" not in response.text
         assert "window.location.origin" in response.text
         assert "plantrApiBase" in response.text
+        assert 'params.get("key")' not in response.text
+        assert "?key=" not in response.text
+    admin = client.get("/plantr_admin.html", follow_redirects=False)
+    assert admin.status_code == 302
+    assert admin.headers["location"] == "/admin"

@@ -1,84 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url=/admin">
   <title>Plantr Collab admin</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: system-ui, sans-serif; background: #f7faf8; margin: 0; padding: 24px; color: #1a2e22; }
-    .container { max-width: 800px; margin: 0 auto; }
-    h1 { color: #1a5c38; }
-    .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-    button { background: #1a5c38; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; margin-right: 8px; }
-    button:hover { background: #2d8a54; }
-    pre { background: #f0f7f3; padding: 12px; border-radius: 8px; overflow: auto; font-size: 13px; }
-    .status { font-weight: 600; }
-  </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Plantr Collab admin</h1>
-    <div class="card">
-      <h2>Shopify Sync</h2>
-      <p>Calls <code>POST /sync-shopify</code>. Sync is not implemented, and nothing is saved to Notion.</p>
-      <button onclick="syncShopify()">Sync Now</button>
-      <div id="sync-status" class="status"></div>
-      <pre id="sync-result"></pre>
-    </div>
-    <div class="card">
-      <h2>Quick Enrich Test</h2>
-      <button onclick="testEnrich()">Test Enrich</button>
-      <pre id="enrich-result"></pre>
-    </div>
-    <div class="card">
-      <h2>API Status</h2>
-      <button onclick="checkStatus()">Check</button>
-      <pre id="status-result"></pre>
-    </div>
-  </div>
-
-  <script>
-    function plantrApiBase() {
-      const params = new URLSearchParams(window.location.search);
-      const fromQuery = params.get("api");
-      if (fromQuery) return fromQuery.replace(/\/$/, "");
-      if (window.PLANTR_API_BASE) return String(window.PLANTR_API_BASE).replace(/\/$/, "");
-      return window.location.origin;
-    }
-    function plantrHeaders() {
-      const headers = {"Content-Type": "application/json"};
-      const params = new URLSearchParams(window.location.search);
-      const key = params.get("key") || window.PLANTR_API_KEY || "";
-      if (key) headers["X-API-Key"] = key;
-      return headers;
-    }
-    const API = plantrApiBase();
-
-    async function syncShopify() {
-      document.getElementById("sync-status").textContent = "Syncing...";
-      const r = await fetch(`${API}/sync-shopify`, { method: "POST", headers: plantrHeaders() });
-      const data = await r.json().catch(() => ({}));
-      document.getElementById("sync-result").textContent = JSON.stringify(data, null, 2);
-      if (!r.ok) {
-        document.getElementById("sync-status").textContent = data.detail || `Sync failed (${r.status})`;
-        return;
-      }
-      document.getElementById("sync-status").textContent = `Synced ${data.synced} products`;
-    }
-
-    async function testEnrich() {
-      const r = await fetch(`${API}/enrich`, {
-        method: "POST",
-        headers: plantrHeaders(),
-        body: JSON.stringify({ title: "Sample product", description_short: "Short description", images: ["a","b","c"] })
-      });
-      document.getElementById("enrich-result").textContent = JSON.stringify(await r.json(), null, 2);
-    }
-
-    async function checkStatus() {
-      const r = await fetch(API, { headers: plantrHeaders() });
-      document.getElementById("status-result").textContent = JSON.stringify(await r.json(), null, 2);
-    }
-  </script>
+  <p><a href="/admin">Continue to the admin area</a></p>
 </body>
 </html>
