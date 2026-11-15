@@ -197,19 +197,43 @@ def import_orders(csv_text: str, *, dry_run: bool) -> dict:
     return {"dry_run": dry_run, "created": created, "existing": existing, "errors": errors, "rows": results}
 
 
-def list_orders(*, shop_id: Optional[str] = None) -> list[dict]:
-    shop_id = (shop_id or "").strip() or None
+def list_orders(*, shop_id: Optional[str] = None, creator_id: Optional[str] = None) -> list[dict]:
+    """Orders that count as attributed. Unattributed rows stay in the table and are omitted here."""
+    return [_order_dict(row) for row in _order_rows(shop_id=shop_id, creator_id=creator_id, attributed_only=True)]
+
+
+def attributed_gmv(*, shop_id: Optional[str] = None, creator_id: Optional[str] = None) -> dict:
+    """Gross and net GMV from attributed orders only. Raw gross on excluded rows is not added."""
+    rows = _order_rows(shop_id=shop_id, creator_id=creator_id, attributed_only=True)
+    return {
+        "orders": len(rows),
+        "gmv_gross": round(sum(float(row.gmv_gross or 0) for row in rows), 2),
+        "net_gmv": round(sum(float(row.net_gmv or 0) for row in rows), 2),
+    }
+
+
+def _order_rows(*, shop_id: Optional[str] = None, creator_id: Optional[str] = None, attributed_only: bool = True) -> list:
+    shop_id = (shop_id or "").strip() or None if isinstance(shop_id, str) else shop_id
+    creator_id = (creator_id or "").strip() or None if isinstance(creator_id, str) else creator_id
     if db.configured():
         with db.session_scope() as session:
             query = select(AttributedOrder).order_by(AttributedOrder.created_at.desc())
             if shop_id:
                 query = query.where(AttributedOrder.shop_id == shop_id)
-            return [_order_dict(row) for row in session.scalars(query).all()]
+            if creator_id:
+                query = query.where(AttributedOrder.creator_id == creator_id)
+            if attributed_only:
+                query = query.where(AttributedOrder.attributed.is_(True))
+            return list(session.scalars(query).all())
     rows = list(db.memory_attributed_orders)
     if shop_id:
         rows = [row for row in rows if row.shop_id == shop_id]
+    if creator_id:
+        rows = [row for row in rows if row.creator_id == creator_id]
+    if attributed_only:
+        rows = [row for row in rows if getattr(row, "attributed", True)]
     rows.sort(key=lambda row: str(row.created_at), reverse=True)
-    return [_order_dict(row) for row in rows]
+    return rows
 
 
 def order_detail(order_id: str) -> Optional[dict]:

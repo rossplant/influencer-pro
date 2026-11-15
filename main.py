@@ -848,7 +848,9 @@ def admin_orders(
     shop_id: Optional[str] = None,
     _: str = Depends(require_admin),
 ):
-    return _paged(attribution.list_orders(shop_id=shop_id), q, page, page_size)
+    page = _paged(attribution.list_orders(shop_id=shop_id), q, page, page_size)
+    page["gmv"] = attribution.attributed_gmv(shop_id=shop_id)
+    return page
 
 
 @app.get("/admin/api/orders/{order_id}")
