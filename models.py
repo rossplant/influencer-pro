@@ -224,6 +224,7 @@ class Shortlist(Base):
     shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True, index=True)
     product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True, index=True)
     match_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    optimise_for: Mapped[str] = mapped_column(String(16), nullable=False, default="balanced", server_default="balanced")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     shop: Mapped[Optional[Shop]] = relationship()
@@ -247,6 +248,19 @@ class ShortlistItem(Base):
     decline_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     shortlist: Mapped[Shortlist] = relationship(back_populates="items")
+
+
+class ShortlistExclusion(Base):
+    """A creator removed from a shortlist, with the reasons."""
+
+    __tablename__ = "shortlist_exclusions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shortlist_id: Mapped[str] = mapped_column(ForeignKey("shortlists.id"), nullable=False, index=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    handle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reasons: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class Brief(Base):

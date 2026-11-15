@@ -20,7 +20,7 @@ import taxonomy
 from events import PlanLimitReached
 from sqlalchemy import select
 
-from models import Brief, Category, Creator, Product, Shop, Shortlist, ShortlistItem, utcnow
+from models import Brief, Category, Creator, Product, Shop, Shortlist, ShortlistExclusion, ShortlistItem, utcnow
 
 MATCH_VERSION = "rules-v1"
 DISCLOSURE_LINE = "Paid partnership. The creator may earn a commission."
@@ -375,6 +375,49 @@ def save_enrichment(
     return {"product_id": product.id, "brief_id": brief.id}
 
 
+def _store_exclusions(session, shortlist_id: str, excluded: list) -> None:
+    for row in excluded:
+        session.add(
+            ShortlistExclusion(
+                id=str(uuid.uuid4()),
+                shortlist_id=shortlist_id,
+                creator_id=row.get("creator_id"),
+                handle=row.get("handle"),
+                reasons=list(row.get("reasons") or []),
+                created_at=utcnow(),
+            )
+        )
+
+
+def decide_shortlist_item(item_id: str, event_name: str, reason: Optional[str] = None) -> dict:
+    if event_name not in {"match_accepted", "match_declined"}:
+        raise HTTPException(status_code=422, detail="Unsupported shortlist decision")
+    if not db.configured():
+        item = next((row for row in db.memory_shortlist_items if row.id == item_id), None)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Shortlist item not found")
+        events.emit(event_name, item, "api", decline_reason=reason)
+        return _decision_payload(item)
+    with db.session_scope() as session:
+        item = session.get(ShortlistItem, item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Shortlist item not found")
+        item.shortlist = session.get(Shortlist, item.shortlist_id)
+        if item.creator_id:
+            item.creator = session.get(Creator, item.creator_id)
+        events.emit(event_name, item, "api", decline_reason=reason)
+        return _decision_payload(item)
+
+
+def _decision_payload(item) -> dict:
+    return {
+        "id": item.id,
+        "accepted_at": getattr(item, "accepted_at", None),
+        "declined_at": getattr(item, "declined_at", None),
+        "decline_reason": getattr(item, "decline_reason", None),
+    }
+
+
 def mark_brief_sent(brief_id: str, actor: str) -> dict:
     """Record that a brief was actually sent. Operators pass actor='operator'."""
     if actor not in events.ACTORS:
@@ -448,21 +491,28 @@ def load_match_inputs(
     }
 
 
-def persist_rules_match(*, shop_id: Optional[str], product_id: Optional[str], matches: list) -> Optional[str]:
-    """Store the ranked creators. Excluded creators are not shortlist items."""
+def persist_rules_match(
+    *,
+    shop_id: Optional[str],
+    product_id: Optional[str],
+    matches: list,
+    excluded: Optional[list] = None,
+    optimise_for: str = "balanced",
+) -> Optional[str]:
+    """Store the ranked creators. Excluded creators are stored with their reasons, not as items."""
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
     try:
         if db.configured():
-            return _persist_rules_db(shop_id, product_id, matches)
+            return _persist_rules_db(shop_id, product_id, matches, excluded or [], optimise_for)
         if not shop_id:
             return None
-        return _persist_rules_memory(shop_id, product_id, matches)
+        return _persist_rules_memory(shop_id, product_id, matches, excluded or [], optimise_for)
     except PlanLimitReached as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
 
 
-def _persist_rules_db(shop_id, product_id, matches) -> str:
+def _persist_rules_db(shop_id, product_id, matches, excluded, optimise_for) -> str:
     with db.session_scope() as session:
         shop = session.get(Shop, shop_id) if shop_id else None
         if shop_id and shop is None:
@@ -477,11 +527,13 @@ def _persist_rules_db(shop_id, product_id, matches) -> str:
             shop_id=shop.id if shop is not None else None,
             product_id=product.id if product is not None else None,
             match_version=MATCH_VERSION,
+            optimise_for=optimise_for,
             created_at=utcnow(),
             shop=shop,
         )
         session.add(shortlist)
         session.flush()
+        _store_exclusions(session, shortlist.id, excluded)
         for index, match in enumerate(matches, start=1):
             creator_id = match.get("creator_id")
             if creator_id and session.get(Creator, creator_id) is None:
@@ -505,7 +557,7 @@ def _persist_rules_db(shop_id, product_id, matches) -> str:
         return shortlist.id
 
 
-def _persist_rules_memory(shop_id, product_id, matches) -> str:
+def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) -> str:
     shop = db.memory_shops.get(shop_id)
     if shop is None:
         raise HTTPException(status_code=404, detail="Shop not found")
@@ -517,18 +569,37 @@ def _persist_rules_memory(shop_id, product_id, matches) -> str:
         shop=shop,
         product_id=product_id,
         match_version=MATCH_VERSION,
+        optimise_for=optimise_for,
         created_at=utcnow(),
     )
     db.memory_shortlists.append(shortlist)
+    for row in excluded:
+        db.memory_shortlist_exclusions.append(
+            SimpleNamespace(
+                id=str(uuid.uuid4()),
+                shortlist_id=shortlist.id,
+                creator_id=row.get("creator_id"),
+                handle=row.get("handle"),
+                reasons=list(row.get("reasons") or []),
+            )
+        )
     for index, match in enumerate(matches, start=1):
         db.memory_shortlist_items.append(
             SimpleNamespace(
                 id=str(uuid.uuid4()),
                 shortlist_id=shortlist.id,
+                shortlist=shortlist,
                 creator_id=match.get("creator_id"),
                 score=float(match["score"]),
-                reasons={"reasons": match["reasons"]},
+                reasons={
+                    "components": match["components"],
+                    "estimates": match["estimates"],
+                    "reasons": match["reasons"],
+                },
                 rank=index,
+                accepted_at=None,
+                declined_at=None,
+                decline_reason=None,
             )
         )
     events.emit("match_run", shortlist, "api", match_version=MATCH_VERSION, shortlist_id=shortlist.id)

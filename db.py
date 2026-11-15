@@ -68,6 +68,7 @@ memory_products: dict = {}
 memory_events: list = []
 memory_shortlists: list = []
 memory_shortlist_items: list = []
+memory_shortlist_exclusions: list = []
 memory_briefs: list = []
 
 
@@ -96,6 +97,7 @@ def reset_memory() -> None:
     memory_events.clear()
     memory_shortlists.clear()
     memory_shortlist_items.clear()
+    memory_shortlist_exclusions.clear()
     memory_briefs.clear()
 
 

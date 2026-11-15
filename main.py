@@ -129,6 +129,10 @@ class BriefSentIn(BaseModel):
     actor: Literal["system", "operator", "api"] = "api"
 
 
+class DeclineIn(BaseModel):
+    reason: Optional[str] = None
+
+
 class MatchIn(BaseModel):
     product: Optional[Dict[str, Any]] = None
     product_id: Optional[str] = None
@@ -577,6 +581,16 @@ def mark_brief_sent(brief_id: str, body: BriefSentIn, _: None = Depends(guard_re
     return services.mark_brief_sent(brief_id, body.actor)
 
 
+@app.post("/shortlist-items/{item_id}/accept")
+def accept_shortlist_item(item_id: str, _: None = Depends(guard_request)):
+    return services.decide_shortlist_item(item_id, "match_accepted")
+
+
+@app.post("/shortlist-items/{item_id}/decline")
+def decline_shortlist_item(item_id: str, body: Optional[DeclineIn] = None, _: None = Depends(guard_request)):
+    return services.decide_shortlist_item(item_id, "match_declined", reason=None if body is None else body.reason)
+
+
 @app.post("/match")
 def match(body: MatchIn, _: None = Depends(guard_request)):
     if not body.product and not body.product_id:
@@ -601,6 +615,8 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
     shortlist_id = services.persist_rules_match(
         shop_id=loaded["shop_id"],
         product_id=loaded["product_id"],
+        optimise_for=body.optimise_for,
+        excluded=outcome["excluded"],
         matches=[
             {
                 "creator_id": (row["creator"].get("influencer_id") or row["creator"].get("id")),
