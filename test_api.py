@@ -56,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr Collab API running"
-    assert body["version"] == "0.10"
+    assert body["version"] == "0.11"
     assert body["grok_enabled"] is False
 
 
@@ -64,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.10"
+    assert response.json()["version"] == "0.11"
 
 
 def test_enrich_fallback_without_xai_key():
@@ -137,7 +137,7 @@ def test_protected_routes_accept_a_configured_key(monkeypatch):
 
     match = client.post(
         "/match",
-        json={"influencer": INFLUENCER, "products": [PRODUCT]},
+        json={"product": PRODUCT, "creators": [INFLUENCER]},
         headers=headers,
     )
     assert match.status_code == 200
@@ -173,25 +173,29 @@ def test_onboard_rejects_a_profile_outside_the_schema():
     assert client.post("/onboard-influencer", json=bad_availability).status_code == 422
 
 
-def test_match_returns_scored_products():
-    products = [
-        {
-            "title": "Sample one",
-            "category": "alpha",
-            "target_audience": ["beginners"],
-            "care_instructions": "Use as directed",
-            "occasions": ["everyday"],
-        },
-        {"title": "Sample two", "category": "other", "target_audience": ["experts"]},
-    ]
+def test_match_returns_scored_creators():
+    strong = {
+        **INFLUENCER,
+        "handle": "@strong",
+        "influencer_id": "strong",
+        "active_categories": ["alpha"],
+        "avg_views": 20000,
+        "engagement_rate": 0.2,
+        "est_conversion_rate": 0.1,
+        "typical_price_band": {"min": 1, "max": 100},
+    }
+    weak = {"handle": "@weak", "influencer_id": "weak", "desired_categories": ["other"]}
     response = client.post(
         "/match",
-        json={"influencer": INFLUENCER, "products": products},
+        json={"product": {**PRODUCT, "price": 20, "commission_rate": 10}, "creators": [weak, strong]},
     )
     assert response.status_code == 200
-    matches = response.json()["matches"]
-    assert [item["product"]["title"] for item in matches] == ["Sample one", "Sample two"]
-    assert matches[0]["match_score"] > matches[1]["match_score"]
+    body = response.json()
+    assert body["match_version"] == "rules-v1"
+    assert [item["creator"]["handle"] for item in body["matches"]] == ["@strong", "@weak"]
+    assert body["matches"][0]["score"] > body["matches"][1]["score"]
+    assert "components" in body["matches"][0]
+    assert body["matches"][0]["reasons"]
 
 
 def test_sync_shopify_is_an_honest_stub(monkeypatch):

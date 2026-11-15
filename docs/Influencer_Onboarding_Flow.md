@@ -34,7 +34,7 @@ Fields follow `influencer_schema.json`:
 - `GET /creators/{id}` reads the stored profile. It uses the same `X-API-Key` rule as onboarding.
 
 ### 4. Matching
-`POST /match` still uses the placeholder scorer and returns up to 10 `{product, match_score}` rows for the products in the request. With a database it also writes a shortlist (`match_version='placeholder-0'`) and emits `match_run`. It does not load a catalogue from Notion or Shopify.
+`POST /match` scores creators for one product with `rules-v1` and can load every onboarded creator. With a database it writes a shortlist and emits `match_run`. It does not load a catalogue from Notion or Shopify.
 
 ## Sample payload
 ```json

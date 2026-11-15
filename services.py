@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from models import Brief, Category, Creator, Product, Shop, Shortlist, ShortlistItem, utcnow
 
-MATCH_VERSION = "placeholder-0"
+MATCH_VERSION = "rules-v1"
 DISCLOSURE_LINE = "Paid partnership. The creator may earn a commission."
 
 
@@ -395,28 +395,209 @@ def mark_brief_sent(brief_id: str, actor: str) -> dict:
         return {"id": brief.id, "shop_id": brief.shop_id, "sent_at": brief.sent_at, "actor": actor}
 
 
-def persist_match(
+def load_match_inputs(
     *,
-    influencer: dict,
-    ranked: list,
-    shop_id: Optional[str],
+    product: Optional[dict],
     product_id: Optional[str],
-) -> Optional[str]:
-    """Record a placeholder shortlist. Returns the shortlist id, or None in memory with no shop.
+    creators: Optional[list],
+    all_onboarded: bool,
+    shop_id: Optional[str],
+) -> dict:
+    """Resolve the product, creators, and shop for a rules match."""
+    product_id = _clean(product_id)
+    shop_id = _clean(shop_id)
+    if db.configured():
+        with db.session_scope() as session:
+            stored = session.get(Product, product_id) if product_id else None
+            if product_id and stored is None and not product:
+                raise HTTPException(status_code=404, detail="Product not found")
+            product_payload = _product_payload(stored) if stored is not None else dict(product or {})
+            if stored is not None and product:
+                product_payload.update({key: value for key, value in product.items() if value not in (None, "", [], {})})
+            if stored is not None:
+                product_id = stored.id
+                shop_id = shop_id or stored.shop_id
+            shop = session.get(Shop, shop_id) if shop_id else None
+            if shop_id and shop is None:
+                raise HTTPException(status_code=404, detail="Shop not found")
+            if shop is not None and stored is not None and stored.shop_id != shop.id:
+                raise HTTPException(status_code=400, detail="Product does not belong to this shop")
+            creator_rows = _creator_payloads(session, creators, all_onboarded)
+            return {
+                "product": product_payload,
+                "creators": creator_rows,
+                "shop": _shop_payload(shop) if shop is not None else None,
+                "shop_id": shop.id if shop is not None else None,
+                "product_id": product_id,
+            }
+    if product_id and product_id not in db.memory_products and not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    stored = db.memory_products.get(product_id) if product_id else None
+    product_payload = _product_payload(stored) if stored is not None else dict(product or {})
+    if not product_payload:
+        raise HTTPException(status_code=422, detail="Provide a product or a product_id")
+    shop = db.memory_shops.get(shop_id) if shop_id else None
+    if shop_id and shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    return {
+        "product": product_payload,
+        "creators": _memory_creators(creators, all_onboarded),
+        "shop": _shop_payload(shop) if shop is not None else None,
+        "shop_id": shop_id,
+        "product_id": product_id,
+    }
 
-    A configured database records every match. Memory mode records a shortlist
-    only when shop_id is sent, so the historical no-shop call stays a pure score.
-    """
+
+def persist_rules_match(*, shop_id: Optional[str], product_id: Optional[str], matches: list) -> Optional[str]:
+    """Store the ranked creators. Excluded creators are not shortlist items."""
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
     try:
         if db.configured():
-            return _persist_match_db(influencer, ranked, shop_id, product_id)
+            return _persist_rules_db(shop_id, product_id, matches)
         if not shop_id:
             return None
-        return _persist_match_memory(influencer, ranked, shop_id, product_id)
+        return _persist_rules_memory(shop_id, product_id, matches)
     except PlanLimitReached as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+
+def _persist_rules_db(shop_id, product_id, matches) -> str:
+    with db.session_scope() as session:
+        shop = session.get(Shop, shop_id) if shop_id else None
+        if shop_id and shop is None:
+            raise HTTPException(status_code=404, detail="Shop not found")
+        if shop is not None:
+            events.guard_plan_limit(shop, "matches_per_month", session)
+        product = session.get(Product, product_id) if product_id else None
+        if product_id and product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
+        shortlist = Shortlist(
+            id=str(uuid.uuid4()),
+            shop_id=shop.id if shop is not None else None,
+            product_id=product.id if product is not None else None,
+            match_version=MATCH_VERSION,
+            created_at=utcnow(),
+            shop=shop,
+        )
+        session.add(shortlist)
+        session.flush()
+        for index, match in enumerate(matches, start=1):
+            creator_id = match.get("creator_id")
+            if creator_id and session.get(Creator, creator_id) is None:
+                creator_id = None
+            session.add(
+                ShortlistItem(
+                    id=str(uuid.uuid4()),
+                    shortlist_id=shortlist.id,
+                    creator_id=creator_id,
+                    score=float(match["score"]),
+                    reasons={
+                        "components": match["components"],
+                        "estimates": match["estimates"],
+                        "reasons": match["reasons"],
+                    },
+                    rank=index,
+                )
+            )
+        session.flush()
+        events.emit("match_run", shortlist, "api", match_version=MATCH_VERSION, shortlist_id=shortlist.id)
+        return shortlist.id
+
+
+def _persist_rules_memory(shop_id, product_id, matches) -> str:
+    shop = db.memory_shops.get(shop_id)
+    if shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    events.guard_plan_limit(shop, "matches_per_month", None)
+    shortlist = SimpleNamespace(
+        memory_kind="shortlist",
+        id=str(uuid.uuid4()),
+        shop_id=shop.id,
+        shop=shop,
+        product_id=product_id,
+        match_version=MATCH_VERSION,
+        created_at=utcnow(),
+    )
+    db.memory_shortlists.append(shortlist)
+    for index, match in enumerate(matches, start=1):
+        db.memory_shortlist_items.append(
+            SimpleNamespace(
+                id=str(uuid.uuid4()),
+                shortlist_id=shortlist.id,
+                creator_id=match.get("creator_id"),
+                score=float(match["score"]),
+                reasons={"reasons": match["reasons"]},
+                rank=index,
+            )
+        )
+    events.emit("match_run", shortlist, "api", match_version=MATCH_VERSION, shortlist_id=shortlist.id)
+    return shortlist.id
+
+
+def _product_payload(product) -> dict:
+    if product is None:
+        return {}
+    if isinstance(product, dict):
+        return dict(product)
+    commission = product.commission_rate
+    return {
+        "id": product.id,
+        "title": product.title,
+        "category": product.category,
+        "subcategory": product.subcategory,
+        "price": float(product.price) if product.price is not None else None,
+        "currency": product.currency,
+        "tags": list(product.tags or []),
+        "attributes": dict(product.attributes or {}),
+        "claims": list(product.claims or []),
+        "commission_rate": float(commission) if commission is not None else None,
+    }
+
+
+def _shop_payload(shop) -> dict:
+    return {
+        "id": shop.id,
+        "is_underserved": bool(shop.is_underserved),
+        "underserved_reason": shop.underserved_reason,
+    }
+
+
+def _creator_payloads(session, creators: Optional[list], all_onboarded: bool) -> list:
+    if all_onboarded:
+        return [_creator_from_row(row) for row in session.scalars(select(Creator)).all()]
+    return [dict(creator) for creator in (creators or [])]
+
+
+def _memory_creators(creators: Optional[list], all_onboarded: bool) -> list:
+    if all_onboarded:
+        return [dict(record) for record in db.memory_creators.values()]
+    return [dict(creator) for creator in (creators or [])]
+
+
+def _creator_from_row(row) -> dict:
+    profile = dict(row.profile or {})
+    profile.update(
+        {
+            "influencer_id": row.id,
+            "handle": row.handle,
+            "active_categories": list(row.active_categories or []),
+            "desired_categories": list(row.desired_categories or []),
+            "excluded_categories": list(row.excluded_categories or []),
+            "excluded_claims": list(row.excluded_claims or []),
+            "restrictions": list(row.restrictions or []),
+            "platforms": list(row.platforms or []),
+            "follower_band": row.follower_band,
+            "areas_of_interest": list(row.interests or profile.get("areas_of_interest") or []),
+            "audience_demographics": row.audience_demographics,
+            "avg_views": row.avg_views,
+            "engagement_rate": row.engagement_rate if row.engagement_rate is not None else profile.get("average_engagement_rate"),
+            "est_conversion_rate": row.est_conversion_rate,
+            "avg_order_value": float(row.avg_order_value) if row.avg_order_value is not None else None,
+            "typical_price_band": row.typical_price_band,
+        }
+    )
+    return profile
 
 
 def _persist_match_db(influencer, ranked, shop_id, product_id) -> str:
