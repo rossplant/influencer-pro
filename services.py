@@ -182,6 +182,7 @@ def persist_creator(record: dict) -> None:
             first_match_accepted_at=None,
             first_post_at=None,
         )
+        db.memory_creator_objects[record["influencer_id"]] = creator
         events.emit("creator_onboarded", creator, "api", handle=record.get("handle"))
         return
     try:
@@ -396,17 +397,24 @@ def decide_shortlist_item(item_id: str, event_name: str, reason: Optional[str] =
         item = next((row for row in db.memory_shortlist_items if row.id == item_id), None)
         if item is None:
             raise HTTPException(status_code=404, detail="Shortlist item not found")
+        _reject_if_decided(item)
         events.emit(event_name, item, "api", decline_reason=reason)
         return _decision_payload(item)
     with db.session_scope() as session:
         item = session.get(ShortlistItem, item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Shortlist item not found")
+        _reject_if_decided(item)
         item.shortlist = session.get(Shortlist, item.shortlist_id)
         if item.creator_id:
             item.creator = session.get(Creator, item.creator_id)
         events.emit(event_name, item, "api", decline_reason=reason)
         return _decision_payload(item)
+
+
+def _reject_if_decided(item) -> None:
+    if getattr(item, "accepted_at", None) or getattr(item, "declined_at", None):
+        raise HTTPException(status_code=409, detail="Shortlist item has already been decided")
 
 
 def _decision_payload(item) -> dict:
@@ -584,12 +592,16 @@ def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) 
             )
         )
     for index, match in enumerate(matches, start=1):
+        creator_id = match.get("creator_id")
+        creator = db.memory_creator_objects.get(str(creator_id)) if creator_id else None
         db.memory_shortlist_items.append(
             SimpleNamespace(
+                memory_kind="shortlist_item",
                 id=str(uuid.uuid4()),
                 shortlist_id=shortlist.id,
                 shortlist=shortlist,
-                creator_id=match.get("creator_id"),
+                creator=creator,
+                creator_id=str(creator_id) if creator_id else None,
                 score=float(match["score"]),
                 reasons={
                     "components": match["components"],

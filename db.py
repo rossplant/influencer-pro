@@ -63,6 +63,7 @@ SessionLocal: Optional[sessionmaker] = None
 
 # Process-local fallback used only when DATABASE_URL is unset.
 memory_creators: dict = {}
+memory_creator_objects: dict = {}
 memory_shops: dict = {}
 memory_products: dict = {}
 memory_events: list = []
@@ -92,6 +93,7 @@ def normalise_database_url(url: str) -> str:
 
 def reset_memory() -> None:
     memory_creators.clear()
+    memory_creator_objects.clear()
     memory_shops.clear()
     memory_products.clear()
     memory_events.clear()

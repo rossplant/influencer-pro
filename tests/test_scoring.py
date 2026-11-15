@@ -158,14 +158,57 @@ def test_accept_and_decline_and_stored_exclusions(tmp_path, monkeypatch):
     accepted = client.post(f"/shortlist-items/{item_id}/accept")
     assert accepted.status_code == 200
     assert accepted.json()["accepted_at"]
-    declined = client.post(f"/shortlist-items/{item_id}/decline", json={"reason": "Not this week"})
-    assert declined.status_code == 200
-    assert declined.json()["decline_reason"] == "Not this week"
-    assert declined.json()["declined_at"]
+    again = client.post(f"/shortlist-items/{item_id}/decline", json={"reason": "Not this week"})
+    assert again.status_code == 409
     with db.session_scope() as session:
         names = set(session.scalars(select(Event.event_name)).all())
         assert "match_accepted" in names
-        assert "match_declined" in names
+        assert "match_declined" not in names
+
+
+def test_memory_accept_stamps_the_creator_and_rejects_a_second_decision(monkeypatch):
+    import db
+    import main
+    from test_api import client
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    main.init_storage()
+    shop = client.post("/shops", json={"name": "Memory"}).json()
+    onboard = client.post(
+        "/onboard-influencer",
+        json={
+            "handle": "@kept",
+            "areas_of_interest": ["home"],
+            "preferred_promotion_styles": ["educational"],
+            "active_categories": ["home"],
+            "platforms": ["tiktok"],
+        },
+    ).json()
+    matched = client.post(
+        "/match",
+        json={
+            "product": {"title": "Sample", "category": "home", "price": 10, "commission_rate": 10},
+            "creators": [
+                {
+                    "handle": "@kept",
+                    "influencer_id": onboard["id"],
+                    "active_categories": ["home"],
+                    "platforms": ["tiktok"],
+                    "preferred_promotion_styles": ["educational"],
+                }
+            ],
+            "shop_id": shop["id"],
+        },
+    )
+    assert matched.status_code == 200
+    item = db.memory_shortlist_items[-1]
+    assert item.memory_kind == "shortlist_item"
+    accepted = client.post(f"/shortlist-items/{item.id}/accept")
+    assert accepted.status_code == 200
+    assert accepted.json()["accepted_at"]
+    creator = db.memory_creator_objects[onboard["id"]]
+    assert creator.first_match_accepted_at is not None
+    assert client.post(f"/shortlist-items/{item.id}/accept").status_code == 409
 
 
 def test_memory_match_stores_components_and_estimates(monkeypatch):
