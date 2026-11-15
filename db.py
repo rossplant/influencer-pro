@@ -36,6 +36,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", defa
 # so this does not run against production. Do not keep using it once
 # production has data; add a new revision instead.
 PLANTR_TABLES = (
+    "portal_accounts",
     "admin_users",
     "creator_product_links",
     "attributed_orders",
@@ -75,6 +76,7 @@ memory_briefs: list = []
 memory_admin_users: dict = {}
 memory_creator_product_links: list = []
 memory_attributed_orders: list = []
+memory_portal_accounts: list = []
 
 
 def configured() -> bool:
@@ -108,6 +110,7 @@ def reset_memory() -> None:
     memory_admin_users.clear()
     memory_creator_product_links.clear()
     memory_attributed_orders.clear()
+    memory_portal_accounts.clear()
 
 
 def close() -> None:
@@ -158,10 +161,15 @@ def init_storage() -> None:
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     with session_scope() as session:
         removed = purge_api_requests(session)
+    from attribution import backfill_accepted_links
+
+    created_links = backfill_accepted_links()
     logger.info(
-        "Database configured; alembic upgrade head completed; purged %s api_requests row(s) older than %s days",
+        "Database configured; alembic upgrade head completed; purged %s api_requests row(s) older than %s days; "
+        "accepted-link backfill created %s link(s)",
         removed,
         API_REQUEST_RETENTION_DAYS,
+        created_links,
     )
 
 

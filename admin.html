@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="__CSRF__">
   <title>Plantr Collab admin</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #f3f6f4; color: #17211c; }
@@ -149,8 +150,30 @@
       const box = document.getElementById("detail");
       box.classList.remove("hidden");
       box.innerHTML = `<pre>${JSON.stringify(detail, null, 2)}</pre>`;
-      if (state.list === "shops") box.insertAdjacentHTML("beforeend", shopEditor(detail));
+      if (state.list === "shops") box.insertAdjacentHTML("beforeend", shopEditor(detail) + portalLogin(`/admin/api/shops/${detail.id}`));
+      if (state.list === "creators") box.insertAdjacentHTML("beforeend", portalLogin(`/admin/api/creators/${detail.id}`));
       if (state.list === "shortlists") box.insertAdjacentHTML("beforeend", itemActions(detail));
+    }
+
+    function csrfToken() {
+      const tag = document.querySelector('meta[name="csrf-token"]');
+      return tag ? tag.content : "";
+    }
+
+    function portalLogin(action) {
+      const token = csrfToken();
+      return `<form method="post" action="${action}/login">
+        <h3>Create login</h3>
+        <input type="hidden" name="csrf_token" value="${token}">
+        <label>Email <input name="email" type="email" autocomplete="username" required></label>
+        <label>Password <input name="password" type="password" autocomplete="new-password" minlength="12" required></label>
+        <label>Confirm <input name="password_confirm" type="password" autocomplete="new-password" minlength="12" required></label>
+        <button type="submit">Create login</button>
+      </form>
+      <form method="post" action="${action}/view-as">
+        <input type="hidden" name="csrf_token" value="${token}">
+        <button class="secondary" type="submit">View as</button>
+      </form>`;
     }
 
     function shopEditor(shop) {
