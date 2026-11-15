@@ -9,6 +9,7 @@ import pytest
 
 import grok_helper
 import main
+import tracking
 
 
 @pytest.fixture(autouse=True)
@@ -35,5 +36,7 @@ def _isolated(monkeypatch):
     monkeypatch.delenv("STRIPE_CREATOR_COMMISSION_PERCENT", raising=False)
     monkeypatch.setattr(grok_helper, "GROK_API_KEY", None)
     main.reset_runtime_state()
+    tracking.reset()
     yield
     main.reset_runtime_state()
+    tracking.reset()

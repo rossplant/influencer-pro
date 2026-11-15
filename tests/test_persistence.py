@@ -61,10 +61,10 @@ def test_mrr_rules():
     assert events.mrr("growth", status="trial") == 0
     assert events.mrr("growth", status="trialing") == 0
     assert events.mrr("growth", status="free") == 0
-    assert events.mrr("growth") == 49
-    assert events.mrr("scale") == 149
-    assert events.mrr("growth", interval="year") == pytest.approx(490 / 12)
-    assert events.mrr("scale", interval="year") == pytest.approx(1490 / 12)
+    assert events.mrr("growth") == 79
+    assert events.mrr("scale") == 229
+    assert events.mrr("growth", interval="year") == pytest.approx(790 / 12)
+    assert events.mrr("scale", interval="year") == pytest.approx(2290 / 12)
     assert events.mrr("scale", price=149, interval="year") == pytest.approx(149 / 12)
     assert events.mrr("growth", price=588, interval="year", status="active") == pytest.approx(49)
 
@@ -204,9 +204,9 @@ def test_emit_updates_counters_and_milestones(tmp_path, monkeypatch):
         assert match.properties["plan_status"] == "active"
         assert "products_enriched" not in match.properties
         assert match.products_count == 0
-        assert match.product_limit == 50
+        assert match.product_limit == 5
         assert match.matches_count_period == 1
-        assert match.match_limit == 5
+        assert match.match_limit == 3
         assert match.enrichments_count_period == 2
         assert match.briefs_count_period == 0
         assert match.billing_period_start is not None
@@ -285,12 +285,12 @@ def test_shop_pilot_defaults_to_starter_with_zero_mrr(tmp_path, monkeypatch):
     with db.session_scope() as session:
         signed = session.scalars(select(Event).where(Event.event_name == "shop_signed_up")).one()
         assert signed.shop_id == body["id"]
-        assert signed.product_limit == 50
+        assert signed.product_limit == 5
         assert signed.products_count == 0
 
     growth = client.post("/shops", json={"name": "Growth", "plan_tier": "growth"}).json()
     assert growth["plan_status"] == "active"
-    assert growth["mrr"] == 49
+    assert growth["mrr"] == 79
     trial = client.post(
         "/shops",
         json={"name": "Trial", "plan_tier": "growth", "plan_status": "trial"},
@@ -351,7 +351,7 @@ def test_match_records_placeholder_shortlist(tmp_path, monkeypatch):
         assert event.properties["plan_status"] == "free"
         assert "matches_run" not in event.properties
         assert event.matches_count_period == 1
-        assert event.match_limit == 5
+        assert event.match_limit == 3
         assert event.products_count == 1
         shop_row = session.get(Shop, shop["id"])
         assert shop_row.matches_run == 1
@@ -404,7 +404,7 @@ def _fill_catalogue(shop_id: str, count: int) -> str:
 def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch):
     use_database(tmp_path, monkeypatch)
     shop = client.post("/shops", json={"name": "Capped", "plan_tier": "starter"}).json()
-    existing_id = _fill_catalogue(shop["id"], 50)
+    existing_id = _fill_catalogue(shop["id"], 5)
 
     again = client.post(
         "/enrich",
@@ -413,27 +413,27 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
     assert again.status_code == 200
     with db.session_scope() as session:
         assert session.get(Shop, shop["id"]).products_enriched == 1
-        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 50
+        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 5
         assert session.scalars(select(Event).where(Event.event_name == "usage_limit_hit")).all() == []
 
     blocked = client.post("/enrich", json={**PRODUCT, "shop_id": shop["id"], "title": "One more"})
     assert blocked.status_code == 402
-    assert blocked.json()["detail"] == "Plan limit reached: products (50/50)"
+    assert blocked.json()["detail"] == "Plan limit reached: products (5/5)"
     with db.session_scope() as session:
         row = session.get(Shop, shop["id"])
         assert row.products_enriched == 1
-        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 50
+        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 5
         hits = session.scalars(select(Event).where(Event.shop_id == shop["id"], Event.event_name == "usage_limit_hit")).all()
         assert len(hits) == 1
         assert hits[0].actor == "api"
         assert hits[0].properties["limit"] == "products"
         assert hits[0].properties["plan_tier"] == "starter"
-        assert hits[0].products_count == 50
-        assert hits[0].product_limit == 50
+        assert hits[0].products_count == 5
+        assert hits[0].product_limit == 5
         assert hits[0].limit_hit is True
 
     pilot = client.post("/shops", json={"name": "Pilot", "is_pilot": True}).json()
-    _fill_catalogue(pilot["id"], 50)
+    _fill_catalogue(pilot["id"], 5)
     allowed = client.post(
         "/enrich",
         json={
@@ -450,7 +450,7 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
         assert row.briefs_generated == 0
         assert row.first_brief_at is None
         assert row.first_enrich_at is not None
-        assert len(session.scalars(select(Product).where(Product.shop_id == pilot["id"])).all()) == 51
+        assert len(session.scalars(select(Product).where(Product.shop_id == pilot["id"])).all()) == 6
         product = session.scalars(select(Product).where(Product.title == "Extra item")).one()
         assert product.claims[0]["source"] == "brand"
         assert product.claims[0]["claim"] == "Ships in two days"
@@ -458,7 +458,7 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
     matcher = client.post("/shops", json={"name": "Matcher"}).json()
     with db.session_scope() as session:
         shop_row = session.get(Shop, matcher["id"])
-        for _ in range(5):
+        for _ in range(3):
             events.emit("match_run", shop_row, "api")
     denied = client.post(
         "/match",
@@ -471,8 +471,8 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
             select(Event).where(Event.shop_id == matcher["id"], Event.event_name == "usage_limit_hit")
         ).one()
         assert hit.properties["limit"] == "matches_per_month"
-        assert hit.properties["cap"] == 5
-        assert hit.properties["observed"] == 5
+        assert hit.properties["cap"] == 3
+        assert hit.properties["observed"] == 3
         session.get(Shop, matcher["id"]).is_pilot = True
     allowed_match = client.post(
         "/match",
@@ -482,7 +482,7 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
     assert allowed_match.json()["matches"]
     assert allowed_match.json()["shortlist_id"]
     with db.session_scope() as session:
-        assert session.get(Shop, matcher["id"]).matches_run == 6
+        assert session.get(Shop, matcher["id"]).matches_run == 4
         hits = session.scalars(
             select(Event).where(Event.shop_id == matcher["id"], Event.event_name == "usage_limit_hit")
         ).all()

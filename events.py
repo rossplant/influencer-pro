@@ -9,15 +9,11 @@ period counters are columns on the event, not JSON: products_count,
 product_limit, matches_count_period, match_limit, enrichments_count_period,
 briefs_count_period, billing_period_start, and limit_hit.
 
-Starter, per docs/Pricing.md, allows 50 products in the catalogue
-(rows on products) and 5 match runs per UTC calendar month. Enriching a
-product that already exists does not consume another catalogue slot.
-Growth allows 500 products and unlimited matches. Scale is unlimited on both.
-Free uses the starter caps.
-
-MRR: monthly list price is growth 49 and scale 149. Annual list price is
-growth 490 and scale 1490, and annual MRR is that price / 12. Free, trial,
-trialing, and starter contribute 0.
+Starter allows 5 products, 1 campaign, and 3 match runs per UTC calendar month.
+Growth allows 50 products, 5 campaigns, and 25 matches. Scale allows 100 matches
+and does not cap campaigns or products. Prices are AUD ex GST: Growth 79 or 790
+a year, Scale 229 or 2290 a year. Annual MRR is the annual price / 12.
+Free, trial, trialing, invited, and starter contribute 0.
 
 Hand-run operator actions use the same event names with actor='operator'.
 """
@@ -30,8 +26,9 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import object_session
 
+import billing_config
 import db
-from models import Brief, Creator, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
+from models import Brief, Campaign, Creator, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
 
 ACTORS = frozenset({"system", "operator", "api"})
 
@@ -61,24 +58,26 @@ CREATOR_MILESTONES = {
 
 # None means the plan does not cap that dimension.
 PLAN_CAPS = {
-    "starter": {"products": 50, "matches_per_month": 5},
-    "free": {"products": 50, "matches_per_month": 5},
-    "growth": {"products": 500, "matches_per_month": None},
-    "scale": {"products": None, "matches_per_month": None},
+    "starter": {**billing_config.shop_limits("starter"), "campaigns": billing_config.shop_limits("starter")["campaigns"]},
+    "free": billing_config.shop_limits("starter"),
+    "growth": billing_config.shop_limits("growth"),
+    "scale": billing_config.shop_limits("scale"),
 }
+PLAN_CAPS["starter"] = billing_config.shop_limits("starter")
+PLAN_CAPS["free"] = billing_config.shop_limits("starter")
 
 PLAN_MONTHLY_PRICE = {
     "starter": 0,
     "free": 0,
-    "growth": 49,
-    "scale": 149,
+    "growth": billing_config.monthly_price("growth"),
+    "scale": billing_config.monthly_price("scale"),
 }
 
 PLAN_ANNUAL_PRICE = {
     "starter": 0,
     "free": 0,
-    "growth": 490,
-    "scale": 1490,
+    "growth": billing_config.annual_price("growth"),
+    "scale": billing_config.annual_price("scale"),
 }
 
 KNOWN_PLAN_TIERS = frozenset(PLAN_CAPS)
@@ -105,14 +104,14 @@ def mrr(
 ) -> float:
     """Monthly recurring revenue.
 
-    With no explicit price, monthly MRR is the list price (growth 49, scale 149)
-    and annual MRR is the annual list price / 12 (growth 490, scale 1490).
+    With no explicit price, monthly MRR is the list price (growth 79, scale 229)
+    and annual MRR is the annual list price / 12 (growth 790, scale 2290).
     An explicit price is used as-is for month and divided by 12 for year.
     Free, trial, trialing, and starter contribute 0.
     """
-    if (status or "").lower() in {"free", "trial", "trialing"}:
+    if (status or "").lower() in {"free", "trial", "trialing", "invited"}:
         return 0.0
-    if plan_tier in {"starter", "free", "trial"}:
+    if plan_tier in {"starter", "free", "trial", "member"}:
         return 0.0
     period = (interval or "month").lower()
     if price is None:
@@ -227,6 +226,13 @@ def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
         db.memory_events.append(event)
         return event
 
+    if getattr(entity, "emit_detached", False):
+        with db.session_scope() as session:
+            event = Event(**payload)
+            session.add(event)
+            session.flush()
+            return event
+
     if session is None:
         raise RuntimeError("emit() requires a persistent entity")
     event = Event(**payload)
@@ -283,7 +289,15 @@ def _observed(shop: Any, kind: str, session) -> int:
         return catalogue_count(shop, session)
     if kind == "matches_per_month":
         return matches_this_month(shop, session)
+    if kind == "campaigns":
+        return campaign_count(shop, session)
     raise ValueError(f"Unknown plan limit '{kind}'")
+
+
+def campaign_count(shop: Any, session=None) -> int:
+    if session is None:
+        return sum(1 for row in db.memory_campaigns if getattr(row, "shop_id", None) == shop.id)
+    return int(session.scalar(select(func.count()).select_from(Campaign).where(Campaign.shop_id == shop.id)) or 0)
 
 
 def _shop_metrics(shop: Any, session, event_name: str) -> dict:
@@ -298,8 +312,8 @@ def _shop_metrics(shop: Any, session, event_name: str) -> dict:
         enrichments += 1
     elif event_name == "brief_sent":
         briefs += 1
-    product_limit = caps["products"]
-    match_limit = caps["matches_per_month"]
+    product_limit = caps.get("products")
+    match_limit = caps.get("matches_per_month")
     at_products = product_limit is not None and products_count >= product_limit
     at_matches = match_limit is not None and matches_count >= match_limit
     return {
@@ -392,6 +406,8 @@ def _stamp(obj: Any, column: str, mode: str) -> None:
 
 def _resolve(entity: Any):
     kind = getattr(entity, "memory_kind", None)
+    if kind == "tracking" or getattr(entity, "emit_detached", False):
+        return getattr(entity, "entity_type", "tracking"), entity.id, None
     if kind == "shop" or isinstance(entity, Shop):
         return "shop", entity.id, entity
     if kind == "product" or isinstance(entity, Product):

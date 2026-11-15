@@ -221,10 +221,12 @@ def _creator_from_model(row: Creator, full: bool) -> dict:
     profile = row.profile if isinstance(row.profile, dict) else {}
     item = _creator_from_profile(row.id, profile, full)
     item["created_at"] = row.created_at
-    item["stripe_account_id"] = row.stripe_account_id
-    item["payouts_enabled"] = bool(row.payouts_enabled)
-    item["details_submitted"] = bool(row.details_submitted)
-    item["stripe_requirements_due"] = list(row.stripe_requirements_due or [])
+    item["plan_tier"] = row.plan_tier
+    item["plan_status"] = row.plan_status
+    item["stripe_customer_id"] = row.stripe_customer_id
+    item["stripe_subscription_id"] = row.stripe_subscription_id
+    item["subscription_status"] = row.subscription_status
+    item["founding_number"] = row.founding_number
     return item
 
 
@@ -235,10 +237,12 @@ def _creator_from_profile(creator_id: str, profile: dict, full: bool) -> dict:
         "name": profile.get("name"),
         "active_categories": list(profile.get("active_categories") or []),
         "platforms": list(profile.get("platforms") or []),
-        "stripe_account_id": (db.memory_creator_stripe.get(creator_id) or {}).get("stripe_account_id"),
-        "payouts_enabled": bool((db.memory_creator_stripe.get(creator_id) or {}).get("payouts_enabled")),
-        "details_submitted": bool((db.memory_creator_stripe.get(creator_id) or {}).get("details_submitted")),
-        "stripe_requirements_due": list((db.memory_creator_stripe.get(creator_id) or {}).get("stripe_requirements_due") or []),
+        "plan_tier": (db.memory_creator_objects.get(creator_id) and getattr(db.memory_creator_objects.get(creator_id), "plan_tier", None)) or "member",
+        "plan_status": (db.memory_creator_objects.get(creator_id) and getattr(db.memory_creator_objects.get(creator_id), "plan_status", None)) or "invited",
+        "stripe_customer_id": getattr(db.memory_creator_objects.get(creator_id), "stripe_customer_id", None) if db.memory_creator_objects.get(creator_id) else None,
+        "stripe_subscription_id": getattr(db.memory_creator_objects.get(creator_id), "stripe_subscription_id", None) if db.memory_creator_objects.get(creator_id) else None,
+        "subscription_status": getattr(db.memory_creator_objects.get(creator_id), "subscription_status", None) if db.memory_creator_objects.get(creator_id) else None,
+        "founding_number": getattr(db.memory_creator_objects.get(creator_id), "founding_number", None) if db.memory_creator_objects.get(creator_id) else None,
     }
     if full:
         item["profile"] = profile

@@ -40,7 +40,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.15.0"
+APP_VERSION = "0.16.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -95,6 +95,8 @@ class InfluencerIn(BaseModel):
     follower_band: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
+    invite_code: Optional[str] = None
+    age_confirmed: bool = False
 
 
 class ClaimIn(BaseModel):
@@ -404,6 +406,8 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
     record.pop("average_engagement_rate", None)
     record.pop("password", None)
     record.pop("email", None)
+    record.pop("invite_code", None)
+    record.pop("age_confirmed", None)
     if not record.get("platforms"):
         record.pop("platforms", None)
     if not record.get("follower_band"):
@@ -604,12 +608,12 @@ def root():
 
 @app.get("/plantr_onboarding.html")
 def plantr_onboarding_page():
-    return _html("plantr_onboarding.html")
+    return RedirectResponse(url="/founding-curators", status_code=302)
 
 
 @app.get("/onboarding_form.html")
 def onboarding_form_page():
-    return _html("onboarding_form.html")
+    return RedirectResponse(url="/founding-curators", status_code=302)
 
 
 @app.get("/plantr_dashboard.html")
@@ -932,6 +936,7 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
         price=str(form.get("price") or ""),
         url=str(form.get("url") or ""),
         description=str(form.get("description") or ""),
+        commission=str(form.get("commission") or ""),
     )
     return RedirectResponse("/seller/products", status_code=303)
 
@@ -1031,63 +1036,9 @@ def seller_billing_page(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_seller(session, "billing", base_url=str(request.base_url), billing=billing)
 
 
-@app.post("/seller/billing")
-async def seller_billing_setup(request: Request, _: None = Depends(rate_limit_portal)):
-    session = portal.require_seller(request)
-    form = await request.form()
-    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    if stripe_billing.configured():
-        email = stripe_billing.seller_login_email(session["subject_id"])
-        if not email:
-            raise HTTPException(status_code=422, detail="Seller login email is required for billing")
-        shop = services.fetch_shop(session["subject_id"])
-        stripe_billing.ensure_customer(session["subject_id"], email=email, name=(shop or {}).get("name") or email)
-    return RedirectResponse("/seller/billing", status_code=303)
-
-
 @app.get("/creator/payouts")
-@app.get("/creator/payouts/return")
-def creator_payouts_page(request: Request, _: None = Depends(rate_limit_portal)):
-    session = portal.creator_context(request)
-    if session and stripe_billing.configured() and request.url.path.endswith("/return"):
-        stripe_billing.refresh_account(session["subject_id"])
-    payouts = stripe_billing.creator_status(session["subject_id"]) if session else {}
-    return portal.render_creator(session, "payouts", base_url=str(request.base_url), payouts=payouts)
-
-
-@app.post("/creator/payouts")
-async def creator_payouts_setup(request: Request, _: None = Depends(rate_limit_portal)):
-    session = portal.require_creator(request)
-    form = await request.form()
-    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    return _creator_onboarding_redirect(request, session["subject_id"])
-
-
-@app.get("/creator/payouts/refresh")
-def creator_payouts_refresh(request: Request, _: None = Depends(rate_limit_portal)):
-    session = portal.require_creator(request)
-    return _creator_onboarding_redirect(request, session["subject_id"])
-
-
-def _creator_onboarding_redirect(request: Request, creator_id: str):
-    if not stripe_billing.configured():
-        return RedirectResponse("/creator/payouts", status_code=303)
-    email = stripe_billing.creator_login_email(creator_id)
-    if not email:
-        raise HTTPException(status_code=422, detail="Creator login email is required for payouts")
-    profile = portal.creator_profile(creator_id)
-    account_id = stripe_billing.ensure_connected_account(
-        creator_id,
-        email=email,
-        display_name=profile.get("handle") or email,
-    )
-    base = str(request.base_url).rstrip("/")
-    url = stripe_billing.account_link(
-        account_id,
-        return_url=f"{base}/creator/payouts/return",
-        refresh_url=f"{base}/creator/payouts/refresh",
-    )
-    return RedirectResponse(url, status_code=303)
+def creator_payouts_redirect():
+    return RedirectResponse("/creator/billing", status_code=302)
 
 
 @app.post("/stripe/webhook")
@@ -1344,6 +1295,10 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
     record = public_profile(influencer, influencer_id)
     services.persist_creator(record)
     if influencer.email and influencer.password:
+        if not influencer.age_confirmed:
+            raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+        if not influencer.invite_code or not _invite_ok(influencer.invite_code):
+            raise HTTPException(status_code=422, detail="Creator membership is invite-only")
         portal.create_login(
             role="creator",
             email=influencer.email,
@@ -1352,6 +1307,16 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
             creator_id=influencer_id,
         )
     return {"id": influencer_id, "influencer": record}
+
+
+def _invite_ok(code: str) -> bool:
+    import pilots
+
+    try:
+        pilots.open_invite(code)
+    except HTTPException:
+        return False
+    return True
 
 
 @app.post("/sync-shopify")
@@ -1368,3 +1333,8 @@ def sync_shopify(_: None = Depends(guard_request)):
         status_code=501,
         detail="Shopify sync is not implemented yet. No products were synced.",
     )
+
+
+import web_routes
+
+web_routes.register(app)

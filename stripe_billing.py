@@ -1,7 +1,8 @@
-"""Stripe phase 1: Customers for shops and Accounts v2 recipients for creators.
+"""Stripe Billing subscriptions for sellers and creators.
 
-No invoices, transfers, or commission maths. Fee rates are placeholders.
-The app keeps running when the Stripe env vars are unset.
+Connect, transfers, and payouts are not used. The app starts when Stripe is
+unset. Live secret keys are refused. The sandbox setup script reads
+STRIPE_SECRET_KEY_TEST and will not use a live key.
 """
 
 from __future__ import annotations
@@ -15,26 +16,35 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+import billing_config
 import db
-from models import Creator, PortalAccount, Shop, StripeEvent, utcnow
+import tracking
+from models import BillingSubscription, Creator, PortalAccount, Shop, StripeEvent, utcnow
 
 logger = logging.getLogger("plantr.stripe")
 
+NOT_CONFIGURED = "Stripe is not configured"
 HANDLED_EVENT_TYPES = (
-    "account.updated",
-    "v2.core.account.updated",
+    "checkout.session.completed",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "customer.subscription.trial_will_end",
     "invoice.paid",
     "invoice.payment_failed",
 )
-NOT_CONFIGURED = "Stripe is not configured"
 
 
 def configured() -> bool:
-    return bool(secret_key())
+    key = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    return bool(key) and not _live(key)
 
 
 def secret_key() -> str:
-    return os.getenv("STRIPE_SECRET_KEY", "").strip()
+    key = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    if _live(key):
+        raise HTTPException(status_code=503, detail="Live Stripe keys are not allowed")
+    return key
 
 
 def webhook_secret() -> str:
@@ -45,134 +55,119 @@ def publishable_key() -> str:
     return os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
 
 
-def fee_placeholders() -> dict:
-    """Configurable rates for a later phase. Nothing is charged from these."""
-    return {
-        "platform_fee_percent": os.getenv("STRIPE_PLATFORM_FEE_PERCENT", "").strip(),
-        "creator_commission_percent": os.getenv("STRIPE_CREATOR_COMMISSION_PERCENT", "").strip(),
-        "currency": "AUD",
-        "country": "AU",
-        "fees_collector": "application",
-        "losses_collector": "application",
-        "note": "Placeholders only. No commission is calculated in this version.",
-    }
-
-
 def client():
-    if not configured():
+    key = secret_key()
+    if not key:
         raise HTTPException(status_code=503, detail=NOT_CONFIGURED)
     import stripe
 
-    return stripe.StripeClient(secret_key())
-
-
-def seller_login_email(shop_id: str) -> Optional[str]:
-    return _portal_email(role="seller", shop_id=shop_id)
-
-
-def creator_login_email(creator_id: str) -> Optional[str]:
-    return _portal_email(role="creator", creator_id=creator_id)
+    return stripe.StripeClient(key)
 
 
 def shop_status(shop_id: str) -> dict:
-    customer_id = _shop_customer_id(shop_id)
-    return {
-        "configured": configured(),
-        "stripe_customer_id": customer_id,
-        "billing_status": "customer" if customer_id else ("not_configured" if not configured() else "not_started"),
-        "charges_enabled": False,
-        "fees": fee_placeholders(),
-    }
+    row = _account("seller", shop_id)
+    return _status("seller", "starter", row)
 
 
 def creator_status(creator_id: str) -> dict:
-    row = _creator_stripe(creator_id)
-    return {
-        "configured": configured(),
-        "stripe_account_id": row.get("stripe_account_id"),
-        "payouts_enabled": bool(row.get("payouts_enabled")),
-        "details_submitted": bool(row.get("details_submitted")),
-        "stripe_requirements_due": list(row.get("stripe_requirements_due") or []),
-        "status": "not_configured" if not configured() else ("connected" if row.get("stripe_account_id") else "not_started"),
+    row = _account("creator", creator_id)
+    return _status("creator", "member", row)
+
+
+def plans(audience: str) -> list:
+    table = billing_config.SELLER_TIERS if audience == "seller" else billing_config.CREATOR_TIERS
+    listed = []
+    for key, spec in table.items():
+        listed.append(
+            {
+                "tier": key,
+                "label": spec["label"],
+                "monthly": billing_config.price_label(spec["amount_month_cents"]),
+                "annual": billing_config.price_label(spec["amount_year_cents"]),
+                "tax_display": billing_config.TAX_DISPLAY,
+                "stripe_tax": billing_config.STRIPE_TAX_ENABLED,
+                "coming_soon": list(spec.get("coming_soon") or []),
+            }
+        )
+    return listed
+
+
+def checkout(
+    *,
+    role: str,
+    subject_id: str,
+    tier: str,
+    interval: str,
+    success_url: str,
+    cancel_url: str,
+    promo_code: str = "",
+    invite_code: str = "",
+    trial_end: Optional[int] = None,
+    campaign: str = "",
+    channel: str = "",
+) -> str:
+    email = _portal_email(role, subject_id)
+    if not email:
+        raise HTTPException(status_code=422, detail="A login email is required before checkout")
+    lookup = billing_config.lookup_key(role, tier, interval)
+    if not lookup:
+        raise HTTPException(status_code=422, detail="That plan does not have a Stripe price")
+    customer_id = ensure_customer(role, subject_id, email=email, name=email)
+    price_id = _price_id(lookup)
+    metadata = {
+        "role": role,
+        "subject_id": subject_id,
+        "tier": tier,
+        "interval": interval,
+        "promo_code": promo_code,
+        "invite_code": invite_code,
+        "campaign": campaign or billing_config.PROMOTION_CODES.get(promo_code, {}).get("campaign", ""),
+        "channel": channel or billing_config.PROMOTION_CODES.get(promo_code, {}).get("channel", ""),
     }
-
-
-def ensure_customer(shop_id: str, *, email: str, name: str) -> str:
-    existing = _shop_customer_id(shop_id)
-    if existing:
-        return existing
-    created = client().customers.create(
-        {
-            "email": email,
-            "name": name,
-            "metadata": {"shop_id": shop_id},
-        }
-    )
-    customer_id = _id_of(created)
-    _set_shop_customer(shop_id, customer_id)
-    return customer_id
-
-
-def ensure_connected_account(creator_id: str, *, email: str, display_name: str) -> str:
-    existing = _creator_stripe(creator_id).get("stripe_account_id")
-    if existing:
-        return existing
-    created = client().v2.core.accounts.create(
-        {
-            "contact_email": email,
-            "display_name": display_name,
-            "dashboard": "express",
-            "identity": {"country": "AU"},
-            "configuration": {
-                "recipient": {
-                    "capabilities": {
-                        "stripe_balance": {"stripe_transfers": {"requested": True}}
-                    }
-                }
-            },
-            "defaults": {
-                "currency": "aud",
-                "responsibilities": {
-                    "fees_collector": "application",
-                    "losses_collector": "application",
-                },
-            },
-            "metadata": {"creator_id": creator_id},
-        }
-    )
-    account_id = _id_of(created)
-    _save_creator_stripe(creator_id, {"stripe_account_id": account_id})
-    return account_id
-
-
-def account_link(account_id: str, *, return_url: str, refresh_url: str) -> str:
-    link = client().v2.core.account_links.create(
-        {
-            "account": account_id,
-            "use_case": {
-                "type": "account_onboarding",
-                "account_onboarding": {
-                    "refresh_url": refresh_url,
-                    "return_url": return_url,
-                },
-            },
-        }
-    )
-    url = _attr(link, "url")
+    subscription_data = {"metadata": metadata}
+    if trial_end:
+        subscription_data["trial_end"] = trial_end
+        subscription_data["trial_settings"] = {"end_behavior": {"missing_payment_method": "cancel"}}
+    payload = {
+        "mode": "subscription",
+        "customer": customer_id,
+        "client_reference_id": subject_id,
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "metadata": metadata,
+        "subscription_data": subscription_data,
+    }
+    if promo_code:
+        payload["discounts"] = [{"promotion_code": promo_code}]
+    else:
+        payload["allow_promotion_codes"] = True
+    session = client().checkout.sessions.create(payload)
+    url = _attr(session, "url")
     if not url:
-        raise HTTPException(status_code=502, detail="Stripe did not return an onboarding URL")
+        raise HTTPException(status_code=502, detail="Stripe did not return a Checkout URL")
     return str(url)
 
 
-def refresh_account(creator_id: str) -> dict:
-    account_id = _creator_stripe(creator_id).get("stripe_account_id")
-    if not account_id or not configured():
-        return creator_status(creator_id)
-    account = client().v2.core.accounts.retrieve(account_id)
-    parsed = parse_account_status(account)
-    parsed["stripe_account_id"] = account_id
-    _save_creator_stripe(creator_id, parsed)
-    return creator_status(creator_id)
+def portal_session(*, role: str, subject_id: str, return_url: str) -> str:
+    customer_id = (_account(role, subject_id) or {}).get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=422, detail="No Stripe customer yet")
+    session = client().billing_portal.sessions.create({"customer": customer_id, "return_url": return_url})
+    url = _attr(session, "url")
+    if not url:
+        raise HTTPException(status_code=502, detail="Stripe did not return a portal URL")
+    return str(url)
+
+
+def ensure_customer(role: str, subject_id: str, *, email: str, name: str) -> str:
+    current = (_account(role, subject_id) or {}).get("stripe_customer_id")
+    if current:
+        return current
+    created = client().customers.create({"email": email, "name": name, "metadata": {"role": role, "subject_id": subject_id}})
+    customer_id = _id_of(created)
+    _save_account(role, subject_id, {"stripe_customer_id": customer_id})
+    return customer_id
 
 
 def construct_event(payload: bytes, signature: str) -> dict:
@@ -191,11 +186,9 @@ def construct_event(payload: bytes, signature: str) -> dict:
 
 
 def record_event(event: dict) -> bool:
-    """Store the event. Return False when this Stripe event id was already stored."""
     event_id = str(event.get("id") or "")
     if not event_id:
         raise HTTPException(status_code=400, detail="Stripe event id is missing")
-    event_type = str(event.get("type") or "")
     if db.configured():
         try:
             with db.session_scope() as session:
@@ -203,7 +196,7 @@ def record_event(event: dict) -> bool:
                     StripeEvent(
                         id=str(uuid.uuid4()),
                         stripe_event_id=event_id,
-                        event_type=event_type,
+                        event_type=str(event.get("type") or ""),
                         payload=event,
                         processed=False,
                         created_at=utcnow(),
@@ -215,168 +208,374 @@ def record_event(event: dict) -> bool:
         return True
     if event_id in db.memory_stripe_events:
         return False
-    db.memory_stripe_events[event_id] = {
-        "id": str(uuid.uuid4()),
-        "stripe_event_id": event_id,
-        "event_type": event_type,
-        "payload": event,
-        "processed": False,
-    }
+    db.memory_stripe_events[event_id] = {"processed": False, "event_type": event.get("type")}
     return True
 
 
-def apply_event(event: dict) -> None:
+def apply_event(event: dict, *, consent: bool = False) -> None:
     event_type = str(event.get("type") or "")
     data_object = ((event.get("data") or {}).get("object") or {})
-    if _is_account_update(event_type):
-        _apply_account_update(data_object)
+    if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+        _apply_subscription(data_object, deleted=event_type.endswith("deleted"))
+    elif event_type == "checkout.session.completed":
+        _apply_checkout(data_object)
+    elif event_type == "invoice.paid":
+        _apply_invoice_paid(data_object, consent=consent)
+    elif event_type == "invoice.payment_failed":
+        logger.info("invoice payment failed invoice=%s", _attr(data_object, "id"))
+    elif event_type == "customer.subscription.trial_will_end":
+        email = _email_for_customer(str(_attr(data_object, "customer") or ""))
+        if email:
+            import emailer
+
+            emailer.send("pilot_ending_7_days", email, ends="the trial end date")
     _mark_processed(str(event.get("id") or ""))
 
 
-def parse_account_status(account: Any) -> dict:
-    """Read payout flags from an Accounts v2 object or a v1 account.updated payload."""
-    if _attr(account, "payouts_enabled") is not None or _attr(account, "details_submitted") is not None:
-        requirements = _attr(account, "requirements") or {}
-        due = _attr(requirements, "currently_due") or []
-        return {
-            "payouts_enabled": bool(_attr(account, "payouts_enabled")),
-            "details_submitted": bool(_attr(account, "details_submitted")),
-            "stripe_requirements_due": list(due),
-        }
-    transfers = _dig(
-        account,
-        "configuration",
-        "recipient",
-        "capabilities",
-        "stripe_balance",
-        "stripe_transfers",
+def apply_sale_waiver(creator_id: str) -> dict:
+    """Manual trigger. A month with 5 or more attributed sales credits the next invoice."""
+    sales = _sales_this_month(creator_id)
+    if sales < billing_config.WAIVER_SALES:
+        raise HTTPException(status_code=422, detail=f"Need {billing_config.WAIVER_SALES} attributed sales this month")
+    if not configured():
+        return {"applied": False, "reason": NOT_CONFIGURED, "sales": sales}
+    customer_id = (_account("creator", creator_id) or {}).get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=422, detail="Creator has no Stripe customer")
+    coupon = billing_config.COUPONS["curator_sale_waiver"]
+    # The coupon id in Stripe matches the config key created by the setup script.
+    subscription_id = (_account("creator", creator_id) or {}).get("stripe_subscription_id")
+    if subscription_id:
+        client().subscriptions.update(subscription_id, {"discounts": [{"coupon": "curator_sale_waiver"}]})
+    return {"applied": True, "sales": sales, "coupon": "curator_sale_waiver", "percent_off": coupon["percent_off"]}
+
+
+def grant_elite(creator_id: str) -> dict:
+    """Admin recognition: Elite at no charge for 3 months."""
+    _save_account("creator", creator_id, {"plan_tier": "elite", "plan_status": "trial", "billing_interval": "month"})
+    if configured():
+        subscription_id = (_account("creator", creator_id) or {}).get("stripe_subscription_id")
+        if subscription_id:
+            price = _price_id(billing_config.lookup_key("creator", "elite", "month"))
+            client().subscriptions.update(
+                subscription_id,
+                {"items": [{"price": price}], "discounts": [{"coupon": "elite_grant_3mo"}]},
+            )
+    return {"creator_id": creator_id, "plan_tier": "elite", "coupon": "elite_grant_3mo"}
+
+
+def _apply_checkout(session_obj: dict) -> None:
+    metadata = _attr(session_obj, "metadata") or {}
+    role = str(_attr(metadata, "role") or "")
+    subject_id = str(_attr(metadata, "subject_id") or _attr(session_obj, "client_reference_id") or "")
+    customer_id = str(_attr(session_obj, "customer") or "")
+    subscription_id = str(_attr(session_obj, "subscription") or "")
+    if role and subject_id:
+        _save_account(
+            role,
+            subject_id,
+            {
+                "stripe_customer_id": customer_id or None,
+                "stripe_subscription_id": subscription_id or None,
+                "plan_tier": str(_attr(metadata, "tier") or ""),
+                "billing_interval": str(_attr(metadata, "interval") or "month"),
+                "subscription_status": "trialing" if _attr(metadata, "tier") else "active",
+            },
+        )
+
+
+def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
+    metadata = _attr(subscription, "metadata") or {}
+    role = str(_attr(metadata, "role") or "")
+    subject_id = str(_attr(metadata, "subject_id") or "")
+    if not role or not subject_id:
+        found = _find_by_customer(str(_attr(subscription, "customer") or ""))
+        if found is None:
+            return
+        role, subject_id = found
+    status = "canceled" if deleted else str(_attr(subscription, "status") or "")
+    tier = str(_attr(metadata, "tier") or "")
+    if status in {"canceled", "incomplete_expired", "unpaid"}:
+        tier = "starter" if role == "seller" else "member"
+        plan_status = "free" if role == "seller" else "invited"
+    elif status == "trialing":
+        plan_status = "trial"
+    else:
+        plan_status = "active" if status == "active" else status
+    values = {
+        "stripe_customer_id": str(_attr(subscription, "customer") or "") or None,
+        "stripe_subscription_id": str(_attr(subscription, "id") or "") or None,
+        "subscription_status": status,
+        "plan_status": plan_status,
+        "billing_interval": str(_attr(metadata, "interval") or "month"),
+    }
+    if tier:
+        values["plan_tier"] = tier
+    _save_account(role, subject_id, values)
+    _upsert_billing_row(role, subject_id, values, metadata)
+
+
+def _apply_invoice_paid(invoice: Any, *, consent: bool) -> None:
+    amount = _attr(invoice, "amount_paid")
+    if not amount:
+        return
+    subscription_id = str(_attr(invoice, "subscription") or "")
+    invoice_id = str(_attr(invoice, "id") or "")
+    currency = str(_attr(invoice, "currency") or "")
+    metadata = _invoice_metadata(invoice)
+    role = str(_attr(metadata, "role") or "")
+    subject_id = str(_attr(metadata, "subject_id") or "")
+    tier = str(_attr(metadata, "tier") or "")
+    interval = str(_attr(metadata, "interval") or "")
+    found = _find_by_customer(str(_attr(invoice, "customer") or ""))
+    if found and not role:
+        role, subject_id = found
+    account = _account(role, subject_id) if role and subject_id else {}
+    created_at = (account or {}).get("created_at")
+    days = 0
+    if created_at is not None:
+        days = max(0, (utcnow() - created_at).days)
+    value = float(amount) / 100.0
+    common = {
+        "tier": tier,
+        "period": interval,
+        "value": value,
+        "currency": currency,
+        "invite_code": _attr(metadata, "invite_code"),
+        "promo_code": _attr(metadata, "promo_code"),
+    }
+    tracking.track(
+        "subscribe",
+        event_id=f"sub:{invoice_id}",
+        subject_key=f"sub-first:{subscription_id}" if subscription_id else None,
+        role=role or None,
+        entity_type="shop" if role == "seller" else "creator",
+        entity_id=subject_id or invoice_id,
+        shop_id=subject_id if role == "seller" else None,
+        actor="system",
+        consent=consent,
+        **common,
     )
-    status = _attr(transfers, "status")
-    due = _requirements_due(account)
+    if _attr(metadata, "invite_code") or _attr(metadata, "campaign"):
+        tracking.track(
+            "founding_free_to_paid",
+            event_id=f"founding:{invoice_id}",
+            role=role or None,
+            entity_type="shop" if role == "seller" else "creator",
+            entity_id=subject_id or invoice_id,
+            shop_id=subject_id if role == "seller" else None,
+            actor="system",
+            consent=consent,
+            days_since_signup=days,
+            **common,
+        )
+        _mark_converted(role, subject_id)
+
+
+def _already_paid(subscription_id: str) -> bool:
+    if not subscription_id:
+        return False
+    return f"sub-first:{subscription_id}" in getattr(db, "memory_tracked_subjects", set())
+
+
+def _invoice_metadata(invoice: Any):
+    lines = _attr(invoice, "lines") or {}
+    data = _attr(lines, "data") or []
+    if data:
+        parent = _attr(data[0], "metadata")
+        if parent:
+            return parent
+    return _attr(invoice, "metadata") or {}
+
+
+def _price_id(lookup: str) -> str:
+    prices = client().prices.list({"lookup_keys": [lookup], "limit": 1})
+    data = _attr(prices, "data") or []
+    if not data:
+        raise HTTPException(status_code=503, detail=f"Stripe price {lookup} is not set up")
+    return _id_of(data[0])
+
+
+def _status(role: str, default_tier: str, row: Optional[dict]) -> dict:
+    row = row or {}
+    tier = row.get("plan_tier") or default_tier
     return {
-        "payouts_enabled": status == "active",
-        "details_submitted": not due,
-        "stripe_requirements_due": due,
+        "configured": configured(),
+        "tax_display": billing_config.TAX_DISPLAY,
+        "stripe_tax": billing_config.STRIPE_TAX_ENABLED,
+        "stripe_customer_id": row.get("stripe_customer_id"),
+        "stripe_subscription_id": row.get("stripe_subscription_id"),
+        "subscription_status": row.get("subscription_status"),
+        "plan_tier": tier,
+        "plan_status": row.get("plan_status"),
+        "billing_interval": row.get("billing_interval"),
+        "plans": plans(role),
+        "publishable_key": publishable_key(),
     }
 
 
-def _is_account_update(event_type: str) -> bool:
-    return event_type in {"account.updated", "v2.core.account.updated"} or event_type.startswith(
-        "v2.core.account"
-    )
+def _account(role: str, subject_id: str) -> Optional[dict]:
+    if not subject_id:
+        return None
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.get(Shop if role == "seller" else Creator, subject_id)
+            if row is None:
+                return None
+            return _account_dict(row)
+    if role == "seller":
+        row = db.memory_shops.get(subject_id)
+    else:
+        row = db.memory_creator_objects.get(subject_id)
+    return None if row is None else _account_dict(row)
 
 
-def _apply_account_update(account: Any) -> None:
-    account_id = str(_attr(account, "id") or "")
-    if not account_id:
+def _account_dict(row) -> dict:
+    return {
+        "stripe_customer_id": getattr(row, "stripe_customer_id", None),
+        "stripe_subscription_id": getattr(row, "stripe_subscription_id", None),
+        "subscription_status": getattr(row, "subscription_status", None),
+        "plan_tier": getattr(row, "plan_tier", None),
+        "plan_status": getattr(row, "plan_status", None),
+        "billing_interval": getattr(row, "billing_interval", None),
+        "created_at": getattr(row, "created_at", None),
+    }
+
+
+def _save_account(role: str, subject_id: str, values: dict) -> None:
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.get(Shop if role == "seller" else Creator, subject_id)
+            if row is None:
+                return
+            for key, value in values.items():
+                if value is not None and hasattr(row, key):
+                    setattr(row, key, value)
         return
-    creator_id = _creator_id_for_account(account_id)
-    if creator_id is None:
-        logger.warning("Stripe account %s is not linked to a creator", account_id)
+    row = db.memory_shops.get(subject_id) if role == "seller" else db.memory_creator_objects.get(subject_id)
+    if row is None:
         return
-    parsed = parse_account_status(account)
-    parsed["stripe_account_id"] = account_id
-    _save_creator_stripe(creator_id, parsed)
+    for key, value in values.items():
+        if value is not None:
+            setattr(row, key, value)
 
 
-def _requirements_due(account: Any) -> list:
-    entries = _dig(account, "requirements", "entries") or []
-    due = []
-    for entry in entries:
-        if _attr(entry, "status") in {None, "currently_due"}:
-            description = _attr(entry, "description") or _attr(entry, "awaiting_action_from")
-            if description:
-                due.append(str(description))
-    return due
+def _upsert_billing_row(role, subject_id, values, metadata) -> None:
+    subscription_id = values.get("stripe_subscription_id")
+    if db.configured():
+        with db.session_scope() as session:
+            row = None
+            if subscription_id:
+                row = session.scalar(
+                    select(BillingSubscription).where(BillingSubscription.stripe_subscription_id == subscription_id)
+                )
+            if row is None:
+                row = BillingSubscription(
+                    id=str(uuid.uuid4()),
+                    role=role,
+                    shop_id=subject_id if role == "seller" else None,
+                    creator_id=subject_id if role == "creator" else None,
+                    plan_tier=values.get("plan_tier") or "starter",
+                    status=values.get("subscription_status") or "inactive",
+                    interval=values.get("billing_interval") or "month",
+                    created_at=utcnow(),
+                )
+                session.add(row)
+            row.stripe_customer_id = values.get("stripe_customer_id")
+            row.stripe_subscription_id = subscription_id
+            row.status = values.get("subscription_status") or row.status
+            row.plan_tier = values.get("plan_tier") or row.plan_tier
+            row.promo_code = str(_attr(metadata, "promo_code") or "") or row.promo_code
+            row.invite_code = str(_attr(metadata, "invite_code") or "") or row.invite_code
+            row.campaign = str(_attr(metadata, "campaign") or "") or row.campaign
+            row.channel = str(_attr(metadata, "channel") or "") or row.channel
+        return
+    db.memory_billing.append({"role": role, "subject_id": subject_id, **values})
 
 
-def _portal_email(*, role: str, shop_id: Optional[str] = None, creator_id: Optional[str] = None) -> Optional[str]:
+def _find_by_customer(customer_id: str):
+    if not customer_id:
+        return None
+    if db.configured():
+        with db.session_scope() as session:
+            shop = session.scalar(select(Shop).where(Shop.stripe_customer_id == customer_id))
+            if shop is not None:
+                return "seller", shop.id
+            creator = session.scalar(select(Creator).where(Creator.stripe_customer_id == customer_id))
+            if creator is not None:
+                return "creator", creator.id
+        return None
+    for shop_id, shop in db.memory_shops.items():
+        if getattr(shop, "stripe_customer_id", None) == customer_id:
+            return "seller", shop_id
+    for creator_id, creator in db.memory_creator_objects.items():
+        if getattr(creator, "stripe_customer_id", None) == customer_id:
+            return "creator", creator_id
+    return None
+
+
+def _portal_email(role: str, subject_id: str) -> Optional[str]:
     if db.configured():
         with db.session_scope() as session:
             query = select(PortalAccount).where(PortalAccount.role == role)
-            if shop_id:
-                query = query.where(PortalAccount.shop_id == shop_id)
-            if creator_id:
-                query = query.where(PortalAccount.creator_id == creator_id)
+            if role == "seller":
+                query = query.where(PortalAccount.shop_id == subject_id)
+            else:
+                query = query.where(PortalAccount.creator_id == subject_id)
             row = session.scalars(query).first()
-            return row.email if row is not None else None
+            return None if row is None else row.email
     for row in db.memory_portal_accounts:
         if row.role != role:
             continue
-        if shop_id and row.shop_id == shop_id:
+        if role == "seller" and row.shop_id == subject_id:
             return row.email
-        if creator_id and row.creator_id == creator_id:
+        if role == "creator" and row.creator_id == subject_id:
             return row.email
     return None
 
 
-def _shop_customer_id(shop_id: str) -> Optional[str]:
-    if db.configured():
-        with db.session_scope() as session:
-            shop = session.get(Shop, shop_id)
-            return shop.stripe_customer_id if shop is not None else None
-    shop = db.memory_shops.get(shop_id)
-    return getattr(shop, "stripe_customer_id", None) if shop is not None else None
+def _email_for_customer(customer_id: str) -> Optional[str]:
+    found = _find_by_customer(customer_id)
+    if found is None:
+        return None
+    return _portal_email(*found)
 
 
-def _set_shop_customer(shop_id: str, customer_id: str) -> None:
+def _sales_this_month(creator_id: str) -> int:
+    from datetime import datetime, timezone
+
+    start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    count = 0
+    for order in db.memory_attributed_orders:
+        if getattr(order, "creator_id", None) != creator_id:
+            continue
+        occurred = getattr(order, "occurred_at", None)
+        if occurred is not None and occurred >= start:
+            count += 1
     if db.configured():
+        from models import AttributedOrder
+
         with db.session_scope() as session:
-            shop = session.get(Shop, shop_id)
-            if shop is None:
-                raise HTTPException(status_code=404, detail="Shop not found")
-            shop.stripe_customer_id = customer_id
+            rows = session.scalars(select(AttributedOrder).where(AttributedOrder.creator_id == creator_id)).all()
+            count = sum(1 for row in rows if row.occurred_at >= start)
+    return count
+
+
+def _mark_converted(role: str, subject_id: str) -> None:
+    if not role or not subject_id:
         return
-    shop = db.memory_shops.get(shop_id)
-    if shop is None:
-        raise HTTPException(status_code=404, detail="Shop not found")
-    shop.stripe_customer_id = customer_id
+    import pilots
 
+    for membership in pilots._memberships():
+        matches = pilots._get(membership, "shop_id") == subject_id if role == "seller" else pilots._get(membership, "creator_id") == subject_id
+        if matches and pilots._get(membership, "converted_at") is None:
+            pilots._set(membership, "converted_at", utcnow())
+            pilots._set(membership, "stage", "converted")
+            email = pilots._get(membership, "email")
+            if email:
+                import emailer
 
-def _creator_stripe(creator_id: str) -> dict:
-    if db.configured():
-        with db.session_scope() as session:
-            creator = session.get(Creator, creator_id)
-            if creator is None:
-                return {}
-            return {
-                "stripe_account_id": creator.stripe_account_id,
-                "payouts_enabled": creator.payouts_enabled,
-                "details_submitted": creator.details_submitted,
-                "stripe_requirements_due": list(creator.stripe_requirements_due or []),
-            }
-    return dict(db.memory_creator_stripe.get(creator_id) or {})
-
-
-def _save_creator_stripe(creator_id: str, values: dict) -> None:
-    if db.configured():
-        with db.session_scope() as session:
-            creator = session.get(Creator, creator_id)
-            if creator is None:
-                raise HTTPException(status_code=404, detail="Creator not found")
-            if "stripe_account_id" in values:
-                creator.stripe_account_id = values["stripe_account_id"]
-            if "payouts_enabled" in values:
-                creator.payouts_enabled = bool(values["payouts_enabled"])
-            if "details_submitted" in values:
-                creator.details_submitted = bool(values["details_submitted"])
-            if "stripe_requirements_due" in values:
-                creator.stripe_requirements_due = list(values["stripe_requirements_due"])
-        return
-    current = dict(db.memory_creator_stripe.get(creator_id) or {})
-    current.update(values)
-    db.memory_creator_stripe[creator_id] = current
-
-
-def _creator_id_for_account(account_id: str) -> Optional[str]:
-    if db.configured():
-        with db.session_scope() as session:
-            creator = session.scalar(select(Creator).where(Creator.stripe_account_id == account_id))
-            return creator.id if creator is not None else None
-    for creator_id, row in db.memory_creator_stripe.items():
-        if row.get("stripe_account_id") == account_id:
-            return creator_id
-    return None
+                emailer.send("converted", email, tier=role)
 
 
 def _mark_processed(event_id: str) -> None:
@@ -393,6 +592,10 @@ def _mark_processed(event_id: str) -> None:
         stored["processed"] = True
 
 
+def _live(key: str) -> bool:
+    return key.startswith("sk_live") or key.startswith("rk_live")
+
+
 def _id_of(obj: Any) -> str:
     value = _attr(obj, "id")
     if not value:
@@ -406,10 +609,3 @@ def _attr(obj: Any, name: str):
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
-
-
-def _dig(obj: Any, *names: str):
-    current = obj
-    for name in names:
-        current = _attr(current, name)
-    return current

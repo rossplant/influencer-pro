@@ -1,197 +1,178 @@
-"""Stripe phase 1 with the SDK mocked. No network calls and no real keys."""
+"""Stripe Billing with the Stripe client mocked. No live keys and no network."""
 
 import json
 
-import stripe
+from fastapi.testclient import TestClient
 
 import db
+import main
 import stripe_billing
-from test_api import INFLUENCER, client
-from tests.test_admin import _cookie_header, _login, _setup
-from tests.test_portal import CREATOR_PASSWORD, PASSWORD, _cookie, _token
+import tracking
+
+client = TestClient(main.app)
+
+INFLUENCER = {
+    "handle": "@creator",
+    "areas_of_interest": ["alpha"],
+    "preferred_promotion_styles": ["educational"],
+    "availability": "open",
+}
 
 
-class FakeAccounts:
-    def __init__(self):
-        self.created = []
-        self.retrieved = []
-
-    def create(self, params):
-        self.created.append(params)
-        return {"id": "acct_test_123"}
-
-    def retrieve(self, account_id):
-        self.retrieved.append(account_id)
-        return {
-            "id": account_id,
-            "configuration": {
-                "recipient": {
-                    "capabilities": {
-                        "stripe_balance": {"stripe_transfers": {"status": "active"}}
-                    }
-                }
-            },
-            "requirements": {"entries": []},
-        }
+class _Obj(dict):
+    def __getattr__(self, name):
+        return self.get(name)
 
 
-class FakeLinks:
+class FakeCheckout:
     def __init__(self):
         self.created = []
 
-    def create(self, params):
-        self.created.append(params)
-        return {"url": "https://connect.stripe.test/setup/acct_test_123"}
+    def create(self, payload):
+        self.created.append(payload)
+        return _Obj(id="cs_test", url="https://checkout.stripe.test/cs_test")
+
+
+class FakePortal:
+    def __init__(self):
+        self.created = []
+
+    def create(self, payload):
+        self.created.append(payload)
+        return _Obj(id="bps_test", url="https://billing.stripe.test/portal")
+
+
+class FakePrices:
+    def list(self, payload):
+        return _Obj(data=[_Obj(id="price_test", lookup_key=payload["lookup_keys"][0])])
 
 
 class FakeCustomers:
     def __init__(self):
         self.created = []
 
-    def create(self, params):
-        self.created.append(params)
-        return {"id": "cus_test_123"}
+    def create(self, payload):
+        self.created.append(payload)
+        return _Obj(id="cus_test")
+
+
+class FakeSubscriptions:
+    def __init__(self):
+        self.updated = []
+
+    def update(self, subscription_id, payload):
+        self.updated.append((subscription_id, payload))
+        return _Obj(id=subscription_id)
 
 
 class FakeStripe:
     def __init__(self):
-        self.accounts = FakeAccounts()
-        self.links = FakeLinks()
+        self.checkout = _Obj(sessions=FakeCheckout())
+        self.billing_portal = _Obj(sessions=FakePortal())
+        self.prices = FakePrices()
         self.customers = FakeCustomers()
-        self.v2 = type("V2", (), {})()
-        self.v2.core = type("Core", (), {"accounts": self.accounts, "account_links": self.links})()
+        self.subscriptions = FakeSubscriptions()
 
 
-def _install_fake(monkeypatch):
+def _admin(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "s" * 16)
+    monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "unused")
+    from tests.test_admin import PASSWORD, _cookie_header, _login
+
+    monkeypatch.setenv("ADMIN_SETUP_TOKEN", "")
+    return _cookie_header(_login(password=PASSWORD))
+
+
+def test_billing_page_when_stripe_is_unset(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    page = client.get("/creator/billing")
+    assert page.status_code == 200
+    assert "Sign in" in page.text
+    assert client.get("/").json()["version"] == "0.16.0"
+
+
+def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "s" * 16)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_nope")
+    assert stripe_billing.configured() is False
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
     fake = FakeStripe()
     monkeypatch.setattr(stripe_billing, "client", lambda: fake)
-    return fake
+    from tests.test_admin import EMAIL, PASSWORD, _cookie_header, _login, _setup
 
-
-def _seller_and_creator(monkeypatch):
     _setup(monkeypatch)
-    admin = _cookie_header(_login())
-    page = client.get("/admin", headers=admin)
-    csrf = page.text.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
+    admin = _cookie_header(_login(password=PASSWORD, email=EMAIL))
     shop = client.post("/shops", json={"name": "Billed"}).json()
-    creator = client.post(
-        "/onboard-influencer",
-        json={**INFLUENCER, "handle": "@paid", "email": "paid@example.com", "password": CREATOR_PASSWORD},
-    ).json()
-    assert client.post(
+    csrf = client.get("/admin", headers=admin).text.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
+    client.post(
         f"/admin/api/shops/{shop['id']}/login",
-        json={"csrf_token": csrf, "email": "bill@example.com", "password": PASSWORD, "password_confirm": PASSWORD},
+        json={"csrf_token": csrf, "email": "bill@example.com", "password": "password-pass", "password_confirm": "password-pass"},
         headers=admin,
-    ).status_code == 200
-    seller_page = client.get("/seller")
-    seller = client.post(
-        "/seller/login",
-        data={"email": "bill@example.com", "password": PASSWORD, "csrf_token": _token(seller_page.text)},
-        follow_redirects=False,
     )
-    creator_page = client.get("/creator")
+    login = client.get("/seller")
+    token = login.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     signed = client.post(
-        "/creator/login",
-        data={"email": "paid@example.com", "password": CREATOR_PASSWORD, "csrf_token": _token(creator_page.text)},
+        "/seller/login",
+        data={"email": "bill@example.com", "password": "password-pass", "csrf_token": token},
         follow_redirects=False,
     )
-    return shop, creator, _cookie(seller, "plantr_seller"), _cookie(signed, "plantr_creator"), admin
-
-
-def test_stripe_features_say_not_configured_without_keys(monkeypatch):
-    _shop, _creator, seller, creator_cookie, admin = _seller_and_creator(monkeypatch)
-    billing = client.get("/seller/billing", headers=seller)
-    assert billing.status_code == 200
-    assert "Stripe is not configured" in billing.text
-    payouts = client.get("/creator/payouts", headers=creator_cookie)
-    assert payouts.status_code == 200
-    assert "Stripe is not configured" in payouts.text
-    assert client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "t"}).status_code == 503
-    assert client.get("/").json()["version"] == "0.15.0"
-    detail = client.get(f"/admin/api/creators/{_creator['id']}", headers=admin)
-    assert detail.status_code == 200
-    assert detail.json()["stripe_account_id"] is None
-
-
-def test_payouts_and_billing_reuse_stripe_objects(monkeypatch):
-    fake = _install_fake(monkeypatch)
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
-    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_placeholder")
-    shop, creator, seller, creator_cookie, admin = _seller_and_creator(monkeypatch)
-    first = client.post(
-        "/creator/payouts",
-        data={"csrf_token": _token(client.get("/creator/payouts", headers=creator_cookie).text)},
-        headers=creator_cookie,
+    cookie = {"Cookie": signed.headers["set-cookie"].split(";", 1)[0]}
+    billing = client.get("/seller/billing", headers=cookie)
+    token = billing.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = client.post(
+        "/seller/billing/checkout",
+        data={"csrf_token": token, "tier": "growth", "interval": "year", "promo_code": "FOUNDING50"},
+        headers=cookie,
         follow_redirects=False,
     )
-    assert first.status_code == 303
-    assert first.headers["location"] == "https://connect.stripe.test/setup/acct_test_123"
-    assert fake.accounts.created[0]["identity"]["country"] == "AU"
-    assert fake.accounts.created[0]["defaults"]["currency"] == "aud"
-    assert fake.accounts.created[0]["defaults"]["responsibilities"]["fees_collector"] == "application"
-    assert fake.accounts.created[0]["defaults"]["responsibilities"]["losses_collector"] == "application"
-    assert fake.accounts.created[0]["configuration"]["recipient"]["capabilities"]["stripe_balance"]["stripe_transfers"]["requested"] is True
-    second = client.post(
-        "/creator/payouts",
-        data={"csrf_token": _token(client.get("/creator/payouts", headers=creator_cookie).text)},
-        headers=creator_cookie,
-        follow_redirects=False,
-    )
-    assert second.status_code == 303
-    assert len(fake.accounts.created) == 1
-    assert len(fake.links.created) == 2
-    returned = client.get("/creator/payouts/return", headers=creator_cookie)
-    assert "acct_test_123" in returned.text
-    assert "True" in returned.text
-    billing = client.post(
-        "/seller/billing",
-        data={"csrf_token": _token(client.get("/seller/billing", headers=seller).text)},
-        headers=seller,
-        follow_redirects=False,
-    )
-    assert billing.status_code == 303
-    again = client.post(
-        "/seller/billing",
-        data={"csrf_token": _token(client.get("/seller/billing", headers=seller).text)},
-        headers=seller,
-        follow_redirects=False,
-    )
-    assert again.status_code == 303
-    assert len(fake.customers.created) == 1
-    assert "cus_test_123" in client.get("/seller/billing", headers=seller).text
-    assert client.get(f"/admin/api/shops/{shop['id']}", headers=admin).json()["stripe_customer_id"] == "cus_test_123"
-    assert client.get(f"/admin/api/creators/{creator['id']}", headers=admin).json()["stripe_account_id"] == "acct_test_123"
-    assert "sk_test_placeholder" not in json.dumps(fake.accounts.created)
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://checkout.stripe.test/cs_test"
+    created = fake.checkout.sessions.created[0]
+    assert created["mode"] == "subscription"
+    assert created["line_items"][0]["price"] == "price_test"
+    assert created["metadata"]["tier"] == "growth"
+    assert created["metadata"]["promo_code"] == "FOUNDING50"
+    assert created["metadata"]["campaign"] == "founding_curators"
+    assert "sk_" not in json.dumps(created)
 
 
-def test_webhook_is_idempotent_and_updates_payout_status(monkeypatch):
+def test_subscribe_webhook_is_idempotent(monkeypatch):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_placeholder")
-    db.memory_creator_stripe["creator-1"] = {"stripe_account_id": "acct_test_123", "payouts_enabled": False}
+    invoice = {
+        "id": "in_1",
+        "amount_paid": 79000,
+        "currency": "aud",
+        "subscription": "sub_1",
+        "billing_reason": "subscription_create",
+        "customer": "cus_1",
+        "metadata": {"role": "seller", "subject_id": "shop-1", "tier": "growth", "interval": "year"},
+    }
+    event = {"id": "evt_1", "type": "invoice.paid", "data": {"object": invoice}}
 
     def fake_event(payload, signature, secret):
-        assert secret == "whsec_placeholder"
-        if signature != "good":
-            raise ValueError("bad signature")
-        return json.loads(payload)
+        return event
+
+    import stripe
 
     monkeypatch.setattr(stripe.Webhook, "construct_event", fake_event)
-    body = {
-        "id": "evt_1",
-        "type": "account.updated",
-        "data": {"object": {"id": "acct_test_123", "payouts_enabled": True, "details_submitted": True, "requirements": {"currently_due": ["external_account"]}}},
-    }
-    raw = json.dumps(body).encode()
-    first = client.post("/stripe/webhook", content=raw, headers={"stripe-signature": "good"})
+    calls = []
+    original = tracking.track
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("event_id"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tracking, "track", spy)
+    monkeypatch.setattr(stripe_billing, "secret_key", lambda: "sk_test_placeholder")
+    first = client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "good"})
+    second = client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "good"})
     assert first.status_code == 200
-    assert db.memory_creator_stripe["creator-1"]["payouts_enabled"] is True
-    assert db.memory_creator_stripe["creator-1"]["stripe_requirements_due"] == ["external_account"]
-    body["data"]["object"]["payouts_enabled"] = False
-    second = client.post("/stripe/webhook", content=json.dumps(body).encode(), headers={"stripe-signature": "good"})
     assert second.status_code == 200
-    assert db.memory_creator_stripe["creator-1"]["payouts_enabled"] is True
-    paid = {"id": "evt_paid", "type": "invoice.paid", "data": {"object": {"id": "in_1"}}}
-    assert client.post("/stripe/webhook", content=json.dumps(paid).encode(), headers={"stripe-signature": "good"}).status_code == 200
-    failed = {"id": "evt_failed", "type": "invoice.payment_failed", "data": {"object": {"id": "in_2"}}}
-    assert client.post("/stripe/webhook", content=json.dumps(failed).encode(), headers={"stripe-signature": "good"}).status_code == 200
-    assert set(db.memory_stripe_events) == {"evt_1", "evt_paid", "evt_failed"}
-    assert client.post("/stripe/webhook", content=raw, headers={"stripe-signature": "bad"}).status_code == 400
+    assert calls == ["sub:in_1"]
+    names = [row.event_name for row in db.memory_events if row.event_name == "subscribe"]
+    assert names == ["subscribe"]
+    stored = next(row for row in db.memory_events if row.event_name == "subscribe")
+    assert stored.properties["value"] == 790.0
+    assert stored.properties["currency"] == "aud"
+    assert "email" not in stored.properties

@@ -36,6 +36,16 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", defa
 # so this does not run against production. Do not keep using it once
 # production has data; add a new revision instead.
 PLANTR_TABLES = (
+    "tracked_events",
+    "email_messages",
+    "pilot_surveys",
+    "pilot_visits",
+    "pilot_memberships",
+    "pilot_applications",
+    "pilot_invites",
+    "pilot_cohorts",
+    "billing_subscriptions",
+    "campaigns",
     "stripe_events",
     "portal_accounts",
     "admin_users",
@@ -80,6 +90,17 @@ memory_attributed_orders: list = []
 memory_portal_accounts: list = []
 memory_creator_stripe: dict = {}
 memory_stripe_events: dict = {}
+memory_campaigns: list = []
+memory_cohorts: dict = {}
+memory_applications: list = []
+memory_invites: list = []
+memory_memberships: list = []
+memory_visits: list = []
+memory_surveys: list = []
+memory_emails: list = []
+memory_billing: list = []
+memory_tracked_event_ids: set = set()
+memory_tracked_subjects: set = set()
 
 
 def configured() -> bool:
@@ -116,6 +137,17 @@ def reset_memory() -> None:
     memory_portal_accounts.clear()
     memory_creator_stripe.clear()
     memory_stripe_events.clear()
+    memory_campaigns.clear()
+    memory_cohorts.clear()
+    memory_applications.clear()
+    memory_invites.clear()
+    memory_memberships.clear()
+    memory_visits.clear()
+    memory_surveys.clear()
+    memory_emails.clear()
+    memory_billing.clear()
+    memory_tracked_event_ids.clear()
+    memory_tracked_subjects.clear()
 
 
 def close() -> None:
@@ -168,6 +200,9 @@ def init_storage() -> None:
         removed = purge_api_requests(session)
     from attribution import backfill_accepted_links
 
+    import pilots
+
+    pilots.ensure_cohorts()
     created_links = backfill_accepted_links()
     logger.info(
         "Database configured; alembic upgrade head completed; purged %s api_requests row(s) older than %s days; "

@@ -8,18 +8,18 @@ Plantr is the company. Plantr Collab is the product: a brand–creator collabora
 
 The product cap is the number of product rows in the shop's catalogue. Enriching a product that already exists does not use another slot.
 
-| plan_tier | Catalogue | Match runs | Price at paid launch |
-| --- | --- | --- | --- |
-| starter | 50 products | 5 per calendar month (UTC) | US$0 |
-| growth | 500 products | no monthly cap | US$49 / month or US$490 / year |
-| scale | unlimited | no monthly cap | US$149 / month or US$1,490 / year |
+| plan_tier | Catalogue | Campaigns | Match runs | Price, ex GST |
+| --- | --- | --- | --- | --- |
+| starter | 5 products | 1 | 3 per calendar month (UTC) | A$0 |
+| growth | 50 products | 5 | 25 per calendar month | A$79 / month or A$790 / year |
+| scale | 250+ | no cap | 100 per calendar month | A$229 / month or A$2,290 / year |
 
 When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot shop is then blocked. A pilot shop is allowed to continue, and the event is still written.
 
 ### MRR
 
-- Monthly list price is the MRR: Growth 49, Scale 149.
-- Annual list price / 12 is the MRR: Growth 490, Scale 1490.
+- Monthly list price is the MRR: Growth 79, Scale 229.
+- Annual list price / 12 is the MRR: Growth 790, Scale 2290.
 - Free, trial, trialing, and starter contribute 0.
 
 `monthly_mrr_snapshots` stores that number. Nothing writes the table from an endpoint yet.

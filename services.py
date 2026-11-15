@@ -20,7 +20,7 @@ import taxonomy
 from events import PlanLimitReached
 from sqlalchemy import select
 
-from models import Brief, Category, Creator, Product, Shop, Shortlist, ShortlistExclusion, ShortlistItem, utcnow
+from models import Brief, Campaign, Category, Creator, Product, Shop, Shortlist, ShortlistExclusion, ShortlistItem, utcnow
 
 MATCH_VERSION = "rules-v1"
 DISCLOSURE_LINE = "Paid partnership. The creator may earn a commission."
@@ -133,6 +133,9 @@ def shop_dict(shop: Any) -> dict:
         "last_campaign_at": getattr(shop, "last_campaign_at", None),
         "created_at": shop.created_at,
         "stripe_customer_id": getattr(shop, "stripe_customer_id", None),
+        "stripe_subscription_id": getattr(shop, "stripe_subscription_id", None),
+        "subscription_status": getattr(shop, "subscription_status", None),
+        "billing_interval": getattr(shop, "billing_interval", None),
     }
 
 
@@ -240,6 +243,32 @@ def fetch_creator(creator_id: str) -> Optional[dict]:
             "influencer": creator.profile,
             "created_at": creator.created_at,
         }
+
+
+def create_campaign(shop_id: str, name: str) -> dict:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="Campaign name is required")
+    try:
+        if db.configured():
+            with db.session_scope() as session:
+                shop = session.get(Shop, shop_id)
+                if shop is None:
+                    raise HTTPException(status_code=404, detail="Shop not found")
+                events.guard_plan_limit(shop, "campaigns", session)
+                row = Campaign(id=str(uuid.uuid4()), shop_id=shop.id, name=cleaned, created_at=utcnow())
+                session.add(row)
+                session.flush()
+                return {"id": row.id, "name": row.name, "shop_id": shop.id}
+        shop = db.memory_shops.get(shop_id)
+        if shop is None:
+            raise HTTPException(status_code=404, detail="Shop not found")
+        events.guard_plan_limit(shop, "campaigns", None)
+        row = SimpleNamespace(id=str(uuid.uuid4()), shop_id=shop.id, name=cleaned, created_at=utcnow())
+        db.memory_campaigns.append(row)
+        return {"id": row.id, "name": row.name, "shop_id": shop.id}
+    except PlanLimitReached as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
 
 
 def prepare_enrichment(shop_id: Optional[str], product_id: Optional[str]) -> None:

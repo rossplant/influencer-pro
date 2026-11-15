@@ -159,18 +159,22 @@ def test_seller_and_creator_apps(monkeypatch):
 
     onboard = client.post(
         "/onboard-influencer",
-        json={
-            **INFLUENCER,
-            "handle": "@maker",
-            "active_categories": ["home"],
-            "email": "maker@example.com",
-            "password": CREATOR_PASSWORD,
-        },
+        json={**INFLUENCER, "handle": "@maker", "active_categories": ["home"]},
     )
     assert onboard.status_code == 200
     assert "password" not in onboard.json()["influencer"]
-    assert CREATOR_PASSWORD not in onboard.text
     creator_id = onboard.json()["id"]
+    created_creator = client.post(
+        f"/admin/api/creators/{creator_id}/login",
+        json={
+            "csrf_token": admin_csrf,
+            "email": "maker@example.com",
+            "password": CREATOR_PASSWORD,
+            "password_confirm": CREATOR_PASSWORD,
+        },
+        headers=admin_cookie,
+    )
+    assert created_creator.status_code == 200
 
     found = client.post(
         "/seller/find",
@@ -243,10 +247,20 @@ def test_portal_flow_with_admin_cookie(monkeypatch):
     shop = client.post("/shops", json={"name": "View Shop"}).json()
     creator = client.post(
         "/onboard-influencer",
-        json={**INFLUENCER, "handle": "@view", "active_categories": ["home"], "email": "view@example.com", "password": CREATOR_PASSWORD},
+        json={**INFLUENCER, "handle": "@view", "active_categories": ["home"]},
     ).json()
     admin_page = client.get("/admin", headers=admin_cookie)
     csrf = _meta_csrf(admin_page.text)
+    assert client.post(
+        f"/admin/api/creators/{creator['id']}/login",
+        json={
+            "csrf_token": csrf,
+            "email": "view@example.com",
+            "password": CREATOR_PASSWORD,
+            "password_confirm": CREATOR_PASSWORD,
+        },
+        headers=admin_cookie,
+    ).status_code == 200
     assert 'Create login' in admin_page.text or "Create login" in admin_page.text
     assert "View as" in admin_page.text
 

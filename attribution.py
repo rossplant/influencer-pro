@@ -421,8 +421,8 @@ def _write_order(parsed: dict) -> dict:
             order = AttributedOrder(**fields)
             session.add(order)
             shop = session.get(Shop, parsed["shop_id"])
-            if shop is not None and shop.first_attributed_sale_at is None:
-                events.emit("attributed_sale", shop, "operator")
+            if shop is not None:
+                _emit_sale(shop, parsed, link)
             session.flush()
             return _order_dict(order)
     from types import SimpleNamespace
@@ -430,9 +430,30 @@ def _write_order(parsed: dict) -> dict:
     order = SimpleNamespace(**fields)
     db.memory_attributed_orders.append(order)
     shop = db.memory_shops.get(parsed["shop_id"])
-    if shop is not None and getattr(shop, "first_attributed_sale_at", None) is None:
-        events.emit("attributed_sale", shop, "operator")
+    if shop is not None:
+        _emit_sale(shop, parsed, link)
     return _order_dict(order)
+
+
+def _emit_sale(shop, parsed, link) -> None:
+    import tracking
+
+    raw_code = str((parsed.get("raw") or {}).get("code") or (parsed.get("raw") or {}).get("link") or "")
+    source = "link" if "://" in raw_code or raw_code.startswith("/r/") else "code"
+    tracking.track(
+        "attributed_sale",
+        event_id=f"sale:{parsed['shop_id']}:{parsed['order_id']}",
+        entity=shop,
+        actor="operator",
+        source=source,
+        order_id=parsed["order_id"],
+        gross=parsed["gross"],
+        currency=parsed["currency"],
+        creator_id=link.get("creator_id"),
+        shop_id=parsed["shop_id"],
+        refunded=False,
+        cancelled=False,
+    )
 
 
 def _find_order(shop_id: str, order_id: str) -> Optional[dict]:
