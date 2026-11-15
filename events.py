@@ -47,6 +47,7 @@ SHOP_MILESTONES = {
     "shopify_connected": (("shopify_connected_at", "first"),),
     "attributed_sale": (("first_attributed_sale_at", "first"),),
     "payment_received": (("first_paid_at", "first"),),
+    "subscribe": (("first_paid_at", "first"),),
 }
 
 CREATOR_MILESTONES = {
@@ -230,10 +231,19 @@ def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
         return event
 
     if getattr(entity, "emit_detached", False):
-        with db.session_scope() as session:
+        with db.session_scope() as bound:
+            shop_id = getattr(entity, "shop_id", None)
+            shop_row = bound.get(Shop, shop_id) if shop_id else None
+            if shop_row is not None:
+                _apply_milestones(name, entity, shop_row, props)
+                properties = dict(props)
+                properties["plan_tier"] = shop_row.plan_tier
+                properties["plan_status"] = shop_row.plan_status
+                metrics = _shop_metrics(shop_row, bound, name)
+                payload = {**payload, "shop_id": shop_row.id, "properties": properties, **metrics}
             event = Event(**payload)
-            session.add(event)
-            session.flush()
+            bound.add(event)
+            bound.flush()
             return event
 
     if session is None:
@@ -410,7 +420,9 @@ def _stamp(obj: Any, column: str, mode: str) -> None:
 def _resolve(entity: Any):
     kind = getattr(entity, "memory_kind", None)
     if kind == "tracking" or getattr(entity, "emit_detached", False):
-        return getattr(entity, "entity_type", "tracking"), entity.id, None
+        shop_id = getattr(entity, "shop_id", None)
+        shop = db.memory_shops.get(shop_id) if shop_id and not db.configured() else None
+        return getattr(entity, "entity_type", "tracking"), entity.id, shop
     if kind == "shop" or isinstance(entity, Shop):
         return "shop", entity.id, entity
     if kind == "product" or isinstance(entity, Product):

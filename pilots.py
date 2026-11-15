@@ -94,32 +94,34 @@ def apply(
         contact=contact.strip(),
         status=status,
         founding_number=None,
-        attribution=touch.first_of(touch_state) or None,
+        attribution={"first": touch.first_of(touch_state), "last": touch.last_of(touch_state)},
         age_confirmed=bool(age_confirmed),
+        marketing_consent=bool(consent),
         created_at=utcnow(),
         reviewed_at=None,
     )
     _save_application(row)
-    if status == "pending":
-        tracking.track(
-            "apply_submit",
-            event_id=event_id or f"apply:{row.id}",
-            role=spec["role"],
-            entity_type="pilot_application",
-            entity_id=row.id,
-            actor="api",
-            consent=consent,
-            email=cleaned,
-            ip=ip,
-            user_agent=user_agent,
-            touch=touch_state,
-            invite_code=None,
-            cohort=slug,
-        )
-    return {"id": row.id, "status": status, "event_id": f"apply:{row.id}"}
+    tracked_id = event_id or f"apply:{row.id}"
+    invite_code = touch.last_of(touch_state).get("invite_code") or touch.first_of(touch_state).get("invite_code")
+    tracked = tracking.track(
+        "apply_submit",
+        event_id=tracked_id,
+        role=spec["role"],
+        entity_type="pilot_application",
+        entity_id=row.id,
+        actor="api",
+        consent=consent,
+        email=cleaned,
+        ip=ip,
+        user_agent=user_agent,
+        touch=touch_state,
+        invite_code=invite_code,
+        cohort=slug,
+    )
+    return {"id": row.id, "status": status, "event_id": tracked["event_id"]}
 
 
-def approve(application_id: str, *, consent: bool = False) -> dict:
+def approve(application_id: str) -> dict:
     ensure_cohorts()
     application = _application(application_id)
     if application is None:
@@ -165,6 +167,11 @@ def approve(application_id: str, *, consent: bool = False) -> dict:
         code=_get(invite, "code"),
         url=f"/join/{_get(invite, 'code')}",
     )
+    stored = _get(application, "attribution") or {}
+    if isinstance(stored, dict) and ("first" in stored or "last" in stored):
+        stored_touch = stored
+    else:
+        stored_touch = {"first": stored or {}, "last": stored or {}}
     tracked = tracking.track(
         "application_approved",
         event_id=f"approve:{application_id}",
@@ -172,8 +179,9 @@ def approve(application_id: str, *, consent: bool = False) -> dict:
         entity_type="pilot_application",
         entity_id=application_id,
         actor="operator",
-        consent=consent,
+        consent=bool(_get(application, "marketing_consent")),
         email=_get(application, "email"),
+        touch=stored_touch,
         cohort=slug,
         invite_code=_get(invite, "code"),
     )
@@ -259,7 +267,7 @@ def join_with_invite(
             password_confirm=password,
             shop_id=subject_id,
         )
-        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=False)
+        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=False, marketing_consent=consent)
     else:
         creator_id = str(uuid.uuid4())
         active = [part.strip().lower() for part in categories.split(",") if part.strip()] or ["other"]
@@ -284,7 +292,7 @@ def join_with_invite(
             creator_id=creator_id,
         )
         subject_id = creator_id
-        _stamp_account("creator", subject_id, touch_state, code, opened, age_confirmed=True)
+        _stamp_account("creator", subject_id, touch_state, code, opened, age_confirmed=True, marketing_consent=consent)
     _consume_invite(invite)
     membership = _membership_for_invite(_get(invite, "id"))
     if membership is not None:
@@ -459,7 +467,7 @@ def _gates() -> dict:
     return counts
 
 
-def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed: bool) -> None:
+def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed: bool, marketing_consent: bool = False) -> None:
     if db.configured():
         with db.session_scope() as session:
             row = session.get(Shop if role == "seller" else Creator, subject_id)
@@ -470,6 +478,7 @@ def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed
                 row.signup_code = code
                 row.signup_campaign = opened["campaign"]
                 row.signup_channel = opened["channel"]
+            row.marketing_consent = bool(marketing_consent)
             if role == "creator":
                 row.age_confirmed = age_confirmed
                 row.founding_number = opened["founding_number"]
@@ -488,6 +497,7 @@ def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed
         row.signup_code = code
         row.signup_campaign = opened["campaign"]
         row.signup_channel = opened["channel"]
+    row.marketing_consent = bool(marketing_consent)
     if role == "creator":
         row.age_confirmed = age_confirmed
         row.founding_number = opened["founding_number"]
@@ -591,6 +601,7 @@ def _save_application(row) -> None:
                     founding_number=row.founding_number,
                     attribution=row.attribution,
                     age_confirmed=row.age_confirmed,
+                    marketing_consent=row.marketing_consent,
                     created_at=row.created_at,
                 )
             )
@@ -627,7 +638,7 @@ def _applications():
             return [
                 SimpleNamespace(**{column: getattr(row, column) for column in (
                     "id", "cohort_slug", "name", "email", "role", "categories", "contact", "status",
-                    "founding_number", "attribution", "age_confirmed", "created_at", "reviewed_at",
+                    "founding_number", "attribution", "age_confirmed", "marketing_consent", "created_at", "reviewed_at",
                 )})
                 for row in session.scalars(select(PilotApplication).order_by(PilotApplication.created_at.desc())).all()
             ]

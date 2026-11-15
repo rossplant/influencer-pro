@@ -144,3 +144,139 @@ def test_subscribe_replay_does_not_double_fire():
     assert second["duplicate"] is True
     assert renewal["duplicate"] is True
     assert [row.event_name for row in db.memory_events if row.event_name == "subscribe"] == ["subscribe"]
+
+
+def test_waitlisted_application_still_emits_apply_submit(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("PILOT_CURATOR_SEATS", "0")
+    page = client.get("/founding-curators?invite_code=INVITE1")
+    token = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    event_id = page.text.split('name="event_id" value="', 1)[1].split('"', 1)[0]
+    response = client.post(
+        "/founding-curators/apply",
+        data={
+            "csrf_token": token,
+            "name": "Bea",
+            "email": "bea@example.com",
+            "role": "creator",
+            "categories": "home",
+            "contact": "@bea",
+            "age_confirmed": "yes",
+            "event_id": event_id,
+        },
+    )
+    assert response.status_code == 200
+    assert "waitlist" in response.text.lower()
+    assert event_id in response.text
+    submit = next(row for row in db.memory_events if row.event_name == "apply_submit")
+    assert submit.properties["event_id"] == event_id
+    assert submit.properties["invite_code"] == "INVITE1"
+    assert db.memory_applications[0].marketing_consent is False
+
+
+def test_pixels_render_only_with_id_and_consent(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("META_PIXEL_ID", "meta-pixel")
+    monkeypatch.setenv("TIKTOK_PIXEL_ID", "tiktok-pixel")
+    quiet = client.get("/founding-curators")
+    assert "fbq(" not in quiet.text
+    assert "ttq.load" not in quiet.text
+    allowed = client.get("/founding-curators", headers={"Cookie": "plantr_consent=marketing"})
+    assert "fbq('init', 'meta-pixel')" in allowed.text
+    assert "ttq.load('tiktok-pixel')" in allowed.text
+    assert "fbq('track', \"PageView\"" in allowed.text or "fbq('track', \"PageView\"" in allowed.text
+    assert "founding-curators" in allowed.text
+    assert "connect.facebook.net" in allowed.text
+    assert "analytics.tiktok.com" in allowed.text
+
+
+def test_platform_cookies_are_captured():
+    response = client.get("/pilot-sellers", headers={"Cookie": "_fbp=fb.1.2.3; _fbc=fb.1.9.clid; _ttp=ttp-1"})
+    cookie = response.cookies.get("plantr_attr")
+    assert "fbp" in cookie
+    assert "ttp-1" in cookie or "ttp" in cookie
+    assert "fb.1.9.clid" in cookie
+
+
+def test_subscribe_uses_account_consent_and_shop(monkeypatch):
+    from types import SimpleNamespace
+
+    from models import utcnow
+    import stripe_billing
+
+    shop = SimpleNamespace(
+        memory_kind="shop",
+        id="shop-sub",
+        plan_tier="growth",
+        plan_status="trial",
+        first_paid_at=None,
+        marketing_consent=True,
+        attribution_first={"utm_source": "tiktok"},
+        attribution_last={"fbp": "fb.1.2"},
+        signup_code="INV9",
+        signup_campaign="seller_pilot",
+        created_at=utcnow(),
+        is_pilot=True,
+    )
+    db.memory_shops[shop.id] = shop
+    stripe_billing._apply_invoice_paid(
+        {
+            "id": "in_shop",
+            "amount_paid": 7900,
+            "currency": "aud",
+            "subscription": "sub_shop",
+            "billing_reason": "subscription_create",
+            "customer": "cus_shop",
+            "metadata": {"role": "seller", "subject_id": shop.id, "tier": "growth", "interval": "month"},
+        }
+    )
+    subscribe = next(row for row in db.memory_events if row.event_name == "subscribe")
+    founding = next(row for row in db.memory_events if row.event_name == "founding_free_to_paid")
+    assert subscribe.properties["plan_tier"] == "growth"
+    assert subscribe.properties["period"] == "monthly"
+    assert subscribe.properties["invite_code"] == "INV9"
+    assert subscribe.properties["utm_first"]["utm_source"] == "tiktok"
+    assert subscribe.properties["fbp"] == "fb.1.2"
+    assert subscribe.shop_id == shop.id
+    assert shop.first_paid_at is not None
+    assert founding.properties["event_id"] == "founding:in_shop"
+    assert "founding-first:sub_shop" in db.memory_tracked_subjects
+    stripe_billing._apply_invoice_paid(
+        {
+            "id": "in_shop_2",
+            "amount_paid": 7900,
+            "currency": "aud",
+            "subscription": "sub_shop",
+            "metadata": {"role": "seller", "subject_id": shop.id, "tier": "growth", "interval": "month"},
+        }
+    )
+    assert [row.event_name for row in db.memory_events if row.event_name == "founding_free_to_paid"] == ["founding_free_to_paid"]
+
+
+def test_capi_posts_only_when_flag_id_and_token_are_set(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setenv("TRACKING_ENABLED", "1")
+    monkeypatch.setenv("META_PIXEL_ID", "meta-pixel")
+    tracking.track("apply_submit", event_id="apply:capi", role="creator", consent=True, email="ada@example.com")
+    assert calls == []
+    monkeypatch.setenv("META_CAPI_TOKEN", "meta-token")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "staging")
+    monkeypatch.setenv("META_TEST_EVENT_CODE", "TEST123")
+    tracking.track("apply_submit", event_id="apply:capi-2", role="creator", consent=True, email="ada@example.com")
+    assert calls
+    assert "graph.facebook.com" in calls[0][0]
+    assert calls[0][1]["json"]["test_event_code"] == "TEST123"
+    assert calls[0][1]["json"]["data"][0]["event_id"] == "apply:capi-2"
+    assert calls[0][1]["json"]["data"][0]["event_name"] == "Lead"

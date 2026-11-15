@@ -364,6 +364,11 @@ def _validated_row(raw: dict) -> dict:
         raise HTTPException(status_code=422, detail=f"Unknown code '{code}'")
     if link["shop_id"] != shop["id"]:
         raise HTTPException(status_code=422, detail="code belongs to a different shop")
+    window = raw.get("click_window_days")
+    if window not in (None, "", "7", 7):
+        raise HTTPException(status_code=422, detail="click window must be 7 days")
+    source_cell = str(raw.get("code") or raw.get("link") or "")
+    click_source = "link" if "://" in source_cell or source_cell.strip().startswith("/r/") else "code"
     return {
         "order_id": order_id[:128],
         "date": attribution_date,
@@ -373,6 +378,8 @@ def _validated_row(raw: dict) -> dict:
         "country": shop.get("country"),
         "market": shop.get("market"),
         "link": link,
+        "click_window_days": 7,
+        "click_window_source": click_source,
         "raw": {key: value for key, value in raw.items() if key != "password"},
     }
 
@@ -392,15 +399,15 @@ def _write_order(parsed: dict) -> dict:
         gmv_gross=parsed["gross"],
         refunded_amount=0,
         cancelled_amount=0,
-        net_gmv=parsed["gross"],
+        net_gmv=round(parsed["gross"] - 0 - 0, 2),
         currency=parsed["currency"],
         creator_id=link.get("creator_id"),
         product_id=link.get("product_id"),
         shortlist_item_id=link.get("shortlist_item_id"),
         brief_id=brief_id,
         attribution_date=parsed["date"],
-        click_window_days=7,
-        click_window_source="link",
+        click_window_days=parsed["click_window_days"],
+        click_window_source=parsed["click_window_source"],
         settlement_status="imported",
         fee_revenue=0,
         ingest_source="csv",
@@ -438,14 +445,12 @@ def _write_order(parsed: dict) -> dict:
 def _emit_sale(shop, parsed, link) -> None:
     import tracking
 
-    raw_code = str((parsed.get("raw") or {}).get("code") or (parsed.get("raw") or {}).get("link") or "")
-    source = "link" if "://" in raw_code or raw_code.startswith("/r/") else "code"
     tracking.track(
         "attributed_sale",
         event_id=f"sale:{parsed['shop_id']}:{parsed['order_id']}",
         entity=shop,
         actor="operator",
-        source=source,
+        source="csv_import",
         order_id=parsed["order_id"],
         gross=parsed["gross"],
         currency=parsed["currency"],
@@ -454,6 +459,31 @@ def _emit_sale(shop, parsed, link) -> None:
         refunded=False,
         cancelled=False,
     )
+
+
+def adjust_order(order_id: str, *, refunded_amount: Optional[float] = None, cancelled_amount: Optional[float] = None) -> dict:
+    """Update refund and cancel amounts on the order. Events stay append-only."""
+    if db.configured():
+        with db.session_scope() as session:
+            order = session.get(AttributedOrder, order_id)
+            if order is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if refunded_amount is not None:
+                order.refunded_amount = refunded_amount
+            if cancelled_amount is not None:
+                order.cancelled_amount = cancelled_amount
+            order.net_gmv = round(float(order.gmv_gross) - float(order.refunded_amount) - float(order.cancelled_amount), 2)
+            session.flush()
+            return _order_dict(order)
+    order = next((row for row in db.memory_attributed_orders if row.id == order_id), None)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if refunded_amount is not None:
+        order.refunded_amount = refunded_amount
+    if cancelled_amount is not None:
+        order.cancelled_amount = cancelled_amount
+    order.net_gmv = round(float(order.gmv_gross) - float(order.refunded_amount) - float(order.cancelled_amount), 2)
+    return _order_dict(order)
 
 
 def _find_order(shop_id: str, order_id: str) -> Optional[dict]:

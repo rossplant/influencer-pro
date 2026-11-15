@@ -212,7 +212,7 @@ def record_event(event: dict) -> bool:
     return True
 
 
-def apply_event(event: dict, *, consent: bool = False) -> None:
+def apply_event(event: dict) -> None:
     event_type = str(event.get("type") or "")
     data_object = ((event.get("data") or {}).get("object") or {})
     if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
@@ -220,7 +220,7 @@ def apply_event(event: dict, *, consent: bool = False) -> None:
     elif event_type == "checkout.session.completed":
         _apply_checkout(data_object)
     elif event_type == "invoice.paid":
-        _apply_invoice_paid(data_object, consent=consent)
+        _apply_invoice_paid(data_object)
     elif event_type == "invoice.payment_failed":
         logger.info("invoice payment failed invoice=%s", _attr(data_object, "id"))
     elif event_type == "customer.subscription.trial_will_end":
@@ -315,7 +315,27 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     _upsert_billing_row(role, subject_id, values, metadata)
 
 
-def _apply_invoice_paid(invoice: Any, *, consent: bool) -> None:
+def account_context(role: str, subject_id: str) -> dict:
+    row = _account(role, subject_id) or {}
+    return {
+        "signup_code": row.get("signup_code") or "",
+        "signup_campaign": row.get("signup_campaign") or "",
+        "marketing_consent": bool(row.get("marketing_consent")),
+        "attribution_first": row.get("attribution_first") or {},
+        "attribution_last": row.get("attribution_last") or {},
+    }
+
+
+def _period_label(interval: str) -> str:
+    cleaned = (interval or "").strip().lower()
+    if cleaned == "month":
+        return "monthly"
+    if cleaned == "year":
+        return "annual"
+    return cleaned
+
+
+def _apply_invoice_paid(invoice: Any) -> None:
     amount = _attr(invoice, "amount_paid")
     if not amount:
         return
@@ -335,16 +355,24 @@ def _apply_invoice_paid(invoice: Any, *, consent: bool) -> None:
     days = 0
     if created_at is not None:
         days = max(0, (utcnow() - created_at).days)
+    invite_code = _attr(metadata, "invite_code") or (account or {}).get("signup_code")
+    campaign = _attr(metadata, "campaign") or (account or {}).get("signup_campaign")
     value = float(amount) / 100.0
     common = {
         "tier": tier,
-        "period": interval,
+        "period": _period_label(interval),
         "value": value,
         "currency": currency,
-        "invite_code": _attr(metadata, "invite_code"),
+        "invite_code": invite_code,
         "promo_code": _attr(metadata, "promo_code"),
+        "campaign": campaign,
     }
-    tracking.track(
+    account_touch = {
+        "first": (account or {}).get("attribution_first") or {},
+        "last": (account or {}).get("attribution_last") or {},
+    }
+    consent = bool((account or {}).get("marketing_consent"))
+    subscribed = tracking.track(
         "subscribe",
         event_id=f"sub:{invoice_id}",
         subject_key=f"sub-first:{subscription_id}" if subscription_id else None,
@@ -354,28 +382,27 @@ def _apply_invoice_paid(invoice: Any, *, consent: bool) -> None:
         shop_id=subject_id if role == "seller" else None,
         actor="system",
         consent=consent,
+        touch=account_touch,
         **common,
     )
-    if _attr(metadata, "invite_code") or _attr(metadata, "campaign"):
+    if subscribed.get("duplicate"):
+        return
+    if invite_code or campaign:
         tracking.track(
             "founding_free_to_paid",
             event_id=f"founding:{invoice_id}",
+            subject_key=f"founding-first:{subscription_id}" if subscription_id else None,
             role=role or None,
             entity_type="shop" if role == "seller" else "creator",
             entity_id=subject_id or invoice_id,
             shop_id=subject_id if role == "seller" else None,
             actor="system",
             consent=consent,
+            touch=account_touch,
             days_since_signup=days,
             **common,
         )
         _mark_converted(role, subject_id)
-
-
-def _already_paid(subscription_id: str) -> bool:
-    if not subscription_id:
-        return False
-    return f"sub-first:{subscription_id}" in getattr(db, "memory_tracked_subjects", set())
 
 
 def _invoice_metadata(invoice: Any):
@@ -439,6 +466,11 @@ def _account_dict(row) -> dict:
         "plan_status": getattr(row, "plan_status", None),
         "billing_interval": getattr(row, "billing_interval", None),
         "created_at": getattr(row, "created_at", None),
+        "marketing_consent": bool(getattr(row, "marketing_consent", False)),
+        "attribution_first": getattr(row, "attribution_first", None) or {},
+        "attribution_last": getattr(row, "attribution_last", None) or {},
+        "signup_code": getattr(row, "signup_code", None),
+        "signup_campaign": getattr(row, "signup_campaign", None),
     }
 
 

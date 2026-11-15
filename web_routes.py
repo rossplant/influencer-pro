@@ -178,7 +178,7 @@ def register(app) -> None:
     def approve_application(application_id: str, request: Request):
         if not auth.session_email(request):
             raise HTTPException(status_code=401, detail="Admin session required")
-        return pilots.approve(application_id, consent=tracking.consent_from_scope(request.scope))
+        return pilots.approve(application_id)
 
     @app.post("/admin/api/applications/{application_id}/reject")
     def reject_application(application_id: str, request: Request):
@@ -197,6 +197,19 @@ def register(app) -> None:
         if not auth.session_email(request):
             raise HTTPException(status_code=401, detail="Admin session required")
         return stripe_billing.grant_elite(creator_id)
+
+    @app.post("/admin/api/orders/{order_id}/adjustment")
+    async def adjust_order(order_id: str, request: Request):
+        if not auth.session_email(request):
+            raise HTTPException(status_code=401, detail="Admin session required")
+        import attribution
+
+        body = await request.json()
+        return attribution.adjust_order(
+            order_id,
+            refunded_amount=body.get("refunded_amount"),
+            cancelled_amount=body.get("cancelled_amount"),
+        )
 
 
 class TouchMiddleware:
@@ -236,6 +249,7 @@ def _landing(request: Request, kind: str):
         touch=request.scope.get("plantr_touch"),
         path=spec["path"],
     )
+    content_name = spec["path"].strip("/")
     tracking.track(
         "view_content",
         event_id=f"vc:{event_id}",
@@ -243,10 +257,17 @@ def _landing(request: Request, kind: str):
         actor="system",
         consent=consent,
         touch=request.scope.get("plantr_touch"),
-        content_name="page",
+        content_name=content_name,
     )
     html = site_copy.landing_html(kind, token=auth.issue_form_token("apply"), event_id=event_id)
-    html = html.replace("</main>", site_copy.consent_banner() + tracking.pixel_snippet(consent) + "</main>")
+    pixels = tracking.pixel_snippet(
+        consent,
+        [
+            {"key": "page_view", "event_id": f"pv:{event_id}"},
+            {"key": "view_content", "event_id": f"vc:{event_id}", "params": {"content_name": content_name, "role": spec["role"]}},
+        ],
+    )
+    html = html.replace("</main>", site_copy.consent_banner() + pixels + "</main>")
     return HTMLResponse(html)
 
 
@@ -272,7 +293,16 @@ async def _apply(request: Request, slug: str):
     message = "We have your application. It is reviewed by our team. This is not an open sign-up."
     if result["status"] == "waitlisted":
         message = "This cohort is full. You are on the waitlist."
-    html = site_copy.landing_html(kind, thanks=message, event_id=result.get("event_id") or "")
+    tracked_id = result.get("event_id") or ""
+    html = site_copy.landing_html(kind, thanks=message, event_id=tracked_id)
+    spec = site_copy.page(kind)
+    pixels = ""
+    if tracked_id and not result.get("duplicate"):
+        pixels = tracking.pixel_snippet(
+            tracking.consent_from_scope(request.scope),
+            [{"key": "apply_submit", "event_id": tracked_id, "params": {"role": spec["role"]}}],
+        )
+    html = html.replace("</main>", pixels + "</main>")
     return HTMLResponse(html)
 
 
@@ -282,6 +312,7 @@ async def _checkout(request: Request, role: str):
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
     base = str(request.base_url).rstrip("/")
     path = "/seller/billing" if role == "seller" else "/creator/billing"
+    context = stripe_billing.account_context(role, session["subject_id"])
     url = stripe_billing.checkout(
         role=role,
         subject_id=session["subject_id"],
@@ -290,6 +321,8 @@ async def _checkout(request: Request, role: str):
         success_url=f"{base}{path}",
         cancel_url=f"{base}{path}",
         promo_code=str(form.get("promo_code") or ""),
+        invite_code=context["signup_code"],
+        campaign=context["signup_campaign"],
     )
     return RedirectResponse(url, status_code=303)
 

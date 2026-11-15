@@ -188,3 +188,49 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
         assert shop_row.first_attributed_sale_at is not None
         names = set(session.scalars(select(events.Event.event_name)).all())
     assert "attributed_sale" in names
+
+
+def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch):
+    import attribution
+    from fastapi import HTTPException
+
+    shop, creator, product_id = _catalogue()
+    headers = _session(monkeypatch)
+    code = client.post(
+        "/creator-product-links",
+        json={"creator_id": creator["id"], "product_id": product_id},
+        headers=headers,
+    ).json()["discount_code"]
+    csv_text = f"order_id,date,code,gross,currency,shop\n77,2026-11-15,{code},20,AUD,{shop['id']}\n"
+    imported = client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers)
+    assert imported.json()["created"] == 1
+    order = db.memory_attributed_orders[-1]
+    assert order.click_window_days == 7
+    assert order.click_window_source == "code"
+    assert order.net_gmv == 20
+    sale = next(row for row in db.memory_events if row.event_name == "attributed_sale" and row.properties.get("order_id") == "77")
+    assert sale.properties["source"] == "csv_import"
+    adjusted = client.post(
+        f"/admin/api/orders/{order.id}/adjustment",
+        json={"refunded_amount": 5, "cancelled_amount": 2},
+        headers=headers,
+    )
+    assert adjusted.status_code == 200
+    assert adjusted.json()["net_gmv"] == 13
+    assert sale.properties["refunded"] is False
+    try:
+        attribution._validated_row(
+            {
+                "order_id": "78",
+                "date": "2026-11-15",
+                "code": code,
+                "gross": "10",
+                "currency": "AUD",
+                "shop": shop["id"],
+                "click_window_days": "3",
+            }
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 422
+    else:
+        raise AssertionError("a non-7-day click window was accepted")

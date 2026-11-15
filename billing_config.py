@@ -175,7 +175,7 @@ PLATFORM_EVENTS = {
     "page_view": {"meta": "PageView", "tiktok": "Pageview", "server": True, "browser": True},
     "view_content": {"meta": "ViewContent", "tiktok": "ViewContent", "server": True, "browser": True},
     "apply_start": {"custom": True, "server": False, "browser": True},
-    "apply_submit": {"meta": "Lead", "tiktok": "SubmitForm", "server": True, "browser": True},
+    "apply_submit": {"meta": "Lead", "tiktok": ["SubmitForm", "Lead"], "server": True, "browser": True},
     "application_approved": {"custom": True, "server": True, "browser": False},
     "application_rejected": {"internal": True},
     "complete_registration": {"meta": "CompleteRegistration", "tiktok": "CompleteRegistration", "server": True, "browser": True},

@@ -175,4 +175,5 @@ def test_subscribe_webhook_is_idempotent(monkeypatch):
     stored = next(row for row in db.memory_events if row.event_name == "subscribe")
     assert stored.properties["value"] == 790.0
     assert stored.properties["currency"] == "aud"
+    assert stored.properties["period"] == "annual"
     assert "email" not in stored.properties

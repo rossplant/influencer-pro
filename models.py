@@ -108,6 +108,7 @@ class Shop(Base):
     signup_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -179,6 +180,7 @@ class Creator(Base):
     signup_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -573,6 +575,7 @@ class PilotApplication(Base):
     founding_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     attribution: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     age_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

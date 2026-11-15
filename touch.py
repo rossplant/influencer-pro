@@ -21,7 +21,7 @@ CODE_FIELDS = ("invite_code", "promo_code", "campaign", "channel")
 def observe(scope: dict) -> dict:
     """Read the cookie and the query string. Return the touch and a cookie to set."""
     query = _query(scope)
-    incoming = _from_query(query)
+    incoming = {**_platform_cookies(scope), **_from_query(query)}
     stored = _read_cookie(scope)
     first = dict(stored.get("first") or {})
     last = dict(stored.get("last") or {})
@@ -102,6 +102,28 @@ def _from_query(query: dict) -> dict:
     return found
 
 
+def _platform_cookies(scope: dict) -> dict:
+    """Read Meta and TikTok cookies. Query-string values override these."""
+    header = _cookie_header(scope)
+    names = {"_fbp": "fbp", "_fbc": "fbc", "_ttp": "ttp"}
+    found = {}
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        target = names.get(key.strip())
+        if target and value.strip():
+            found[target] = unquote(value.strip())[:255]
+    return found
+
+
+def _cookie_header(scope: dict) -> str:
+    for name, value in scope.get("headers") or []:
+        if name.lower() == b"cookie":
+            return value.decode("utf-8", "ignore")
+    return ""
+
+
 def _query(scope: dict) -> dict:
     raw = scope.get("query_string") or b""
     if isinstance(raw, bytes):
@@ -110,11 +132,7 @@ def _query(scope: dict) -> dict:
 
 
 def _read_cookie(scope: dict) -> dict:
-    header = ""
-    for name, value in scope.get("headers") or []:
-        if name.lower() == b"cookie":
-            header = value.decode("utf-8", "ignore")
-            break
+    header = _cookie_header(scope)
     for part in header.split(";"):
         if "=" not in part:
             continue
