@@ -195,7 +195,7 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
                     category=category or None,
                     images=[],
                     price=amount,
-                    currency="USD",
+                    currency="AUD",
                     tags=[],
                     attributes={"url": destination} if destination else {},
                     claims=[],
@@ -234,7 +234,7 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
             subcategory=None,
             images=[],
             price=None,
-            currency="USD",
+            currency="AUD",
             tags=[],
             attributes={},
             claims=[],
@@ -400,6 +400,7 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
       <a href="/seller/products">Products</a>
       <a href="/seller/find">Find creators</a>
       <a href="/seller/accepted">Accepted</a>
+      <a href="/seller/billing">Billing</a>
     </nav>
     """
     content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
@@ -431,6 +432,7 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
       <a href="/creator/profile">Profile</a>
       <a href="/creator/offers">Offers</a>
       <a href="/creator/links">Links</a>
+      <a href="/creator/payouts">Payouts</a>
     </nav>
     """
     content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
@@ -498,6 +500,22 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
             "</li>"
         )
+    if page == "billing":
+        billing = data.get("billing") or {}
+        customer = billing.get("stripe_customer_id") or "Not started"
+        message = "" if billing.get("configured") else "<p>Stripe is not configured.</p>"
+        fees = billing.get("fees") or {}
+        return f"""
+        <h1>Billing</h1>
+        {message}
+        <p>Stripe customer: {html.escape(str(customer))}</p>
+        <p>Charges: none in this version.</p>
+        <p>Currency: {html.escape(str(fees.get('currency') or 'AUD'))}. Platform fee placeholder: {html.escape(str(fees.get('platform_fee_percent') or 'unset'))}. Creator commission placeholder: {html.escape(str(fees.get('creator_commission_percent') or 'unset'))}.</p>
+        <form method="post" action="/seller/billing">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <button type="submit">Set up billing</button>
+        </form>
+        """
     return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
 
 
@@ -532,6 +550,26 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         "</li>"
         for row in data.get("links") or []
     )
+    if page == "payouts":
+        payouts = data.get("payouts") or {}
+        if not payouts.get("configured"):
+            notice = "<p>Stripe is not configured.</p>"
+        else:
+            notice = ""
+        account = payouts.get("stripe_account_id") or "Not started"
+        due = ", ".join(payouts.get("stripe_requirements_due") or []) or "None"
+        return f"""
+        <h1>Payouts</h1>
+        {notice}
+        <p>Connected account: {html.escape(str(account))}</p>
+        <p>Details submitted: {html.escape(str(bool(payouts.get('details_submitted'))))}</p>
+        <p>Payouts enabled: {html.escape(str(bool(payouts.get('payouts_enabled'))))}</p>
+        <p>Requirements due: {html.escape(due)}</p>
+        <form method="post" action="/creator/payouts">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <button type="submit">Set up payouts</button>
+        </form>
+        """
     return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
 
 

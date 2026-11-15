@@ -132,6 +132,7 @@ def shop_dict(shop: Any) -> dict:
         "last_match_at": getattr(shop, "last_match_at", None),
         "last_campaign_at": getattr(shop, "last_campaign_at", None),
         "created_at": shop.created_at,
+        "stripe_customer_id": getattr(shop, "stripe_customer_id", None),
     }
 
 
@@ -890,7 +891,7 @@ def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
         values.setdefault("attributes", {})
         values.setdefault("claims", [])
         if not values.get("currency"):
-            values["currency"] = "USD"
+            values["currency"] = "AUD"
         values.setdefault("source", "manual")
     return values
 

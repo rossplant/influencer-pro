@@ -150,9 +150,18 @@
       const box = document.getElementById("detail");
       box.classList.remove("hidden");
       box.innerHTML = `<pre>${JSON.stringify(detail, null, 2)}</pre>`;
-      if (state.list === "shops") box.insertAdjacentHTML("beforeend", shopEditor(detail) + portalLogin(`/admin/api/shops/${detail.id}`));
-      if (state.list === "creators") box.insertAdjacentHTML("beforeend", portalLogin(`/admin/api/creators/${detail.id}`));
+      if (state.list === "shops") box.insertAdjacentHTML("beforeend", stripeLine(detail, "customer") + shopEditor(detail) + portalLogin(`/admin/api/shops/${detail.id}`));
+      if (state.list === "creators") box.insertAdjacentHTML("beforeend", stripeLine(detail, "account") + portalLogin(`/admin/api/creators/${detail.id}`));
       if (state.list === "shortlists") box.insertAdjacentHTML("beforeend", itemActions(detail));
+    }
+
+    function stripeLine(detail, kind) {
+      if (kind === "customer") {
+        const id = detail.stripe_customer_id || "not started";
+        return `<p>Stripe billing: ${id}. No charges in this version.</p>`;
+      }
+      const id = detail.stripe_account_id || "not started";
+      return `<p>Stripe payouts: ${id}. Enabled: ${detail.payouts_enabled ? "yes" : "no"}. Details submitted: ${detail.details_submitted ? "yes" : "no"}.</p>`;
     }
 
     function csrfToken() {

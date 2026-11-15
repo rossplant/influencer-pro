@@ -26,6 +26,7 @@ import events
 import services
 from grok_helper import generate_with_grok
 import scoring
+import stripe_billing
 
 # Process-local creator profiles. This is db.memory_creators, used when
 # DATABASE_URL is unset. Postgres is the system of record once that variable is set.
@@ -39,7 +40,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.14.1"
+APP_VERSION = "0.15.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -1021,6 +1022,81 @@ def creator_offers_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     offers = portal.creator_offers(session["subject_id"]) if session else []
     return portal.render_creator(session, "offers", base_url=str(request.base_url), offers=offers)
+
+
+@app.get("/seller/billing")
+def seller_billing_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    billing = stripe_billing.shop_status(session["subject_id"]) if session else {}
+    return portal.render_seller(session, "billing", base_url=str(request.base_url), billing=billing)
+
+
+@app.post("/seller/billing")
+async def seller_billing_setup(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    if stripe_billing.configured():
+        email = stripe_billing.seller_login_email(session["subject_id"])
+        if not email:
+            raise HTTPException(status_code=422, detail="Seller login email is required for billing")
+        shop = services.fetch_shop(session["subject_id"])
+        stripe_billing.ensure_customer(session["subject_id"], email=email, name=(shop or {}).get("name") or email)
+    return RedirectResponse("/seller/billing", status_code=303)
+
+
+@app.get("/creator/payouts")
+@app.get("/creator/payouts/return")
+def creator_payouts_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.creator_context(request)
+    if session and stripe_billing.configured() and request.url.path.endswith("/return"):
+        stripe_billing.refresh_account(session["subject_id"])
+    payouts = stripe_billing.creator_status(session["subject_id"]) if session else {}
+    return portal.render_creator(session, "payouts", base_url=str(request.base_url), payouts=payouts)
+
+
+@app.post("/creator/payouts")
+async def creator_payouts_setup(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    return _creator_onboarding_redirect(request, session["subject_id"])
+
+
+@app.get("/creator/payouts/refresh")
+def creator_payouts_refresh(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    return _creator_onboarding_redirect(request, session["subject_id"])
+
+
+def _creator_onboarding_redirect(request: Request, creator_id: str):
+    if not stripe_billing.configured():
+        return RedirectResponse("/creator/payouts", status_code=303)
+    email = stripe_billing.creator_login_email(creator_id)
+    if not email:
+        raise HTTPException(status_code=422, detail="Creator login email is required for payouts")
+    profile = portal.creator_profile(creator_id)
+    account_id = stripe_billing.ensure_connected_account(
+        creator_id,
+        email=email,
+        display_name=profile.get("handle") or email,
+    )
+    base = str(request.base_url).rstrip("/")
+    url = stripe_billing.account_link(
+        account_id,
+        return_url=f"{base}/creator/payouts/return",
+        refresh_url=f"{base}/creator/payouts/refresh",
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, _: None = Depends(rate_limit_public)):
+    payload = await request.body()
+    event = stripe_billing.construct_event(payload, request.headers.get("stripe-signature", ""))
+    if stripe_billing.record_event(event):
+        stripe_billing.apply_event(event)
+    return {"received": True}
 
 
 @app.get("/creator/links")

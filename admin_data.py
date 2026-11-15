@@ -221,6 +221,10 @@ def _creator_from_model(row: Creator, full: bool) -> dict:
     profile = row.profile if isinstance(row.profile, dict) else {}
     item = _creator_from_profile(row.id, profile, full)
     item["created_at"] = row.created_at
+    item["stripe_account_id"] = row.stripe_account_id
+    item["payouts_enabled"] = bool(row.payouts_enabled)
+    item["details_submitted"] = bool(row.details_submitted)
+    item["stripe_requirements_due"] = list(row.stripe_requirements_due or [])
     return item
 
 
@@ -231,6 +235,10 @@ def _creator_from_profile(creator_id: str, profile: dict, full: bool) -> dict:
         "name": profile.get("name"),
         "active_categories": list(profile.get("active_categories") or []),
         "platforms": list(profile.get("platforms") or []),
+        "stripe_account_id": (db.memory_creator_stripe.get(creator_id) or {}).get("stripe_account_id"),
+        "payouts_enabled": bool((db.memory_creator_stripe.get(creator_id) or {}).get("payouts_enabled")),
+        "details_submitted": bool((db.memory_creator_stripe.get(creator_id) or {}).get("details_submitted")),
+        "stripe_requirements_due": list((db.memory_creator_stripe.get(creator_id) or {}).get("stripe_requirements_due") or []),
     }
     if full:
         item["profile"] = profile

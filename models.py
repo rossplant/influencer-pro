@@ -95,6 +95,7 @@ class Shop(Base):
     country: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, index=True)
     market: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True, index=True)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
     primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -153,6 +154,10 @@ class Creator(Base):
     first_match_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     first_post_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     profile: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    stripe_account_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    payouts_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    details_submitted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    stripe_requirements_due: Mapped[list] = mapped_column(JSON_TYPE, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -173,7 +178,7 @@ class Product(Base):
     subcategory: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     images: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD", server_default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD", server_default="AUD")
     tags: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     attributes: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
     claims: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
@@ -320,7 +325,7 @@ class Subscription(Base):
     interval: Mapped[str] = mapped_column(String(16), nullable=False, default="month")
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     mrr: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD")
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -402,7 +407,7 @@ class AttributedOrder(Base):
     refunded_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     cancelled_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     net_gmv: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD")
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True)
     product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True)
     shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
@@ -454,6 +459,19 @@ class PortalAccount(Base):
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StripeEvent(Base):
+    """One Stripe webhook delivery. stripe_event_id makes processing idempotent."""
+
+    __tablename__ = "stripe_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    stripe_event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class CreatorProductLink(Base):

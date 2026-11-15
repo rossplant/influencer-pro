@@ -6,3 +6,4 @@ pydantic
 sqlalchemy>=2
 alembic
 psycopg[binary]>=3.1
+stripe>=17.0.0

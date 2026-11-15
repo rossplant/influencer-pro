@@ -36,6 +36,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", defa
 # so this does not run against production. Do not keep using it once
 # production has data; add a new revision instead.
 PLANTR_TABLES = (
+    "stripe_events",
     "portal_accounts",
     "admin_users",
     "creator_product_links",
@@ -77,6 +78,8 @@ memory_admin_users: dict = {}
 memory_creator_product_links: list = []
 memory_attributed_orders: list = []
 memory_portal_accounts: list = []
+memory_creator_stripe: dict = {}
+memory_stripe_events: dict = {}
 
 
 def configured() -> bool:
@@ -111,6 +114,8 @@ def reset_memory() -> None:
     memory_creator_product_links.clear()
     memory_attributed_orders.clear()
     memory_portal_accounts.clear()
+    memory_creator_stripe.clear()
+    memory_stripe_events.clear()
 
 
 def close() -> None:

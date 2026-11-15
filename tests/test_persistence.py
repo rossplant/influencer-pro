@@ -366,7 +366,7 @@ def test_match_records_placeholder_shortlist(tmp_path, monkeypatch):
         assert product.tags == ["wireless"]
         assert product.attributes == {"color": "black"}
         assert product.claims[0]["source"] == "brand"
-        assert product.currency == "USD"
+        assert product.currency == "AUD"
         assert float(product.price) == 24
     sent = client.post(f"/briefs/{enrich.json()['brief_id']}/sent", json={"actor": "operator"})
     assert sent.status_code == 200
