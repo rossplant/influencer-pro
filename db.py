@@ -161,10 +161,15 @@ def init_storage() -> None:
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     with session_scope() as session:
         removed = purge_api_requests(session)
+    from attribution import backfill_accepted_links
+
+    created_links = backfill_accepted_links()
     logger.info(
-        "Database configured; alembic upgrade head completed; purged %s api_requests row(s) older than %s days",
+        "Database configured; alembic upgrade head completed; purged %s api_requests row(s) older than %s days; "
+        "accepted-link backfill created %s link(s)",
         removed,
         API_REQUEST_RETENTION_DAYS,
+        created_links,
     )
 
 

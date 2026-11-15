@@ -776,7 +776,7 @@ def admin_event(event_id: str, _: str = Depends(require_admin)):
 
 
 @app.post("/creator-product-links")
-def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends(require_admin)):
+def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends(require_login_operator)):
     row, created = attribution.issue_link(
         creator_id=body.creator_id,
         product_id=body.product_id,
@@ -793,7 +793,7 @@ def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends
 def get_creator_product_links(
     shop_id: Optional[str] = None,
     creator_id: Optional[str] = None,
-    _: str = Depends(require_admin),
+    _: str = Depends(require_login_operator),
 ):
     return attribution.list_links(shop_id=shop_id, creator_id=creator_id)
 
