@@ -1,51 +1,10 @@
-# Notion Import Guide — Plantr schemas
+# Notion scratch pages — Plantr Collab
 
-Notion is not the Plantr database. `main.py` does not read or write Notion. Phase 0 keeps influencer profiles in process memory. Postgres is the planned system of record. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
+Notion is not the Plantr Collab database. `main.py` does not read or write Notion. Postgres (`DATABASE_URL`) is the system of record. When that variable is unset, creator profiles stay in process memory.
 
-## 1. Product scratch page
+If you want a scratch page for field lists, copy the columns from the database, not from an old vertical schema:
 
-1. In Notion, create a scratch page. This page is not the Plantr database.
-2. Name it **Plantr products**.
-3. Add these properties (match `product_schema.json`):
+- Products: title, category, subcategory, price, currency, tags, attributes, claims (each claim has a source).
+- Creators: handle, interests, restrictions (generic tags), excluded_categories, excluded_claims, platforms, follower band.
 
-| Property Name          | Type          | Notes                              |
-|------------------------|---------------|------------------------------------|
-| Title                  | Title         |                                    |
-| Brand                  | Text          |                                    |
-| Category               | Select        |                                    |
-| Description Short      | Text          |                                    |
-| Description Long       | Text          |                                    |
-| Key Features           | Multi-select  |                                    |
-| Target Audience        | Multi-select  |                                    |
-| Occasions              | Multi-select  |                                    |
-| Care Instructions      | Text          |                                    |
-| Price                  | Number        |                                    |
-| Inventory Status       | Select        | in_stock / low_stock / out_of_stock |
-| Signal Score           | Number        | Formula or manual                  |
-| Creator Talking Points | Text          |                                    |
-| Common Questions       | Text          |                                    |
-
-4. Import sample rows later from Shopify or manually.
-
-## 2. Influencer scratch page
-
-1. Create another scratch page named **Plantr influencers**. This page is not the Plantr database.
-2. Properties from `influencer_schema.json`:
-
-| Property Name              | Type          |
-|----------------------------|---------------|
-| Handle                     | Title         |
-| Name                       | Text          |
-| Bio                        | Text          |
-| Areas of Interest          | Multi-select  |
-| Expertise Level            | Text          | (or relation) |
-| Preferred Promotion Styles | Multi-select  |
-| Availability               | Select        |
-| Restrictions               | Multi-select  |
-
-## 3. Linking
-- Add a Relation property between Products and Influencers for matching results.
-- Use the matching logic in `matching_example.py` to score and store matches.
-
-## 4. Next
-Do not sync these pages from the API. A later Postgres schema should follow `product_schema.json` and `influencer_schema.json`.
+Do not sync these pages from the API.

@@ -9,7 +9,7 @@
     "areas_of_interest": {
       "type": "array",
       "items": "string",
-      "description": "e.g. houseplants, urban gardening, sustainable living, pet-friendly plants",
+      "description": "Niches this creator will talk about. Any category.",
       "required": true
     },
     "expertise_level": {
@@ -43,7 +43,7 @@
     "restrictions": {
       "type": "array",
       "items": "string",
-      "description": "e.g. no live animals, only organic, no pesticides"
+      "description": "Generic tags the creator will not promote, such as competitor brands"
     },
     "availability": {
       "type": "string",

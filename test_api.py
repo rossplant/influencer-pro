@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 from fastapi.testclient import TestClient
 
 import grok_helper
@@ -11,43 +10,27 @@ import main
 client = TestClient(main.app)
 
 INFLUENCER = {
-    "handle": "@plantlover",
+    "handle": "@creator",
     "name": "Alex",
-    "areas_of_interest": ["houseplants", "low light plants"],
+    "areas_of_interest": ["alpha", "beta"],
     "preferred_promotion_styles": ["educational", "lifestyle"],
     "availability": "open",
 }
 
 PRODUCT = {
-    "title": "Snake Plant – Low Light Indoor",
-    "description_short": "Hardy snake plant",
-    "description_long": "Nearly impossible to kill.",
-    "category": "Houseplants",
+    "title": "Sample item",
+    "description_short": "Short description",
+    "description_long": "Longer description.",
+    "category": "home",
     "images": ["url1", "url2", "url3"],
 }
-
-
-@pytest.fixture(autouse=True)
-def _isolated(monkeypatch):
-    monkeypatch.delenv("API_KEYS", raising=False)
-    monkeypatch.delenv("GROK_API_KEY", raising=False)
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.delenv("SHOPIFY_STORE", raising=False)
-    monkeypatch.delenv("SHOPIFY_TOKEN", raising=False)
-    monkeypatch.delenv("RATE_LIMIT_REQUESTS", raising=False)
-    monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS", raising=False)
-    monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
-    monkeypatch.setattr(grok_helper, "GROK_API_KEY", None)
-    main.reset_runtime_state()
-    yield
-    main.reset_runtime_state()
 
 
 def _grok_response(usage=None):
     content = json.dumps(
         {
-            "talking_points": ["Bright corner", "Water sparingly"],
-            "faqs": [{"question": "Pet safe?", "answer": "Check the label."}],
+            "talking_points": ["Clear benefit", "Who it is for"],
+            "faqs": [{"question": "What is included?", "answer": "See the product details."}],
         }
     )
 
@@ -72,8 +55,8 @@ def test_root_shape_and_version():
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
-    assert body["status"] == "Plantr API running"
-    assert body["version"] == "0.9"
+    assert body["status"] == "Plantr Collab API running"
+    assert body["version"] == "0.10"
     assert body["grok_enabled"] is False
 
 
@@ -81,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.9"
+    assert response.json()["version"] == "0.10"
 
 
 def test_enrich_fallback_without_xai_key():
@@ -109,7 +92,7 @@ def test_enrich_uses_grok_and_logs_usage(monkeypatch, capsys):
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "grok"
-    assert body["creator_talking_points"] == ["Bright corner", "Water sparingly"]
+    assert body["creator_talking_points"] == ["Clear benefit", "Who it is for"]
     assert "usage" not in body
     logged = capsys.readouterr().out
     assert "Grok usage:" in logged
@@ -172,7 +155,7 @@ def test_onboard_returns_an_id_and_keeps_the_record():
     body = first.json()
     assert body["id"]
     assert body["influencer"]["influencer_id"] == body["id"]
-    assert body["influencer"]["handle"] == "@plantlover"
+    assert body["influencer"]["handle"] == "@creator"
     assert main.INFLUENCERS[body["id"]]["areas_of_interest"] == INFLUENCER["areas_of_interest"]
 
     second = client.post("/onboard-influencer", json=INFLUENCER)
@@ -180,7 +163,7 @@ def test_onboard_returns_an_id_and_keeps_the_record():
 
 
 def test_onboard_rejects_a_profile_outside_the_schema():
-    missing = client.post("/onboard-influencer", json={"handle": "@plantlover"})
+    missing = client.post("/onboard-influencer", json={"handle": "@creator"})
     assert missing.status_code == 422
 
     bad_style = dict(INFLUENCER, preferred_promotion_styles=["not-a-style"])
@@ -193,13 +176,13 @@ def test_onboard_rejects_a_profile_outside_the_schema():
 def test_match_returns_scored_products():
     products = [
         {
-            "title": "Snake Plant",
-            "category": "Houseplants",
+            "title": "Sample one",
+            "category": "alpha",
             "target_audience": ["beginners"],
-            "care_instructions": "Water monthly",
-            "occasions": ["home"],
+            "care_instructions": "Use as directed",
+            "occasions": ["everyday"],
         },
-        {"title": "Orchid", "category": "Houseplants", "target_audience": ["experts"]},
+        {"title": "Sample two", "category": "other", "target_audience": ["experts"]},
     ]
     response = client.post(
         "/match",
@@ -207,7 +190,7 @@ def test_match_returns_scored_products():
     )
     assert response.status_code == 200
     matches = response.json()["matches"]
-    assert [item["product"]["title"] for item in matches] == ["Snake Plant", "Orchid"]
+    assert [item["product"]["title"] for item in matches] == ["Sample one", "Sample two"]
     assert matches[0]["match_score"] > matches[1]["match_score"]
 
 
@@ -217,7 +200,7 @@ def test_sync_shopify_is_an_honest_stub(monkeypatch):
     assert "isn't configured" in missing.json()["detail"]
     assert "synced" not in missing.json()
 
-    monkeypatch.setenv("SHOPIFY_STORE", "plants.myshopify.com")
+    monkeypatch.setenv("SHOPIFY_STORE", "brand.myshopify.com")
     still_missing = client.post("/sync-shopify")
     assert still_missing.status_code == 501
     assert "isn't configured" in still_missing.json()["detail"]
@@ -248,7 +231,7 @@ def test_body_size_limit(monkeypatch):
 
 
 def test_cors_allows_configured_origins():
-    response = client.get("/", headers={"Origin": "https://plants.example"})
+    response = client.get("/", headers={"Origin": "https://brand.example"})
     assert response.headers["access-control-allow-origin"] == "*"
 
 

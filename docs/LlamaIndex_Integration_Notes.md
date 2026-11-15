@@ -1,4 +1,4 @@
-# LlamaIndex Integration Notes — Plantr
+# LlamaIndex notes — Plantr Collab
 
 ## What this sketch provides
 - Product indexing with metadata (title, category, price, signal_score)

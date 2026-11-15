@@ -1,50 +1,51 @@
-# Influencer Onboarding Flow — Plantr
+# Creator onboarding — Plantr Collab
+
+Plantr is the company. Plantr Collab is the product. It is for any category: small-to-mid Shopify sellers and nano and micro creators. There is no starting vertical.
 
 ## Goal
-Influencers enter their areas of interest, expertise, and preferred promotion styles so Plantr can target products to them.
+Creators enter the niches they will talk about, how they like to promote, and what they will not promote, so a seller can see relevant matches.
 
 ## Steps
 
-### 1. Profile Creation Screen
-Fields (from influencer_schema.json):
-- Handle (TikTok / Instagram)
+### 1. Profile
+Fields follow `influencer_schema.json`:
+- Handle
 - Name
 - Bio
-- Areas of Interest (multi-select or tags)
-  - Examples: houseplants, urban gardening, sustainable living, pet-friendly plants, low-light plants
-- Expertise Level per interest (beginner / intermediate / expert)
-- Preferred Promotion Styles (multi-select)
-  - educational, unboxing, before-after, lifestyle, gift guide, review, LIVE demo, storytelling
-- Restrictions (optional tags)
+- Areas of interest (tags the creator will talk about). Do not assume a category.
+- Expertise level per interest (beginner / intermediate / expert)
+- Preferred promotion styles: educational, unboxing, before-after, lifestyle, gift guide, review, LIVE demo, storytelling
+- Restrictions: generic tags the creator will not promote
+- `active_categories`: taxonomy slugs the creator works in now. `desired_categories`: slugs they want to work in. Both use the shared list (`apparel`, `beauty`, `electronics`, `food-and-drink`, `health`, `home`, `kids`, `sports`, `other`). A product subcategory is free text, not a second vertical.
+- Optional performance: `avg_views`, `engagement_rate` (fraction), `est_conversion_rate` (fraction), `avg_order_value`, `typical_price_band` (`{"min", "max"}`)
+- `excluded_categories` and `excluded_claims`: taxonomy slugs and claim text the creator refuses
 - Availability (open / selective / paused)
+- Platforms and follower band, when known
 - Commission preference
 
 ### 2. Validation
-Phase 0 (`POST /onboard-influencer` in `main.py`) requires a handle, at least one area of interest, and at least one preferred promotion style from the schema enum. Availability must be `open`, `selective`, or `paused`. A product goal of at least three interests is not enforced yet.
+`POST /onboard-influencer` requires a handle, at least one area of interest, and at least one preferred promotion style from the schema enum. Availability must be `open`, `selective`, or `paused`.
 
-### 3. Matching Trigger
-The HTML dashboard can call `POST /match` with the profile and a list of products. Phase 0 has no stored product catalog, so the dashboard sends demo products. `/match` returns up to 10 `{product, match_score}` rows. It does not attach creator talking points. Those come from `POST /enrich`.
+### 3. What is stored
+- The response is `{id, influencer}`.
+- When `DATABASE_URL` is set, the profile is a `creators` row. `id` is the database id. `interests` stores the areas of interest. `restrictions` is a generic tag list. `excluded_categories` and `excluded_claims` are stored separately. The call emits `creator_onboarded` with `actor='api'`. `profile_completed_at` is set only when the profile is complete: a handle, at least one active category, at least one preferred promotion style, and at least one platform. `average_engagement_rate` is accepted as an alias and stored as `engagement_rate`.
+- A second profile with the same handle is rejected with 409.
+- When `DATABASE_URL` is unset, the API logs a warning and keeps the profile in process memory. That copy is lost on restart. Notion is not the database.
+- `GET /creators/{id}` reads the stored profile. It uses the same `X-API-Key` rule as onboarding.
 
-### 4. What Phase 0 ships
-- `POST /onboard-influencer` validates the body against `influencer_schema.json`, stores the profile in process memory, and returns an `id`.
-- That store is not persistent. Records disappear on restart and are not shared across replicas.
-- Postgres is the planned system of record.
-- Notion is not the database. This endpoint does not write to Notion.
-- `POST /match` ranks the products in the request. It does not load them from Notion or Shopify.
+### 4. Matching
+`POST /match` still uses the placeholder scorer and returns up to 10 `{product, match_score}` rows for the products in the request. With a database it also writes a shortlist (`match_version='placeholder-0'`) and emits `match_run`. It does not load a catalogue from Notion or Shopify.
 
-### 5. Next Implementation
-- Persist influencer profiles in Postgres.
-- Notify an influencer of new matches by email or in the app.
-
-## Sample Onboarding Payload
+## Sample payload
 ```json
 {
-  "handle": "@plantlover",
+  "handle": "@creator",
   "name": "Alex",
-  "areas_of_interest": ["houseplants", "low light plants", "beginner friendly"],
+  "areas_of_interest": ["one niche they cover", "another niche they cover"],
   "preferred_promotion_styles": ["educational", "lifestyle"],
-  "expertise_level": {"houseplants": "intermediate"},
-  "restrictions": [],
+  "restrictions": ["no competitor brands"],
+  "excluded_categories": [],
+  "excluded_claims": [],
   "availability": "open"
 }
 ```

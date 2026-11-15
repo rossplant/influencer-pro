@@ -1,4 +1,4 @@
-# Shopify Token Wiring — Plantr
+# Shopify token wiring — Plantr Collab
 
 ## 1. Create Shopify Custom App
 1. Shopify Admin → Settings → Apps and sales channels → Develop apps
@@ -33,7 +33,7 @@ def fetch_shopify_products(limit=50):
     resp.raise_for_status()
     return resp.json().get("products", [])
 
-def map_shopify_to_plant(sp):
+def map_shopify_product(sp):
     return {
         "title": sp["title"],
         "brand": sp.get("vendor"),
@@ -49,7 +49,7 @@ def sync_shopify():
     products = fetch_shopify_products()
     enriched = []
     for sp in products:
-        mapped = map_shopify_to_plant(sp)
+        mapped = map_shopify_product(sp)
         # call enrich logic here
         enriched.append(mapped)
     return {"synced": len(enriched), "products": enriched[:5]}
