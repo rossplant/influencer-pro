@@ -150,7 +150,7 @@ def score_creator(
     price_band = _price_fit(product, creator)
     platform = _platform_fit(product, creator)
     audience = _audience_fit(product, creator, shop)
-    performance = _performance(product, creator)
+    performance = _performance(product, creator, shop)
     fits = {
         "category": category,
         "tags": tags,
@@ -186,6 +186,7 @@ def score_creator(
     score = round(min(100.0, max(0.0, total)), 4)
     reasons = [fits[name]["detail"] for name in weights]
     reasons.extend(performance["reasons"])
+    reasons = _dedupe(reasons)
     if boost_reason:
         reasons.append(boost_reason)
         components["underserved_boost"] = {"points": boost, "estimated": False, "detail": boost_reason}
@@ -306,7 +307,26 @@ def _audience_fit(product: dict, creator: dict, shop: Optional[dict]) -> dict:
     return {"fit": fit, "detail": "Audience is a partial match to the seller's target."}
 
 
-def _performance(product: dict, creator: dict) -> dict:
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def _plain_number(value: float) -> str:
+    rounded = round(float(value), 4)
+    nearest = round(rounded)
+    if abs(rounded - nearest) < 1e-9:
+        return str(int(nearest))
+    return f"{rounded:.4f}".rstrip("0").rstrip(".")
+
+
+def _performance(product: dict, creator: dict, shop: Optional[dict] = None) -> dict:
     reach, reach_estimated, reach_reason = _reach(creator)
     engagement, engagement_estimated = _rate(
         creator.get("engagement_rate"),
@@ -354,17 +374,29 @@ def _performance(product: dict, creator: dict) -> dict:
         reasons.append("Estimated seller commission payout was not calculated because price or commission rate is missing.")
     else:
         reasons.append("Estimated seller commission payout = estimated revenue × commission rate.")
+    source = "estimated inputs" if estimate_names else "creator figures"
+    currency = product.get("currency") or (shop or {}).get("currency")
+    sales_detail = f"Estimated sales {_plain_number(est_sales)} from {source}."
+    if est_revenue is None:
+        revenue_detail = "Revenue not estimated; price is missing."
+        revenue_estimated = False
+    else:
+        amount = _plain_number(est_revenue)
+        code = str(currency).strip().upper() if currency else ""
+        money = f"{amount} {code}-equivalent" if code else amount
+        revenue_detail = f"Estimated revenue {money} from {source}."
+        revenue_estimated = True
     return {
         "reach_fit": {"fit": reach_fit, "detail": reach_reason, "estimated": reach_estimated},
         "sales_fit": {
             "fit": sales_fit,
-            "detail": "Estimated sales contribution.",
-            "estimated": bool(estimate_names),
+            "detail": sales_detail,
+            "estimated": True,
         },
         "revenue_fit": {
             "fit": revenue_fit,
-            "detail": "Estimated revenue contribution." if est_revenue is not None else "Revenue not estimated; price is missing.",
-            "estimated": est_revenue is not None and bool(estimate_names),
+            "detail": revenue_detail,
+            "estimated": revenue_estimated,
         },
         "reasons": reasons,
         "estimates": {

@@ -75,6 +75,9 @@ def test_missing_data_degrades_and_labels_estimates():
     assert estimates["conversion_estimated"] is True
     assert estimates["reach"] == scoring.DEFAULTS["reach_views"]
     assert estimates["est_revenue"] is None
+    assert match["components"]["sales"]["estimated"] is True
+    assert match["components"]["revenue"]["estimated"] is False
+    assert match["components"]["revenue"]["detail"] == "Revenue not estimated; price is missing."
     assert any("estimate" in reason.lower() for reason in match["reasons"])
     assert any("default" in reason.lower() for reason in match["reasons"])
 
@@ -148,13 +151,14 @@ def test_accept_and_decline_and_stored_exclusions(tmp_path, monkeypatch):
     body = matched.json()
     assert body["optimise_for"] == "revenue"
     assert body["excluded"][0]["handle"] == "@blocked"
+    item_id = body["matches"][0]["shortlist_item_id"]
+    assert item_id
     with db.session_scope() as session:
         shortlist = session.get(Shortlist, body["shortlist_id"])
         assert shortlist.optimise_for == "revenue"
         exclusion = session.scalars(select(ShortlistExclusion)).one()
         assert "Excluded category: home." in exclusion.reasons
-        item = session.scalars(select(ShortlistItem)).one()
-        item_id = item.id
+        assert session.get(ShortlistItem, item_id) is not None
     accepted = client.post(f"/shortlist-items/{item_id}/accept")
     assert accepted.status_code == 200
     assert accepted.json()["accepted_at"]
@@ -201,14 +205,16 @@ def test_memory_accept_stamps_the_creator_and_rejects_a_second_decision(monkeypa
         },
     )
     assert matched.status_code == 200
+    item_id = matched.json()["matches"][0]["shortlist_item_id"]
     item = db.memory_shortlist_items[-1]
     assert item.memory_kind == "shortlist_item"
-    accepted = client.post(f"/shortlist-items/{item.id}/accept")
+    assert item.id == item_id
+    accepted = client.post(f"/shortlist-items/{item_id}/accept")
     assert accepted.status_code == 200
     assert accepted.json()["accepted_at"]
     creator = db.memory_creator_objects[onboard["id"]]
     assert creator.first_match_accepted_at is not None
-    assert client.post(f"/shortlist-items/{item.id}/accept").status_code == 409
+    assert client.post(f"/shortlist-items/{item_id}/accept").status_code == 409
 
 
 def test_memory_match_stores_components_and_estimates(monkeypatch):
@@ -242,10 +248,17 @@ def test_memory_match_stores_components_and_estimates(monkeypatch):
 
 
 def test_known_performance_is_not_marked_estimated():
-    result = scoring.rank_creators(PRODUCT, [STRONG])["matches"][0]
+    product = {**PRODUCT, "currency": "aud"}
+    result = scoring.rank_creators(product, [STRONG])["matches"][0]
     assert result["estimates"]["reach_estimated"] is False
     assert result["estimates"]["engagement_estimated"] is False
     assert result["estimates"]["conversion_estimated"] is False
     assert result["estimates"]["est_sales"] == 10000 * 0.1 * 0.05
     assert result["estimates"]["est_revenue"] == result["estimates"]["est_sales"] * 30
     assert result["estimates"]["est_seller_commission_payout"] == result["estimates"]["est_revenue"] * 0.1
+    assert result["components"]["sales"]["estimated"] is True
+    assert result["components"]["revenue"]["estimated"] is True
+    assert result["components"]["revenue"]["detail"] == "Estimated revenue 1500 AUD-equivalent from creator figures."
+    assert result["components"]["sales"]["detail"] == "Estimated sales 50 from creator figures."
+    assert result["reasons"].count("Reach uses the creator's average views.") == 1
+    assert len(result["reasons"]) == len(set(result["reasons"]))

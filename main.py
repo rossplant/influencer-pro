@@ -612,7 +612,7 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
         blocked_creator_ids=body.blocked_creator_ids,
         limit=body.limit,
     )
-    shortlist_id = services.persist_rules_match(
+    shortlist_id, item_ids = services.persist_rules_match(
         shop_id=loaded["shop_id"],
         product_id=loaded["product_id"],
         optimise_for=body.optimise_for,
@@ -628,6 +628,8 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
             for row in outcome["matches"]
         ],
     )
+    for row, item_id in zip(outcome["matches"], item_ids):
+        row["shortlist_item_id"] = item_id
     if shortlist_id:
         outcome["shortlist_id"] = shortlist_id
     return outcome

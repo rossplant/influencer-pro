@@ -506,21 +506,24 @@ def persist_rules_match(
     matches: list,
     excluded: Optional[list] = None,
     optimise_for: str = "balanced",
-) -> Optional[str]:
-    """Store the ranked creators. Excluded creators are stored with their reasons, not as items."""
+) -> tuple[Optional[str], list[str]]:
+    """Store the ranked creators. Excluded creators are stored with their reasons, not as items.
+
+    Returns the shortlist id and the shortlist item ids in match order.
+    """
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
     try:
         if db.configured():
             return _persist_rules_db(shop_id, product_id, matches, excluded or [], optimise_for)
         if not shop_id:
-            return None
+            return None, []
         return _persist_rules_memory(shop_id, product_id, matches, excluded or [], optimise_for)
     except PlanLimitReached as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
 
 
-def _persist_rules_db(shop_id, product_id, matches, excluded, optimise_for) -> str:
+def _persist_rules_db(shop_id, product_id, matches, excluded, optimise_for) -> tuple[str, list[str]]:
     with db.session_scope() as session:
         shop = session.get(Shop, shop_id) if shop_id else None
         if shop_id and shop is None:
@@ -542,13 +545,16 @@ def _persist_rules_db(shop_id, product_id, matches, excluded, optimise_for) -> s
         session.add(shortlist)
         session.flush()
         _store_exclusions(session, shortlist.id, excluded)
+        item_ids = []
         for index, match in enumerate(matches, start=1):
             creator_id = match.get("creator_id")
             if creator_id and session.get(Creator, creator_id) is None:
                 creator_id = None
+            item_id = str(uuid.uuid4())
+            item_ids.append(item_id)
             session.add(
                 ShortlistItem(
-                    id=str(uuid.uuid4()),
+                    id=item_id,
                     shortlist_id=shortlist.id,
                     creator_id=creator_id,
                     score=float(match["score"]),
@@ -562,10 +568,10 @@ def _persist_rules_db(shop_id, product_id, matches, excluded, optimise_for) -> s
             )
         session.flush()
         events.emit("match_run", shortlist, "api", match_version=MATCH_VERSION, shortlist_id=shortlist.id)
-        return shortlist.id
+        return shortlist.id, item_ids
 
 
-def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) -> str:
+def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) -> tuple[str, list[str]]:
     shop = db.memory_shops.get(shop_id)
     if shop is None:
         raise HTTPException(status_code=404, detail="Shop not found")
@@ -591,13 +597,16 @@ def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) 
                 reasons=list(row.get("reasons") or []),
             )
         )
+    item_ids = []
     for index, match in enumerate(matches, start=1):
         creator_id = match.get("creator_id")
         creator = db.memory_creator_objects.get(str(creator_id)) if creator_id else None
+        item_id = str(uuid.uuid4())
+        item_ids.append(item_id)
         db.memory_shortlist_items.append(
             SimpleNamespace(
                 memory_kind="shortlist_item",
-                id=str(uuid.uuid4()),
+                id=item_id,
                 shortlist_id=shortlist.id,
                 shortlist=shortlist,
                 creator=creator,
@@ -615,7 +624,7 @@ def _persist_rules_memory(shop_id, product_id, matches, excluded, optimise_for) 
             )
         )
     events.emit("match_run", shortlist, "api", match_version=MATCH_VERSION, shortlist_id=shortlist.id)
-    return shortlist.id
+    return shortlist.id, item_ids
 
 
 def _product_payload(product) -> dict:
