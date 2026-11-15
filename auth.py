@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -20,6 +21,8 @@ from typing import Optional
 from fastapi import Request
 
 COOKIE_NAME = "plantr_admin"
+SELLER_COOKIE = "plantr_seller"
+CREATOR_COOKIE = "plantr_creator"
 SESSION_SECONDS = 12 * 60 * 60
 LOGIN_LIMIT = 5
 LOGIN_WINDOW_SECONDS = 15 * 60
@@ -145,6 +148,50 @@ def issue_session(email: str) -> str:
     return f"{body}.{_sign(body)}"
 
 
+def issue_form_token(purpose: str) -> str:
+    payload = {"purpose": purpose, "exp": int(time.time()) + SESSION_SECONDS}
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    return f"{body}.{_sign(body)}"
+
+
+def form_token_ok(token: str, purpose: str) -> bool:
+    payload = _read_signed(token)
+    if payload is None or payload.get("purpose") != purpose:
+        return False
+    return True
+
+
+def issue_role_session(role: str, email: str, subject_id: str, impersonator: Optional[str] = None) -> tuple[str, str]:
+    csrf = secrets.token_urlsafe(24)
+    payload = {
+        "role": role,
+        "email": email.strip().lower(),
+        "subject_id": subject_id,
+        "csrf": csrf,
+        "exp": int(time.time()) + SESSION_SECONDS,
+    }
+    if impersonator:
+        payload["impersonator"] = impersonator
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    return f"{body}.{_sign(body)}", csrf
+
+
+def read_role_session(request: Request, cookie_name: str) -> Optional[dict]:
+    payload = _read_signed(request.cookies.get(cookie_name, ""))
+    if payload is None or payload.get("role") not in {"seller", "creator"}:
+        return None
+    if not payload.get("subject_id") or not payload.get("csrf"):
+        return None
+    return payload
+
+
+def csrf_matches(session: dict, provided: str) -> bool:
+    return hmac.compare_digest(
+        hashlib.sha256(str(session.get("csrf") or "").encode("utf-8")).digest(),
+        hashlib.sha256(str(provided or "").encode("utf-8")).digest(),
+    )
+
+
 def session_email(request: Request) -> Optional[str]:
     secret = _secret()
     token = request.cookies.get(COOKIE_NAME, "")
@@ -185,6 +232,23 @@ def _setup_token() -> str:
 
 def _secret() -> str:
     return os.getenv("SESSION_SECRET", "").strip()
+
+
+def _read_signed(token: str) -> Optional[dict]:
+    secret = _secret()
+    if not secret or not token or "." not in token:
+        return None
+    body, signature = token.rsplit(".", 1)
+    if not hmac.compare_digest(_sign(body), signature):
+        return None
+    try:
+        payload = json.loads(_b64decode(body))
+        exp = int(payload["exp"])
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if exp < int(time.time()):
+        return None
+    return payload
 
 
 def _sign(body: str) -> str:

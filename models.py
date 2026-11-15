@@ -433,6 +433,29 @@ class AdminUser(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PortalAccount(Base):
+    """A seller login for one shop, or a creator login for one creator."""
+
+    __tablename__ = "portal_accounts"
+    __table_args__ = (
+        CheckConstraint("role IN ('seller', 'creator')", name="ck_portal_accounts_role"),
+        CheckConstraint(
+            "(role = 'seller' AND shop_id IS NOT NULL AND creator_id IS NULL) OR "
+            "(role = 'creator' AND creator_id IS NOT NULL AND shop_id IS NULL)",
+            name="ck_portal_accounts_subject",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True, index=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class CreatorProductLink(Base):
     """Schema only. A tracking link or discount code for one creator and one product."""
 

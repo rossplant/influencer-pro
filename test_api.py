@@ -56,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr Collab API running"
-    assert body["version"] == "0.13"
+    assert body["version"] == "0.14"
     assert body["grok_enabled"] is False
 
 
@@ -64,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.13"
+    assert response.json()["version"] == "0.14"
 
 
 def test_enrich_fallback_without_xai_key():
@@ -264,3 +264,6 @@ def test_html_pages_use_the_same_origin():
     admin = client.get("/plantr_admin.html", follow_redirects=False)
     assert admin.status_code == 302
     assert admin.headers["location"] == "/admin"
+    dashboard = client.get("/plantr_dashboard.html", follow_redirects=False)
+    assert dashboard.status_code == 302
+    assert dashboard.headers["location"] == "/creator"
