@@ -344,17 +344,25 @@ async def _checkout(request: Request, role: str):
     path = "/seller/billing" if role == "seller" else "/creator/billing"
     context = stripe_billing.account_context(role, session["subject_id"])
     base = billing_config.public_base_url(request)
-    url = stripe_billing.checkout(
-        role=role,
-        subject_id=session["subject_id"],
-        tier=str(form.get("tier") or ""),
-        interval=str(form.get("interval") or "month"),
-        success_url=f"{base}{path}",
-        cancel_url=f"{base}{path}",
-        promo_code=str(form.get("promo_code") or ""),
-        invite_code=context["signup_code"],
-        campaign=context["signup_campaign"],
-    )
+    try:
+        url = stripe_billing.checkout(
+            role=role,
+            subject_id=session["subject_id"],
+            tier=str(form.get("tier") or ""),
+            interval=str(form.get("interval") or "month"),
+            success_url=f"{base}{path}",
+            cancel_url=f"{base}{path}",
+            promo_code=str(form.get("promo_code") or ""),
+            invite_code=context["signup_code"],
+            campaign=context["signup_campaign"],
+        )
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        try:
+            url = stripe_billing.portal_session(role=role, subject_id=session["subject_id"], return_url=f"{base}{path}")
+        except HTTPException:
+            raise exc
     return RedirectResponse(url, status_code=303)
 
 

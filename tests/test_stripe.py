@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 import db
 import main
+import portal
 import stripe_billing
 import tracking
 
@@ -182,6 +183,91 @@ def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
     assert opened["allow_promotion_codes"] is True
     assert "discounts" not in opened
     assert opened["success_url"].startswith("https://testserver/seller/billing")
+    shop_row = db.memory_shops[shop["id"]]
+    shop_row.stripe_customer_id = "cus_test"
+    sessions_before = len(fake.checkout.sessions.created)
+    for status in ("active", "trialing", "past_due"):
+        shop_row.subscription_status = status
+        page = client.get("/seller/billing", headers=cookie)
+        assert "Continue to checkout" not in page.text
+        assert "Use Manage" in page.text
+        blocked = client.post(
+            "/seller/billing/checkout",
+            data={"csrf_token": token, "tier": "scale", "interval": "year"},
+            headers=cookie,
+            follow_redirects=False,
+        )
+        assert blocked.status_code == 303
+        assert blocked.headers["location"] == "https://billing.stripe.test/portal"
+    assert len(fake.checkout.sessions.created) == sessions_before
+    shop_row.subscription_status = "canceled"
+    renewed = client.post(
+        "/seller/billing/checkout",
+        data={"csrf_token": token, "tier": "growth", "interval": "month"},
+        headers=cookie,
+        follow_redirects=False,
+    )
+    assert renewed.status_code == 303
+    assert renewed.headers["location"] == "https://checkout.stripe.test/cs_test"
+
+
+def test_creator_checkout_blocks_a_live_subscription(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
+    fake = FakeStripe()
+    monkeypatch.setattr(stripe_billing, "client", lambda: fake)
+    creator = SimpleNamespace(
+        memory_kind="creator",
+        id="creator-live",
+        plan_tier="curator",
+        plan_status="active",
+        subscription_status="active",
+        stripe_customer_id="cus_creator",
+        stripe_subscription_id="sub_live",
+    )
+    db.memory_creator_objects[creator.id] = creator
+    db.memory_portal_accounts.append(
+        SimpleNamespace(role="creator", creator_id=creator.id, shop_id=None, email="creator@example.com")
+    )
+    for status in ("active", "trialing", "past_due"):
+        creator.subscription_status = status
+        try:
+            stripe_billing.checkout(
+                role="creator",
+                subject_id=creator.id,
+                tier="elite",
+                interval="month",
+                success_url="https://pay.example/creator/billing",
+                cancel_url="https://pay.example/creator/billing",
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            assert "Manage" in exc.detail
+        else:
+            raise AssertionError(f"checkout was allowed while {status}")
+    assert fake.checkout.sessions.created == []
+    html = portal._billing_body(
+        "creator",
+        {"configured": True, "plan_tier": "curator", "plan_status": "active", "subscription_status": "past_due", "plans": []},
+        "tok",
+        "/creator/billing",
+    )
+    assert "Continue to checkout" not in html
+    assert "Use Manage" in html
+    creator.subscription_status = "canceled"
+    url = stripe_billing.checkout(
+        role="creator",
+        subject_id=creator.id,
+        tier="curator",
+        interval="month",
+        success_url="https://pay.example/creator/billing",
+        cancel_url="https://pay.example/creator/billing",
+        promo_code="FOUNDING50",
+    )
+    assert url == "https://checkout.stripe.test/cs_test"
 
 
 def test_creator_checkout_resolves_founding_code(monkeypatch):

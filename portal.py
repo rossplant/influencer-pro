@@ -618,7 +618,19 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
             f"{html.escape(plan['monthly'])} / month or {html.escape(plan['annual'])} / year, ex GST.{soon_text}</li>"
         )
     checkout = ""
-    if billing.get("configured"):
+    subscribed = str(billing.get("subscription_status") or "").strip().lower() in {"active", "trialing", "past_due"}
+    manage = f"""
+        <form method="post" action="{action}/portal">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <button type="submit">Manage or cancel</button>
+        </form>
+        """
+    if billing.get("configured") and subscribed:
+        checkout = (
+            "<p>You already have a subscription. Use Manage to change plan, update payment, or cancel.</p>"
+            + manage
+        )
+    elif billing.get("configured"):
         checkout = f"""
         <form method="post" action="{action}/checkout">
           <input type="hidden" name="csrf_token" value="{csrf}">
@@ -629,10 +641,7 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
           <label>Promotion code <input name="promo_code"></label>
           <button type="submit">Continue to checkout</button>
         </form>
-        <form method="post" action="{action}/portal">
-          <input type="hidden" name="csrf_token" value="{csrf}">
-          <button type="submit">Manage or cancel</button>
-        </form>
+        {manage}
         """
     return f"""
     <h1>Subscription</h1>

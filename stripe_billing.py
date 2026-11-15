@@ -25,6 +25,8 @@ from models import BillingSubscription, Creator, PortalAccount, Shop, StripeEven
 logger = logging.getLogger("plantr.stripe")
 
 NOT_CONFIGURED = "Stripe is not configured"
+LIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
+ALREADY_SUBSCRIBED = "You already have a subscription. Use Manage to change plan, update payment, or cancel."
 HANDLED_EVENT_TYPES = (
     "checkout.session.completed",
     "customer.subscription.created",
@@ -63,6 +65,12 @@ def client():
     import stripe
 
     return stripe.StripeClient(key)
+
+
+def subscription_in_force(role: str, subject_id: str) -> bool:
+    """True when another Checkout would create a second subscription."""
+    status = str((_account(role, subject_id) or {}).get("subscription_status") or "").strip().lower()
+    return status in LIVE_SUBSCRIPTION_STATUSES
 
 
 def shop_status(shop_id: str) -> dict:
@@ -107,6 +115,8 @@ def checkout(
     campaign: str = "",
     channel: str = "",
 ) -> str:
+    if subscription_in_force(role, subject_id):
+        raise HTTPException(status_code=409, detail=ALREADY_SUBSCRIBED)
     email = _portal_email(role, subject_id)
     if not email:
         raise HTTPException(status_code=422, detail="A login email is required before checkout")
