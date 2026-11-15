@@ -1,4 +1,4 @@
-# plantr-collab API — Hybrid Regex + Embedding Matching (v0.7)
+# Plantr API — Hybrid Regex + Embedding Matching (v0.7)
 # Run: uvicorn main_expanded:app --reload
 # Requires .env with NOTION_TOKEN, NOTION_PRODUCTS_DB, NOTION_INFLUENCERS_DB,
 # SHOPIFY_STORE, SHOPIFY_TOKEN, GROK_API_KEY (or XAI_API_KEY)
@@ -27,7 +27,7 @@ from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
-app = FastAPI(title="plantr-collab API", version="0.7")
+app = FastAPI(title="Plantr API", version="0.7")
 
 # Optional Grok / xAI integration
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
@@ -400,7 +400,7 @@ def map_shopify_to_plant(sp):
 
 @app.get("/")
 def root():
-    return {"status": "plantr-collab API running", "version": "0.7", "grok_enabled": bool(GROK_API_KEY)}
+    return {"status": "Plantr API running", "version": "0.7", "grok_enabled": bool(GROK_API_KEY)}
 
 
 @app.post("/enrich", response_model=EnrichResponse)

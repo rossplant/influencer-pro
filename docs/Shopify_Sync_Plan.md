@@ -1,9 +1,9 @@
-# Shopify Product Sync Plan — Plant
+# Shopify Product Sync Plan — Plantr
 
 **Not shipped.** `POST /sync-shopify` in `main.py` returns 501. It does not call Shopify, does not enrich products, and does not write a catalog. Postgres is the planned system of record. Notion is not the database.
 
 ## Goal
-Pull products from Shopify → map to the Plant product schema → enrich with the AI signal layer → store in Postgres for influencer matching.
+Pull products from Shopify → map to the Plantr product schema → enrich with the AI signal layer → store in Postgres for influencer matching.
 
 ## Steps
 
@@ -14,7 +14,7 @@ Pull products from Shopify → map to the Plant product schema → enrich with t
 
 ### 2. Sync Flow
 1. Call Shopify Admin API: `GET /admin/api/2024-10/products.json`
-2. Map fields to Plant schema:
+2. Map fields to the Plantr schema:
    - title → title
    - body_html → description_long
    - vendor → brand

@@ -1,4 +1,4 @@
-# PlantR Pricing & Commercial Model
+# Plantr Pricing & Commercial Model
 
 ## For Sellers (Merchants)
 
@@ -6,7 +6,7 @@
 - Up to 50 products synced
 - Basic signal score
 - Manual enrichment only
-- PlantR branding on matches
+- Plantr branding on matches
 
 ### Growth — $49 / month
 - Up to 500 products
@@ -24,7 +24,7 @@
 - API access
 
 **Performance Add-on (optional)**  
-5% of attributed GMV from PlantR influencer matches (billed monthly).
+5% of attributed GMV from Plantr influencer matches (billed monthly).
 
 ---
 
@@ -49,11 +49,11 @@ Creators are free at launch. A launch creator can keep a profile, see matches, a
 ---
 
 ## How Money Flows
-1. Seller pays PlantR subscription (or performance fee).
+1. Seller pays Plantr subscription (or performance fee).
 2. Influencer earns commission from the seller (TikTok Shop / affiliate).
-3. PlantR can take a small cut of the commission (2–4%) on Elite deals or keep it pure SaaS.
+3. Plantr can take a small cut of the commission (2–4%) on Elite deals or keep it pure SaaS.
 
 ## Positioning
 - Sellers pay for better AI signals and access to relevant influencers.
 - Creators are free at launch. Creator Pro (US$19/mo) and Elite are later options, not launch tiers.
-- PlantR stays asset-light — no inventory.
+- Plantr stays asset-light — no inventory.

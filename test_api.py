@@ -72,7 +72,7 @@ def test_root_shape_and_version():
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
-    assert body["status"] == "plantr-collab API running"
+    assert body["status"] == "Plantr API running"
     assert body["version"] == "0.9"
     assert body["grok_enabled"] is False
 

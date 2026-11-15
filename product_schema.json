@@ -1,6 +1,6 @@
 {
   "product_schema_version": "1.0",
-  "description": "Plant product data schema optimized for TikTok Shopping Assistant and influencer matching",
+  "description": "Plantr product data schema optimized for TikTok Shopping Assistant and influencer matching",
   "parent_fields": {
     "product_id": {"type": "string", "required": true},
     "title": {"type": "string", "required": true, "ai_weight": "high"},

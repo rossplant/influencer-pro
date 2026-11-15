@@ -1,4 +1,4 @@
-# Deploy PlantR to Railway (recommended)
+# Deploy Plantr to Railway (recommended)
 
 ## 1. Prepare
 - Repo is already on GitHub: https://github.com/rossplant/influencer-pro

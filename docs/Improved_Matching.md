@@ -1,4 +1,4 @@
-# Improved Matching Algorithm — PlantR
+# Improved Matching Algorithm — Plantr
 
 Proposed replacement for `score_match` in `main.py`. Phase 0 does not use this scorer. `main.py` is the entry point. Older drafts are in `archive/`, and there is no `main_expanded.py`.
 

@@ -1,4 +1,4 @@
-# Deployment Guide — Plant Influencer API
+# Deployment Guide — Plantr API
 
 ## Local
 

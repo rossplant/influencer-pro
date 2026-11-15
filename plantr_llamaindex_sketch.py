@@ -1,4 +1,4 @@
-# plantr-collab — Minimal LlamaIndex RAG Sketch
+# Plantr — Minimal LlamaIndex RAG Sketch
 # Adds product knowledge retrieval + grounded talking-point generation
 #
 # Install:

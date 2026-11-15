@@ -1,7 +1,7 @@
-# Influencer Onboarding Flow — Plant App
+# Influencer Onboarding Flow — Plantr
 
 ## Goal
-Influencers enter their areas of interest, expertise, and preferred promotion styles so Plant can target products to them.
+Influencers enter their areas of interest, expertise, and preferred promotion styles so Plantr can target products to them.
 
 ## Steps
 

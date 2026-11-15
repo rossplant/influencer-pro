@@ -245,7 +245,7 @@ async def _closed_receive():
     return {"type": "http.disconnect"}
 
 
-app = FastAPI(title="plantr-collab API", version="0.9")
+app = FastAPI(title="Plantr API", version="0.9")
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -266,7 +266,7 @@ def _html(name: str) -> FileResponse:
 @app.get("/")
 def root():
     return {
-        "status": "plantr-collab API running",
+        "status": "Plantr API running",
         "version": "0.9",
         "grok_enabled": bool(os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")),
     }

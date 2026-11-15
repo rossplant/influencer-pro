@@ -1,4 +1,4 @@
-# plantr-collab — Qdrant Semantic Search Sketch
+# Plantr — Qdrant Semantic Search Sketch
 # Production-oriented vector search for product retrieval
 #
 # Install:

@@ -1,13 +1,13 @@
-# Plant Influencer Enablement Platform
+# Plantr
 
 Duplicate upload. Not the current description. See `docs/Plant_Influencer_Platform_Overview.md`. Notion is not the database.
 ## Product Data Schema, Influencer Profiles & AI Signal Layer
 
-**Brand:** Plant  
+**Brand:** Plantr  
 **Purpose:** AI-powered overlay for TikTok Shop (and other platforms) that enriches product data so Shopping Assistants surface products, and matches them to influencers based on expertise + promotions.
 
 ### Core Idea
-Merchants supply basic product data → Plant AI enriches it into high-signal structured attributes → TikTok Shopping Assistant (and similar AI buyers) can answer questions accurately → Influencers get targeted product matches based on their stated interests, expertise, and preferred promo styles.
+Merchants supply basic product data → Plantr enriches it into high-signal structured attributes → TikTok Shopping Assistant (and similar AI buyers) can answer questions accurately → Influencers get targeted product matches based on their stated interests, expertise, and preferred promo styles.
 
 ---
 
@@ -19,7 +19,7 @@ Parent + Variants model. Optimized for conversational AI (TikTok Shopping Assist
 
 | Field | Type | Required | Description | AI Signal Weight |
 |-------|------|----------|-------------|------------------|
-| product_id | string | Yes | Unique Plant ID | - |
+| product_id | string | Yes | Unique Plantr ID | - |
 | title | string | Yes | Clear, keyword-rich title | High |
 | brand | string | Yes | Brand name | High |
 | category | string | Yes | Primary category (e.g. Home & Garden > Plants) | High |
@@ -86,7 +86,7 @@ Parent + Variants model. Optimized for conversational AI (TikTok Shopping Assist
 
 ## 2. Influencer Profile Schema
 
-Influencers enter their interests, expertise, and preferred promotion styles. Plant uses this for targeted matching.
+Influencers enter their interests, expertise, and preferred promotion styles. Plantr uses this for targeted matching.
 
 ### Influencer Fields
 
@@ -168,9 +168,9 @@ Max 100. Score ≥ 80 = “Assistant-ready”.
 |--------|-------|-------|
 | Average order value | $45 | Mid-ticket plants / home |
 | Affiliate commission | 12% | Typical TikTok Shop range 5-20% |
-| Plant take rate | 3-5% of GMV or flat SaaS + performance | Hybrid |
-| Creator payout | 8-10% | After Plant share |
-| Target net margin (Plant) | 25-40% on performance fees | After AI costs |
+| Plantr take rate | 3-5% of GMV or flat SaaS + performance | Hybrid |
+| Creator payout | 8-10% | After Plantr share |
+| Target net margin (Plantr) | 25-40% on performance fees | After AI costs |
 | Onboarding cost per merchant | Low (AI-first) | Mostly software |
 
 ---

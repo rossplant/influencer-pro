@@ -1,4 +1,4 @@
-# Shopify Token Wiring — PlantR
+# Shopify Token Wiring — Plantr
 
 ## 1. Create Shopify Custom App
 1. Shopify Admin → Settings → Apps and sales channels → Develop apps

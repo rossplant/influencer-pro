@@ -1,4 +1,4 @@
-# Plant Influencer Enablement Platform
+# Plantr
 
 AI-powered overlay for TikTok Shop and other platforms. `main.py` is the API entry point.
 

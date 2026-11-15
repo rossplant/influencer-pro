@@ -1,11 +1,11 @@
-# Notion Import Guide — Plant Schemas
+# Notion Import Guide — Plantr schemas
 
-Notion is not the PlantR database. `main.py` does not read or write Notion. Phase 0 keeps influencer profiles in process memory. Postgres is the planned system of record. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
+Notion is not the Plantr database. `main.py` does not read or write Notion. Phase 0 keeps influencer profiles in process memory. Postgres is the planned system of record. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
 
 ## 1. Product scratch page
 
-1. In Notion, create a scratch page. This page is not the PlantR database.
-2. Name it **Plant Products**.
+1. In Notion, create a scratch page. This page is not the Plantr database.
+2. Name it **Plantr products**.
 3. Add these properties (match `product_schema.json`):
 
 | Property Name          | Type          | Notes                              |
@@ -29,7 +29,7 @@ Notion is not the PlantR database. `main.py` does not read or write Notion. Phas
 
 ## 2. Influencer scratch page
 
-1. Create another scratch page named **Plant Influencers**. This page is not the PlantR database.
+1. Create another scratch page named **Plantr influencers**. This page is not the Plantr database.
 2. Properties from `influencer_schema.json`:
 
 | Property Name              | Type          |
