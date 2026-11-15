@@ -303,6 +303,42 @@ def require_admin(request: Request) -> str:
     return email
 
 
+def _api_key_status(request: Request) -> str:
+    """Return valid, invalid, or absent. A header is ignored when API_KEYS is unset."""
+    provided = request.headers.get("x-api-key", "")
+    if not provided:
+        return "absent"
+    keys = configured_api_keys()
+    if not keys:
+        return "absent"
+    if _key_matches(provided, keys):
+        return "valid"
+    return "invalid"
+
+
+def require_login_operator(request: Request) -> str:
+    """Admin session for the browser, or a valid API key for operator automation.
+
+    The key path is only for creating shop and creator logins. It does not
+    open the rest of the admin area.
+    """
+    status = _api_key_status(request)
+    if status == "valid":
+        enforce_rate_limit(f"key:{api_key_label(request.headers.get('x-api-key'))}")
+        return "api-key"
+    email = auth.session_email(request) if _admin_available() else None
+    if status == "invalid" and not email:
+        enforce_rate_limit(f"ip:{client_ip(request)}")
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not _admin_available():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    if not email:
+        enforce_rate_limit(f"ip:{client_ip(request)}")
+        raise HTTPException(status_code=401, detail="Admin session required")
+    enforce_rate_limit(f"session:{email}")
+    return email
+
+
 def _admin_available() -> bool:
     return auth.admin_enabled(user_exists=admin_data.admin_exists(auth.admin_email()))
 
@@ -818,9 +854,10 @@ def admin_order(order_id: str, _: str = Depends(require_admin)):
 
 
 @app.post("/admin/api/shops/{shop_id}/login")
-async def admin_create_seller_login(shop_id: str, request: Request, _: str = Depends(require_admin)):
+async def admin_create_seller_login(shop_id: str, request: Request, actor: str = Depends(require_login_operator)):
     fields = await _request_fields(request)
-    portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    if actor != "api-key":
+        portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
     result = portal.create_login(
         role="seller",
         email=str(fields.get("email") or ""),
@@ -832,9 +869,10 @@ async def admin_create_seller_login(shop_id: str, request: Request, _: str = Dep
 
 
 @app.post("/admin/api/creators/{creator_id}/login")
-async def admin_create_creator_login(creator_id: str, request: Request, _: str = Depends(require_admin)):
+async def admin_create_creator_login(creator_id: str, request: Request, actor: str = Depends(require_login_operator)):
     fields = await _request_fields(request)
-    portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
+    if actor != "api-key":
+        portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
     result = portal.create_login(
         role="creator",
         email=str(fields.get("email") or ""),
