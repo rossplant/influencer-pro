@@ -14,7 +14,7 @@ Open `/onboarding_form.html` on that same host. The page posts to the API at its
 1. Push repo to GitHub (already done).
 2. Go to railway.app → New Project → Deploy from GitHub repo.
 3. Select `influencer-pro`.
-4. Add environment variables from `.env.example` if needed. `NOTION_*` is unused. Notion is not the database. Postgres is the planned system of record. The default model is `grok-4.3`.
+4. Add environment variables from `.env.example` if needed. `NOTION_*` is unused. Notion is not the database. Attach Postgres and set `DATABASE_URL` when you want durable storage. Until then the API logs a warning and uses memory. Startup runs the migrations, so there is no pre-deploy command. The default model is `grok-4.3`.
 5. Railway auto-detects Python. Add a start command:
    ```
    uvicorn main:app --host 0.0.0.0 --port $PORT

@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 from fastapi.testclient import TestClient
 
 import grok_helper
@@ -25,22 +24,6 @@ PRODUCT = {
     "category": "Houseplants",
     "images": ["url1", "url2", "url3"],
 }
-
-
-@pytest.fixture(autouse=True)
-def _isolated(monkeypatch):
-    monkeypatch.delenv("API_KEYS", raising=False)
-    monkeypatch.delenv("GROK_API_KEY", raising=False)
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.delenv("SHOPIFY_STORE", raising=False)
-    monkeypatch.delenv("SHOPIFY_TOKEN", raising=False)
-    monkeypatch.delenv("RATE_LIMIT_REQUESTS", raising=False)
-    monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS", raising=False)
-    monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
-    monkeypatch.setattr(grok_helper, "GROK_API_KEY", None)
-    main.reset_runtime_state()
-    yield
-    main.reset_runtime_state()
 
 
 def _grok_response(usage=None):
@@ -73,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr API running"
-    assert body["version"] == "0.9"
+    assert body["version"] == "0.10"
     assert body["grok_enabled"] is False
 
 
@@ -81,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.9"
+    assert response.json()["version"] == "0.10"
 
 
 def test_enrich_fallback_without_xai_key():

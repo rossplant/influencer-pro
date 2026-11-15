@@ -1,9 +1,13 @@
+import hashlib
 import hmac
+import json
 import os
 import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -12,11 +16,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+import db
+import services
 from grok_helper import generate_with_grok
 
-# TODO: replace INFLUENCERS with Postgres. This process-local dict is lost on
-# restart and is not shared across Railway replicas.
-INFLUENCERS: Dict[str, Dict[str, Any]] = {}
+# Process-local creator profiles. This is db.memory_creators, used when
+# DATABASE_URL is unset. Postgres is the system of record once that variable is set.
+INFLUENCERS: Dict[str, Dict[str, Any]] = db.memory_creators
 
 _rate_buckets: Dict[str, deque] = defaultdict(deque)
 _rate_lock = threading.Lock()
@@ -28,6 +34,7 @@ HTML_PAGES = (
     "plantr_dashboard.html",
     "plantr_admin.html",
 )
+APP_VERSION = "0.10"
 
 PromotionStyle = Literal[
     "educational",
@@ -42,6 +49,7 @@ PromotionStyle = Literal[
 ExpertiseLevel = Literal["beginner", "intermediate", "expert"]
 Availability = Literal["open", "selective", "paused"]
 CommissionPreference = Literal["standard", "higher_for_exclusives"]
+LightLevel = Literal["low", "medium", "bright"]
 
 
 class AudienceDemographics(BaseModel):
@@ -69,6 +77,15 @@ class InfluencerIn(BaseModel):
     restrictions: List[str] = Field(default_factory=list)
     availability: Availability = "open"
     commission_preference: Optional[CommissionPreference] = None
+    platforms: List[str] = Field(default_factory=list)
+    follower_band: Optional[str] = None
+
+
+class ClaimIn(BaseModel):
+    claim: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    evidence: Optional[str] = None
+    confidence: Optional[str] = None
 
 
 class ProductIn(BaseModel):
@@ -77,6 +94,15 @@ class ProductIn(BaseModel):
     description_long: str = ""
     category: str = ""
     images: List[str] = []
+    shop_id: Optional[str] = None
+    product_id: Optional[str] = None
+    creator_id: Optional[str] = None
+    pet_safe: Optional[bool] = None
+    light: Optional[LightLevel] = None
+    care_level: Optional[str] = None
+    size: Optional[str] = None
+    price: Optional[float] = None
+    claims: List[ClaimIn] = Field(default_factory=list)
 
 
 class EnrichResponse(BaseModel):
@@ -85,11 +111,22 @@ class EnrichResponse(BaseModel):
     common_questions: List[Dict[str, str]] = []
     enriched: Dict[str, Any]
     source: Literal["grok", "fallback"]
+    product_id: Optional[str] = None
 
 
 class MatchIn(BaseModel):
     influencer: Dict[str, Any]
     products: List[Dict[str, Any]]
+    shop_id: Optional[str] = None
+    product_id: Optional[str] = None
+
+
+class ShopIn(BaseModel):
+    name: str = Field(min_length=1)
+    shopify_domain: Optional[str] = None
+    plan_tier: Optional[str] = None
+    plan_status: Optional[str] = None
+    is_pilot: bool = False
 
 
 def _int_env(name: str, default: int) -> int:
@@ -132,6 +169,17 @@ def _key_matches(provided: str, keys: List[str]) -> bool:
     return any(hmac.compare_digest(provided, key) for key in keys)
 
 
+def api_key_label(raw: Optional[str]) -> Optional[str]:
+    """Stable label for a key. The raw key is never returned or stored."""
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
+    return f"sha256:{digest}"
+
+
 def enforce_rate_limit(identity: str) -> None:
     limit = max(_int_env("RATE_LIMIT_REQUESTS", 30), 1)
     window = max(_int_env("RATE_LIMIT_WINDOW_SECONDS", 60), 1)
@@ -161,11 +209,16 @@ def guard_request(request: Request) -> None:
     enforce_rate_limit(identity)
 
 
+def init_storage() -> None:
+    db.init_storage()
+
+
 def reset_runtime_state() -> None:
-    """Clear process-local influencers and rate-limit buckets. Used by tests."""
-    INFLUENCERS.clear()
+    """Clear process-local data and rate-limit buckets, then re-read DATABASE_URL."""
+    db.reset_memory()
     with _rate_lock:
         _rate_buckets.clear()
+    init_storage()
 
 
 def score_match(product: Dict[str, Any], influencer: Dict[str, Any]) -> float:
@@ -183,6 +236,17 @@ def score_match(product: Dict[str, Any], influencer: Dict[str, Any]) -> float:
     if "lifestyle" in styles and product.get("occasions"):
         score += 10
     return max(score, 0)
+
+
+def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, Any]:
+    """Profile dict returned to clients. Empty new fields stay off the payload."""
+    record = influencer.model_dump()
+    record["influencer_id"] = influencer_id
+    if not record.get("platforms"):
+        record.pop("platforms", None)
+    if not record.get("follower_band"):
+        record.pop("follower_band", None)
+    return record
 
 
 class BodySizeLimitMiddleware:
@@ -226,6 +290,77 @@ class BodySizeLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
 
+class RequestLogMiddleware:
+    """JSON line per request on stdout, plus an api_requests row when a database is configured.
+
+    The line carries ts, route, method, status, latency_ms, and the key label.
+    The raw API key and the request/response bodies are not logged or stored.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = time.perf_counter()
+        status_code = 500
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            latency_ms = max(0, int((time.perf_counter() - started) * 1000))
+            route = scope.get("path") or "/"
+            method = scope.get("method") or ""
+            label = api_key_label(_header(scope, "x-api-key"))
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "kind": "request",
+                "route": route,
+                "method": method,
+                "status": status_code,
+                "latency_ms": latency_ms,
+                "key": label,
+            }
+            print(json.dumps(record), flush=True)
+            db.record_api_request(
+                ts=datetime.now(timezone.utc),
+                route=route,
+                method=method,
+                status=status_code,
+                latency_ms=latency_ms,
+                api_key_id=label,
+                grok_tokens_prompt=_state_value(scope, "grok_tokens_prompt"),
+                grok_tokens_completion=_state_value(scope, "grok_tokens_completion"),
+                grok_fallback=_state_value(scope, "grok_fallback"),
+            )
+
+
+def _header(scope, name: str) -> str:
+    target = name.lower().encode("latin-1")
+    for key, value in scope.get("headers") or []:
+        if key.lower() == target:
+            return value.decode("latin-1")
+    return ""
+
+
+def _state_value(scope, name: str):
+    state = scope.get("state")
+    if state is None:
+        return None
+    if isinstance(state, dict):
+        return state.get(name)
+    return getattr(state, name, None)
+
+
 def _content_length(scope) -> Optional[int]:
     for name, value in scope.get("headers") or []:
         if name.lower() == b"content-length":
@@ -245,7 +380,13 @@ async def _closed_receive():
     return {"type": "http.disconnect"}
 
 
-app = FastAPI(title="Plantr API", version="0.9")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_storage()
+    yield
+
+
+app = FastAPI(title="Plantr API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -254,6 +395,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLogMiddleware)
 
 
 def _html(name: str) -> FileResponse:
@@ -263,11 +405,18 @@ def _html(name: str) -> FileResponse:
     return FileResponse(path)
 
 
+def _attach_grok_obs(request: Request, grok: Dict[str, Any]) -> None:
+    obs = grok.pop("_obs", None) or {}
+    request.state.grok_tokens_prompt = obs.get("prompt_tokens")
+    request.state.grok_tokens_completion = obs.get("completion_tokens")
+    request.state.grok_fallback = obs.get("fallback")
+
+
 @app.get("/")
 def root():
     return {
         "status": "Plantr API running",
-        "version": "0.9",
+        "version": APP_VERSION,
         "grok_enabled": bool(os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")),
     }
 
@@ -292,20 +441,81 @@ def plantr_admin_page():
     return _html("plantr_admin.html")
 
 
-@app.post("/enrich", response_model=EnrichResponse)
-def enrich(product: ProductIn, _: None = Depends(guard_request)):
-    data = product.model_dump()
+@app.post("/shops")
+def create_shop(body: ShopIn, _: None = Depends(guard_request)):
+    return services.create_shop(
+        name=body.name,
+        shopify_domain=body.shopify_domain,
+        plan_tier=body.plan_tier,
+        plan_status=body.plan_status,
+        is_pilot=body.is_pilot,
+    )
+
+
+@app.get("/shops/{shop_id}")
+def get_shop(shop_id: str, _: None = Depends(guard_request)):
+    shop = services.fetch_shop(shop_id)
+    if shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    return shop
+
+
+@app.get("/creators/{creator_id}")
+def get_creator(creator_id: str, _: None = Depends(guard_request)):
+    creator = services.fetch_creator(creator_id)
+    if creator is None:
+        raise HTTPException(status_code=404, detail="Creator not found")
+    return creator
+
+
+@app.post("/enrich", response_model=EnrichResponse, response_model_exclude_none=True)
+def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request)):
+    data = {
+        "title": product.title,
+        "description_short": product.description_short,
+        "description_long": product.description_long,
+        "category": product.category,
+        "images": product.images,
+    }
+    if product.shop_id or product.product_id:
+        services.prepare_enrichment(product.shop_id, product.product_id)
     grok = generate_with_grok(data)
+    _attach_grok_obs(request, grok)
     source = grok.get("source", "fallback")
     if source not in ("grok", "fallback"):
         source = "fallback"
-    return {
+    saved_id = None
+    if product.shop_id or product.product_id:
+        saved_id = services.save_enrichment(
+            shop_id=product.shop_id,
+            product_id=product.product_id,
+            creator_id=product.creator_id,
+            title=product.title,
+            description_short=product.description_short,
+            description_long=product.description_long,
+            category=product.category,
+            images=product.images,
+            pet_safe=product.pet_safe,
+            light=product.light,
+            care_level=product.care_level,
+            size=product.size,
+            price=product.price,
+            claims=[claim.model_dump() for claim in product.claims],
+            fields_set=set(product.model_fields_set),
+            source=source,
+            talking_points=grok.get("talking_points", []),
+            faqs=grok.get("faqs", []),
+        )
+    body = {
         "signal_score": 70,
         "creator_talking_points": grok.get("talking_points", []),
         "common_questions": grok.get("faqs", []),
         "enriched": data,
         "source": source,
     }
+    if saved_id:
+        body["product_id"] = saved_id
+    return body
 
 
 @app.post("/match")
@@ -319,15 +529,24 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
             }
         )
     ranked.sort(key=lambda item: item["match_score"], reverse=True)
-    return {"matches": ranked[:10]}
+    ranked = ranked[:10]
+    shortlist_id = services.persist_match(
+        influencer=body.influencer,
+        ranked=ranked,
+        shop_id=body.shop_id,
+        product_id=body.product_id,
+    )
+    result: Dict[str, Any] = {"matches": ranked}
+    if shortlist_id:
+        result["shortlist_id"] = shortlist_id
+    return result
 
 
 @app.post("/onboard-influencer")
 def onboard_influencer(influencer: InfluencerIn, _: None = Depends(guard_request)):
     influencer_id = str(uuid.uuid4())
-    record = influencer.model_dump()
-    record["influencer_id"] = influencer_id
-    INFLUENCERS[influencer_id] = record
+    record = public_profile(influencer, influencer_id)
+    services.persist_creator(record)
     return {"id": influencer_id, "influencer": record}
 
 

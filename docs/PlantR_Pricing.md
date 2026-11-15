@@ -1,5 +1,26 @@
 # Plantr Pricing & Commercial Model
 
+## Plan tiers in the API
+
+`shops.plan_tier` defaults to `starter`. A pilot shop (`is_pilot`) defaults to `starter` as well, and its MRR is 0.
+
+| plan_tier | Product enrichments | Match runs | Monthly price |
+| --- | --- | --- | --- |
+| starter, free | 50 (`products_enriched`) | 5 per calendar month (UTC) | $0 |
+| growth | 500 | no monthly cap in this version | $49 |
+| scale | unlimited | no monthly cap in this version | $149 |
+
+When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot shop is then blocked. A pilot shop is allowed to continue, and the event is still written.
+
+### MRR
+
+- A monthly price is the MRR.
+- An annual price is divided by 12.
+- Free and trial contribute 0.
+- Starter, the entry plan_tier, contributes 0.
+
+`monthly_mrr_snapshots` stores that number. Nothing writes the table from an endpoint yet.
+
 ## For Sellers (Merchants)
 
 ### Free Tier

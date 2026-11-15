@@ -1,6 +1,6 @@
 # Notion Import Guide — Plantr schemas
 
-Notion is not the Plantr database. `main.py` does not read or write Notion. Phase 0 keeps influencer profiles in process memory. Postgres is the planned system of record. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
+Notion is not the Plantr database. `main.py` does not read or write Notion. Postgres (`DATABASE_URL`) is the system of record. When that variable is unset, influencer profiles stay in process memory. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
 
 ## 1. Product scratch page
 

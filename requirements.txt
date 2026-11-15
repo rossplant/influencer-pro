@@ -2,3 +2,6 @@ fastapi
 uvicorn
 requests
 pydantic
+sqlalchemy>=2
+alembic
+psycopg[binary]>=3.1
