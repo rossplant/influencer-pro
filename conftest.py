@@ -22,6 +22,12 @@ def _isolated(monkeypatch):
     monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS", raising=False)
     monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
+    monkeypatch.delenv("ADMIN_SETUP_TOKEN", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
     monkeypatch.setattr(grok_helper, "GROK_API_KEY", None)
     main.reset_runtime_state()
     yield

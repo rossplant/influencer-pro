@@ -421,6 +421,18 @@ class AttributedOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class AdminUser(Base):
+    """The single operator account. The password is set in the browser, not in an env var."""
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class CreatorProductLink(Base):
     """Schema only. A tracking link or discount code for one creator and one product."""
 

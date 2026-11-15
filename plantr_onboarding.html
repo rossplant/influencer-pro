@@ -121,11 +121,7 @@
       return window.location.origin;
     }
     function plantrHeaders() {
-      const headers = {"Content-Type": "application/json"};
-      const params = new URLSearchParams(window.location.search);
-      const key = params.get("key") || window.PLANTR_API_KEY || "";
-      if (key) headers["X-API-Key"] = key;
-      return headers;
+      return {"Content-Type": "application/json"};
     }
     const API = plantrApiBase();
 
