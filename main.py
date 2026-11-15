@@ -1048,17 +1048,25 @@ def creator_payouts_redirect():
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request, _: None = Depends(rate_limit_public)):
     payload = await request.body()
-    event = stripe_billing.construct_event(payload, request.headers.get("stripe-signature", ""))
-    if stripe_billing.record_event(event):
-        stripe_billing.apply_event(event)
-    # Fan-out runs after the Stripe event is stored. A platform failure must not
-    # turn this into a 500, or Stripe would retry and skip apply_event.
     try:
+        event = stripe_billing.construct_event(payload, request.headers.get("stripe-signature", ""))
+    except HTTPException:
+        raise
+    except Exception:
+        logging.getLogger("plantr.webhook").exception("stripe webhook could not be read")
+        return {"received": True}
+    try:
+        if stripe_billing.record_event(event):
+            stripe_billing.apply_event(event)
+        # Fan-out runs after the Stripe event is stored. A platform failure must not
+        # turn this into a 500, or Stripe would retry and skip apply_event.
         import tracking
 
         tracking.flush_pending()
+    except HTTPException:
+        raise
     except Exception:
-        logging.getLogger("plantr.webhook").exception("tracking fan-out failed after the Stripe webhook was stored")
+        logging.getLogger("plantr.webhook").exception("stripe webhook failed after the event was stored")
     return {"received": True}
 
 

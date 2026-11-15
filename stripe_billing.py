@@ -215,23 +215,27 @@ def record_event(event: dict) -> bool:
 
 
 def apply_event(event: dict) -> None:
-    event_type = str(event.get("type") or "")
-    data_object = ((event.get("data") or {}).get("object") or {})
-    if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
-        _apply_subscription(data_object, deleted=event_type.endswith("deleted"))
-    elif event_type == "checkout.session.completed":
-        _apply_checkout(data_object)
-    elif event_type == "invoice.paid":
-        _apply_invoice_paid(data_object)
-    elif event_type == "invoice.payment_failed":
-        logger.info("invoice payment failed invoice=%s", _attr(data_object, "id"))
-    elif event_type == "customer.subscription.trial_will_end":
-        email = _email_for_customer(str(_attr(data_object, "customer") or ""))
-        if email:
-            import emailer
-
-            emailer.send("pilot_ending_7_days", email, ends="the trial end date")
-    _mark_processed(str(event.get("id") or ""))
+    """Apply a webhook. An unexpected payload is logged and skipped, not raised."""
+    try:
+        event_type = str(event.get("type") or "")
+        data_object = ((event.get("data") or {}).get("object") or {})
+        if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+            _apply_subscription(data_object, deleted=event_type.endswith("deleted"))
+        elif event_type == "checkout.session.completed":
+            _apply_checkout(data_object)
+        elif event_type == "invoice.paid":
+            _apply_invoice_paid(data_object)
+        elif event_type == "invoice.payment_failed":
+            logger.info(
+                "invoice payment failed invoice=%s subscription=%s",
+                _attr(data_object, "id"),
+                _subscription_id_from_invoice(data_object),
+            )
+        elif event_type == "customer.subscription.trial_will_end":
+            _apply_trial_ending(data_object)
+        _mark_processed(str(event.get("id") or ""))
+    except Exception:
+        logger.exception("stripe event %s (%s) could not be applied", event.get("id"), event.get("type"))
 
 
 def apply_sale_waiver(creator_id: str) -> dict:
@@ -273,6 +277,8 @@ def _apply_checkout(session_obj: dict) -> None:
     customer_id = str(_attr(session_obj, "customer") or "")
     subscription_id = str(_attr(session_obj, "subscription") or "")
     if role and subject_id:
+        payment_status = str(_attr(session_obj, "payment_status") or "")
+        paid = payment_status in {"paid", "no_payment_required"}
         _save_account(
             role,
             subject_id,
@@ -281,7 +287,8 @@ def _apply_checkout(session_obj: dict) -> None:
                 "stripe_subscription_id": subscription_id or None,
                 "plan_tier": str(_attr(metadata, "tier") or ""),
                 "billing_interval": str(_attr(metadata, "interval") or "month"),
-                "subscription_status": "trialing" if _attr(metadata, "tier") else "active",
+                "subscription_status": "active" if paid else "trialing",
+                "plan_status": "active" if paid else "trial",
             },
         )
 
@@ -303,13 +310,15 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     elif status == "trialing":
         plan_status = "trial"
     else:
-        plan_status = "active" if status == "active" else status
+        plan_status = "active" if status == "active" else (status or "active")
+    _period_start, period_end = _subscription_period(subscription)
     values = {
-        "stripe_customer_id": str(_attr(subscription, "customer") or "") or None,
+        "stripe_customer_id": _customer_id(subscription) or None,
         "stripe_subscription_id": str(_attr(subscription, "id") or "") or None,
         "subscription_status": status,
         "plan_status": plan_status,
-        "billing_interval": str(_attr(metadata, "interval") or "month"),
+        "billing_interval": _subscription_interval(subscription, metadata),
+        "current_period_end": period_end,
     }
     if tier:
         values["plan_tier"] = tier
@@ -391,11 +400,22 @@ def _period_label(interval: str) -> str:
     return cleaned
 
 
+def _apply_trial_ending(subscription: Any) -> None:
+    customer_id = _customer_id(subscription)
+    email = _email_for_customer(customer_id) if customer_id else None
+    if not email:
+        logger.info("trial ending for customer=%s with no portal email", customer_id)
+        return
+    import emailer
+
+    emailer.send("pilot_ending_7_days", email, ends="the trial end date")
+
+
 def _apply_invoice_paid(invoice: Any) -> None:
     amount = _attr(invoice, "amount_paid")
     if not amount:
         return
-    subscription_id = str(_attr(invoice, "subscription") or "")
+    subscription_id = _subscription_id_from_invoice(invoice)
     invoice_id = str(_attr(invoice, "id") or "")
     currency = str(_attr(invoice, "currency") or "")
     metadata = _invoice_metadata(invoice)
@@ -461,14 +481,106 @@ def _apply_invoice_paid(invoice: Any) -> None:
         _mark_converted(role, subject_id)
 
 
+def _customer_id(obj: Any) -> str:
+    customer = _attr(obj, "customer")
+    if isinstance(customer, str):
+        return customer
+    return str(_attr(customer, "id") or "")
+
+
+def _subscription_id_from_invoice(invoice: Any) -> str:
+    """Old invoices use invoice.subscription. Basil and later use parent.subscription_details."""
+    direct = _attr(invoice, "subscription")
+    if isinstance(direct, str) and direct:
+        return direct
+    nested = str(_attr(direct, "id") or "")
+    if nested:
+        return nested
+    parent = _attr(invoice, "parent") or {}
+    details = _attr(parent, "subscription_details") or {}
+    subscription = _attr(details, "subscription")
+    if isinstance(subscription, str) and subscription:
+        return subscription
+    return str(_attr(subscription, "id") or "")
+
+
+def _subscription_period(subscription: Any):
+    """Period timestamps moved onto subscription items in the basil API."""
+    start = _epoch(_attr(subscription, "current_period_start"))
+    end = _epoch(_attr(subscription, "current_period_end"))
+    if start or end:
+        return start, end
+    for item in _list_data(_attr(subscription, "items")):
+        start = _epoch(_attr(item, "current_period_start"))
+        end = _epoch(_attr(item, "current_period_end"))
+        if start or end:
+            return start, end
+    return None, None
+
+
+def _subscription_interval(subscription: Any, metadata: Any) -> str:
+    explicit = str(_attr(metadata, "interval") or "")
+    if explicit:
+        return explicit
+    for item in _list_data(_attr(subscription, "items")):
+        price = _attr(item, "price") or {}
+        recurring = _attr(price, "recurring") or {}
+        interval = _attr(recurring, "interval") or _attr(item, "interval")
+        if interval:
+            return str(interval)
+        plan = _attr(item, "plan") or {}
+        if _attr(plan, "interval"):
+            return str(_attr(plan, "interval"))
+    return "month"
+
+
 def _invoice_metadata(invoice: Any):
-    lines = _attr(invoice, "lines") or {}
-    data = _attr(lines, "data") or []
-    if data:
-        parent = _attr(data[0], "metadata")
-        if parent:
-            return parent
+    """Metadata lives on the invoice, the first line, or parent.subscription_details."""
+    parent = _attr(invoice, "parent") or {}
+    details = _attr(parent, "subscription_details") or {}
+    parent_meta = _attr(details, "metadata")
+    if parent_meta:
+        return parent_meta
+    for line in _list_data(_attr(invoice, "lines")):
+        line_meta = _attr(line, "metadata")
+        if line_meta:
+            return line_meta
     return _attr(invoice, "metadata") or {}
+
+
+def _line_price_id(line: Any) -> str:
+    """Old lines use price.id. Current lines use pricing.price_details.price."""
+    price = _attr(line, "price")
+    if isinstance(price, str) and price:
+        return price
+    nested = str(_attr(price, "id") or "")
+    if nested:
+        return nested
+    pricing = _attr(line, "pricing") or {}
+    details = _attr(pricing, "price_details") or {}
+    return str(_attr(details, "price") or "")
+
+
+def _list_data(container: Any) -> list:
+    if container is None:
+        return []
+    data = _attr(container, "data")
+    if isinstance(data, list):
+        return data
+    if isinstance(container, list):
+        return container
+    return []
+
+
+def _epoch(value: Any):
+    from datetime import datetime, timezone
+
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _price_id(lookup: str) -> str:
@@ -577,6 +689,8 @@ def _upsert_billing_row(role, subject_id, values, metadata) -> None:
             row.invite_code = str(_attr(metadata, "invite_code") or "") or row.invite_code
             row.campaign = str(_attr(metadata, "campaign") or "") or row.campaign
             row.channel = str(_attr(metadata, "channel") or "") or row.channel
+            if values.get("current_period_end") is not None:
+                row.current_period_end = values["current_period_end"]
         return
     db.memory_billing.append({"role": role, "subject_id": subject_id, **values})
 
