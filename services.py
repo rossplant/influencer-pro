@@ -48,6 +48,7 @@ def create_shop(
         raise HTTPException(status_code=422, detail=f"Unknown plan_tier '{tier}'")
     status = _default_plan_status(tier, plan_status)
     country_code = _country_code(country)
+    market_code = _market_code(market)
     currency_code = _currency_code(currency)
     if primary_category:
         validate_category_lists([primary_category])
@@ -63,7 +64,7 @@ def create_shop(
         is_underserved=bool(is_underserved),
         underserved_reason=(underserved_reason or None),
         country=country_code,
-        market=(market or None),
+        market=market_code,
         currency=currency_code,
         primary_category=(primary_category or None),
         products_enriched=0,
@@ -204,7 +205,7 @@ def persist_creator(record: dict) -> None:
             avg_views=record.get("avg_views"),
             engagement_rate=record.get("engagement_rate"),
             metrics_source=record.get("metrics_source") or "self_reported",
-            metrics_as_of=record.get("metrics_as_of"),
+            metrics_as_of=_aware_timestamp(record.get("metrics_as_of")),
             est_conversion_rate=record.get("est_conversion_rate"),
             avg_order_value=record.get("avg_order_value"),
             typical_price_band=record.get("typical_price_band"),
@@ -292,6 +293,7 @@ def save_enrichment(
         return None
     if category and category.strip():
         validate_category_lists([category.strip()])
+    subcategory = _subcategory_value(subcategory, category)
     brief_source = source if source in ("grok", "fallback") else "fallback"
     content = json.dumps({"talking_points": talking_points, "faqs": faqs})
     if db.configured():
@@ -576,6 +578,86 @@ def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
             values["currency"] = "USD"
         values.setdefault("source", "manual")
     return values
+
+
+def _aware_timestamp(value):
+    """Parse an ISO-8601 timestamp into a timezone-aware UTC datetime."""
+    from datetime import datetime, timezone
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="metrics_as_of must be an ISO-8601 timestamp",
+            ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _market_code(value: Optional[str]) -> Optional[str]:
+    """Uppercase a market code, using the same trim-and-validate style as country."""
+    import re
+
+    if value is None or not str(value).strip():
+        return None
+    code = str(value).strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_-]{0,31}", code):
+        raise HTTPException(
+            status_code=422,
+            detail="market must be 1-32 characters: a letter, then letters, digits, hyphens, or underscores",
+        )
+    return code
+
+
+def _subcategory_value(value: Optional[str], category: Optional[str]) -> Optional[str]:
+    """Use taxonomy subcategories when they exist; otherwise require a short slug."""
+    import re
+
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip().lower()
+    known = _taxonomy_subcategories()
+    if known:
+        if text not in known:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown subcategory '{text}'. Use a taxonomy subcategory.",
+            )
+        parent = known[text]
+        category_slug = (category or "").strip().lower()
+        if category_slug and parent and parent != category_slug:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Subcategory '{text}' does not belong to category '{category_slug}'.",
+            )
+        return text
+    if len(text) > 64 or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", text):
+        raise HTTPException(
+            status_code=422,
+            detail="subcategory must be a slug of up to 64 characters: lowercase letters, digits, and hyphens",
+        )
+    return text
+
+
+def _taxonomy_subcategories() -> dict:
+    """Map subcategory slug to its parent. Empty when the taxonomy has no children."""
+    if not db.configured():
+        return {}
+    with db.session_scope() as session:
+        rows = session.execute(
+            select(Category.slug, Category.parent_slug).where(Category.parent_slug.is_not(None))
+        ).all()
+    return {slug: parent for slug, parent in rows}
 
 
 def _country_code(value: Optional[str]) -> Optional[str]:

@@ -674,7 +674,7 @@ def test_market_category_and_lineage_schema(tmp_path, monkeypatch):
     assert shop.status_code == 200
     body = shop.json()
     assert body["country"] == "US"
-    assert body["market"] == "us"
+    assert body["market"] == "US"
     assert body["currency"] == "USD"
     assert body["primary_category"] == "home"
     assert client.post("/shops", json={"name": "Bad", "country": "USA"}).status_code == 422
@@ -863,3 +863,79 @@ def test_emit_sets_creator_and_item_milestones_once(tmp_path, monkeypatch):
         assert creator.first_post_at is not None
         events.emit("match_accepted", creator, "api")
         assert creator.first_match_accepted_at is not None
+
+
+def test_metrics_market_and_subcategory_validation(tmp_path, monkeypatch):
+    use_database(tmp_path, monkeypatch)
+    shop = client.post("/shops", json={"name": "Codes", "market": "us-east", "country": "gb"}).json()
+    assert shop["market"] == "US-EAST"
+    assert shop["country"] == "GB"
+    assert client.post("/shops", json={"name": "Bad market", "market": "not a market"}).status_code == 422
+
+    stamped = client.post(
+        "/onboard-influencer",
+        json={
+            **INFLUENCER,
+            "handle": "@stamped",
+            "metrics_as_of": "2026-11-15T01:02:03Z",
+        },
+    )
+    assert stamped.status_code == 200
+    with db.session_scope() as session:
+        creator = session.get(Creator, stamped.json()["id"])
+        assert creator.metrics_as_of is not None
+        assert creator.metrics_as_of.tzinfo is not None
+        assert creator.metrics_as_of.year == 2026
+    assert client.post(
+        "/onboard-influencer",
+        json={**INFLUENCER, "handle": "@badtime", "metrics_as_of": "yesterday"},
+    ).status_code == 422
+
+    ok = client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": shop["id"], "subcategory": "audio-gear"},
+    )
+    assert ok.status_code == 200
+    assert client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": shop["id"], "subcategory": "Not a slug!"},
+    ).status_code == 422
+
+    from models import Category
+
+    with db.session_scope() as session:
+        session.add(Category(slug="audio-gear", name="Audio gear", parent_slug="home"))
+    listed = client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": shop["id"], "category": "home", "subcategory": "audio-gear"},
+    )
+    assert listed.status_code == 200
+    refused = client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": shop["id"], "category": "home", "subcategory": "other-gear"},
+    )
+    assert refused.status_code == 422
+
+
+def test_stale_0001_with_rows_is_not_dropped(tmp_path, monkeypatch, caplog):
+    from sqlalchemy import create_engine, text
+
+    url = f"sqlite:///{tmp_path / 'populated.db'}"
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0001_initial')"))
+        connection.execute(text("CREATE TABLE shops (id VARCHAR(36) PRIMARY KEY, name VARCHAR(255))"))
+        connection.execute(text("INSERT INTO shops (id, name) VALUES ('s', 'Keep me')"))
+        connection.execute(text("CREATE TABLE events (id VARCHAR(36) PRIMARY KEY, event_name VARCHAR(64))"))
+    engine.dispose()
+    monkeypatch.setenv("DATABASE_URL", url)
+    with caplog.at_level(logging.WARNING, logger="plantr.db"):
+        with pytest.raises(RuntimeError, match="Refusing to drop"):
+            main.init_storage()
+    assert not any("Dropping an empty stale" in record.message for record in caplog.records)
+    check = create_engine(url)
+    with check.connect() as connection:
+        assert connection.execute(text("SELECT name FROM shops")).scalar() == "Keep me"
+    check.dispose()
+    monkeypatch.delenv("DATABASE_URL", raising=False)

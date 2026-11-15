@@ -17,6 +17,8 @@ delete them. api_requests stores no request or response bodies.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+
+from sqlalchemy.types import TypeDecorator
 from typing import Optional
 
 from sqlalchemy import (
@@ -42,6 +44,27 @@ JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UtcDateTime(TypeDecorator):
+    """Store UTC and always return a timezone-aware datetime, including on SQLite."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -118,7 +141,7 @@ class Creator(Base):
     avg_views: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     engagement_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     metrics_source: Mapped[str] = mapped_column(String(32), nullable=False, default="self_reported", server_default="self_reported")
-    metrics_as_of: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    metrics_as_of: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
     est_conversion_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     avg_order_value: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     typical_price_band: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)

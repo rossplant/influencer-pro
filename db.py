@@ -184,6 +184,12 @@ def _revision_0001_is_stale(inspector, tables: set[str]) -> bool:
     return False
 
 
+def _table_count(conn, table: str, tables: set[str]) -> int:
+    if table not in tables:
+        return 0
+    return int(conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0)
+
+
 def drop_stale_revision_0001(url: str) -> bool:
     """Drop Plantr tables when revision 0001_initial has the old column shape.
 
@@ -205,6 +211,17 @@ def drop_stale_revision_0001(url: str) -> bool:
             stale = _revision_0001_is_stale(inspector, tables)
             if not stale:
                 return False
+            shops = _table_count(conn, "shops", tables)
+            creators = _table_count(conn, "creators", tables)
+            if shops or creators:
+                raise RuntimeError(
+                    "Refusing to drop a stale 0001 schema because it already has data "
+                    f"(shops={shops}, creators={creators}). Nothing was dropped."
+                )
+            logger.warning(
+                "Dropping an empty stale 0001 schema so it can be recreated. "
+                "shops and creators are empty. Production has no tables and does not hit this path."
+            )
             if conn.dialect.name == "postgresql":
                 conn.execute(text("DROP TABLE IF EXISTS " + ", ".join(PLANTR_TABLES) + " CASCADE"))
             else:
