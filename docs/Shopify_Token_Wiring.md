@@ -14,7 +14,11 @@ SHOPIFY_STORE=your-store.myshopify.com
 SHOPIFY_TOKEN=shpat_xxxxx
 ```
 
-## 3. Add to main_expanded.py
+## 3. Current route, and a sketch that is not running
+
+`main.py` already exposes `POST /sync-shopify`. Missing `SHOPIFY_STORE` or `SHOPIFY_TOKEN` returns 501 with the message that Shopify sync isn't configured. With both set, it still returns 501 and says sync is not implemented. No products are fetched or saved.
+
+This sketch is not the handler in `main.py`. Do not expect `{"synced": ...}` from the live route.
 ```python
 import os
 import requests
@@ -51,7 +55,8 @@ def sync_shopify():
     return {"synced": len(enriched), "products": enriched[:5]}
 ```
 
-## 4. Test
+## 4. Test the stub
 ```bash
-curl -X POST http://localhost:8000/sync-shopify
+curl -X POST "$BASE/sync-shopify"
 ```
+`$BASE` is the API origin. A 501 body is the correct result until sync is implemented.

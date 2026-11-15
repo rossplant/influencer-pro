@@ -7,7 +7,7 @@
 # Run Qdrant locally (Docker):
 #   docker run -p 6333:6333 qdrant/qdrant
 #
-# This module can be imported into main_expanded.py
+# Sketch only. POST /semantic-search does not exist. main.py is the entry point.
 
 import os
 from typing import List, Dict, Any, Optional

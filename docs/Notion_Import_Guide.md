@@ -1,8 +1,10 @@
 # Notion Import Guide — Plant Schemas
 
-## 1. Product Database
+Notion is not the PlantR database. `main.py` does not read or write Notion. Phase 0 keeps influencer profiles in process memory. Postgres is the planned system of record. The steps below are only a scratch workspace if you want the field lists in Notion by hand.
 
-1. In Notion, create a new **Full-page database**.
+## 1. Product scratch page
+
+1. In Notion, create a scratch page. This page is not the PlantR database.
 2. Name it **Plant Products**.
 3. Add these properties (match `product_schema.json`):
 
@@ -25,9 +27,9 @@
 
 4. Import sample rows later from Shopify or manually.
 
-## 2. Influencer Database
+## 2. Influencer scratch page
 
-1. Create another full-page database named **Plant Influencers**.
+1. Create another scratch page named **Plant Influencers**. This page is not the PlantR database.
 2. Properties from `influencer_schema.json`:
 
 | Property Name              | Type          |
@@ -46,4 +48,4 @@
 - Use the matching logic in `matching_example.py` to score and store matches.
 
 ## 4. Next
-Once Notion is connected, we can sync these databases programmatically.
+Do not sync these pages from the API. A later Postgres schema should follow `product_schema.json` and `influencer_schema.json`.

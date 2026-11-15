@@ -1,4 +1,6 @@
 # Plant Influencer Enablement Platform
+
+Duplicate upload. Not the current description. See `docs/Plant_Influencer_Platform_Overview.md`. Notion is not the database.
 ## Product Data Schema, Influencer Profiles & AI Signal Layer
 
 **Brand:** Plant  
@@ -174,7 +176,7 @@ Max 100. Score ≥ 80 = “Assistant-ready”.
 ---
 
 ## Next Steps
-1. Paste product schema into Notion database.
+1. Keep product and influencer records out of Notion. Postgres is the planned system of record.
 2. Build simple matching function (Python example provided in code files).
 3. Connect Shopify later for product sync.
 4. Host enrichment service on GitHub + Vercel / Railway.

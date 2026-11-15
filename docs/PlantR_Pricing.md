@@ -30,19 +30,18 @@
 
 ## For Influencers
 
-### Free
-- Profile + basic matching
-- View top 10 matches
-- Standard commission rates from sellers
+Creators are free at launch. A launch creator can keep a profile, see matches, and earn standard commission rates from sellers. There is no creator subscription at launch.
 
-### Pro — $19 / month (or free with 5+ attributed sales/month)
+### Later options (not launch tiers)
+
+#### Creator Pro — US$19 / month
 - Unlimited matches
 - Priority in seller recommendations
 - Custom talking points generated for each product
 - Early access to new products
 - Performance analytics
 
-### Elite (invite only)
+#### Elite (invite only)
 - Exclusive brand partnerships
 - Higher commission share
 - Co-branded campaigns
@@ -56,5 +55,5 @@
 
 ## Positioning
 - Sellers pay for better AI signals and access to relevant influencers.
-- Influencers pay (or earn free) for better matches and content support.
+- Creators are free at launch. Creator Pro (US$19/mo) and Elite are later options, not launch tiers.
 - PlantR stays asset-light — no inventory.

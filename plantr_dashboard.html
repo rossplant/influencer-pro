@@ -119,7 +119,21 @@
   </div>
 
   <script>
-    const API = "http://localhost:8000";
+    function plantrApiBase() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get("api");
+      if (fromQuery) return fromQuery.replace(/\/$/, "");
+      if (window.PLANTR_API_BASE) return String(window.PLANTR_API_BASE).replace(/\/$/, "");
+      return window.location.origin;
+    }
+    function plantrHeaders() {
+      const headers = {"Content-Type": "application/json"};
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key") || window.PLANTR_API_KEY || "";
+      if (key) headers["X-API-Key"] = key;
+      return headers;
+    }
+    const API = plantrApiBase();
 
     document.getElementById("onboard").onsubmit = async (e) => {
       e.preventDefault();
@@ -132,13 +146,20 @@
         availability: form.get("availability")
       };
 
-      await fetch(`${API}/onboard-influencer`, {
+      const onboardRes = await fetch(`${API}/onboard-influencer`, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: plantrHeaders(),
         body: JSON.stringify(influencer)
       });
+      const matchesEl = document.getElementById("matches");
+      if (!onboardRes.ok) {
+        const err = await onboardRes.json().catch(() => ({}));
+        matchesEl.textContent = err.detail || `Onboarding failed (${onboardRes.status})`;
+        document.getElementById("results-card").classList.remove("hidden");
+        return;
+      }
 
-      // Demo products for matching (in production these come from /sync-shopify or Notion)
+      // Demo products. Phase 0 has no product catalog. Shopify sync is not implemented.
       const demoProducts = [
         { title: "Snake Plant – Low Light", category: "Houseplants", target_audience: ["beginners"], occasions: ["home decor"], care_instructions: "Water every 2-3 weeks" },
         { title: "Pothos Golden", category: "Houseplants", target_audience: ["beginners", "gift buyers"], occasions: ["home office"], care_instructions: "Water when dry" },
@@ -147,12 +168,16 @@
 
       const matchRes = await fetch(`${API}/match`, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: plantrHeaders(),
         body: JSON.stringify({ influencer, products: demoProducts })
       });
       const data = await matchRes.json();
+      if (!matchRes.ok) {
+        matchesEl.textContent = data.detail || `Match failed (${matchRes.status})`;
+        document.getElementById("results-card").classList.remove("hidden");
+        return;
+      }
 
-      const matchesEl = document.getElementById("matches");
       matchesEl.innerHTML = data.matches.map(m => `
         <div class="match">
           <strong>${m.product.title}</strong>

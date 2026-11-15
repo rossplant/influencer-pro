@@ -1,6 +1,6 @@
 # Improved Matching Algorithm — PlantR
 
-Replace the `match_score` function in main_expanded.py with this version.
+Proposed replacement for `score_match` in `main.py`. Phase 0 does not use this scorer. `main.py` is the entry point. Older drafts are in `archive/`, and there is no `main_expanded.py`.
 
 ```python
 def match_score(product: Dict[str, Any], influencer: Dict[str, Any]) -> float:
