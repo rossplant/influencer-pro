@@ -65,6 +65,19 @@ class FakeSubscriptions:
         return _Obj(id=subscription_id)
 
 
+class FakePromotionCodes:
+    def list(self, params):
+        code = str(params.get("code") or "")
+        if not params.get("active"):
+            return _Obj(data=[], has_more=False)
+        known = {
+            "FOUNDING50": _Obj(id="promo_founding", metadata={"campaign": "founding_curators"}, coupon="founding_curator_50_12mo"),
+            "PILOTGROWTH": _Obj(id="promo_pilot", metadata={"campaign": "seller_pilot"}, coupon="seller_growth_50_3mo"),
+        }
+        match = known.get(code.upper())
+        return _Obj(data=[match] if match else [], has_more=False)
+
+
 class FakeStripe:
     def __init__(self):
         self.checkout = _Obj(sessions=FakeCheckout())
@@ -72,6 +85,7 @@ class FakeStripe:
         self.prices = FakePrices()
         self.customers = FakeCustomers()
         self.subscriptions = FakeSubscriptions()
+        self.promotion_codes = FakePromotionCodes()
 
 
 def _admin(monkeypatch):
@@ -97,6 +111,7 @@ def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_nope")
     assert stripe_billing.configured() is False
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://pay.example")
     fake = FakeStripe()
     monkeypatch.setattr(stripe_billing, "client", lambda: fake)
     from tests.test_admin import EMAIL, PASSWORD, _cookie_header, _login, _setup
@@ -122,7 +137,7 @@ def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
     token = billing.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     response = client.post(
         "/seller/billing/checkout",
-        data={"csrf_token": token, "tier": "growth", "interval": "year", "promo_code": "FOUNDING50"},
+        data={"csrf_token": token, "tier": "growth", "interval": "year", "promo_code": "PILOTGROWTH"},
         headers=cookie,
         follow_redirects=False,
     )
@@ -132,9 +147,61 @@ def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
     assert created["mode"] == "subscription"
     assert created["line_items"][0]["price"] == "price_test"
     assert created["metadata"]["tier"] == "growth"
-    assert created["metadata"]["promo_code"] == "FOUNDING50"
-    assert created["metadata"]["campaign"] == "founding_curators"
+    assert created["metadata"]["promo_code"] == "PILOTGROWTH"
+    assert created["metadata"]["campaign"] == "seller_pilot"
+    assert created["discounts"] == [{"promotion_code": "promo_pilot"}]
+    assert "allow_promotion_codes" not in created
+    assert created["success_url"].startswith("https://pay.example/seller/billing")
+    assert created["cancel_url"].startswith("https://pay.example/seller/billing")
     assert "sk_" not in json.dumps(created)
+    monkeypatch.delenv("PUBLIC_BASE_URL")
+    wrong = client.post(
+        "/seller/billing/checkout",
+        data={"csrf_token": token, "tier": "growth", "interval": "month", "promo_code": "FOUNDING50"},
+        headers=cookie,
+        follow_redirects=False,
+    )
+    assert wrong.status_code == 422
+    assert "does not apply" in wrong.json()["detail"]
+    unknown = client.post(
+        "/seller/billing/checkout",
+        data={"csrf_token": token, "tier": "growth", "interval": "month", "promo_code": "NOPE"},
+        headers=cookie,
+        follow_redirects=False,
+    )
+    assert unknown.status_code == 422
+    assert "not recognised" in unknown.json()["detail"]
+    open_codes = client.post(
+        "/seller/billing/checkout",
+        data={"csrf_token": token, "tier": "growth", "interval": "month"},
+        headers={"Cookie": cookie["Cookie"], "X-Forwarded-Proto": "https"},
+        follow_redirects=False,
+    )
+    assert open_codes.status_code == 303
+    opened = fake.checkout.sessions.created[-1]
+    assert opened["allow_promotion_codes"] is True
+    assert "discounts" not in opened
+    assert opened["success_url"].startswith("https://testserver/seller/billing")
+
+
+def test_creator_checkout_resolves_founding_code(monkeypatch):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
+    fake = FakeStripe()
+    monkeypatch.setattr(stripe_billing, "client", lambda: fake)
+    monkeypatch.setattr(stripe_billing, "_portal_email", lambda role, subject_id: "creator@example.com")
+    url = stripe_billing.checkout(
+        role="creator",
+        subject_id="creator-1",
+        tier="curator",
+        interval="month",
+        success_url="https://pay.example/creator/billing",
+        cancel_url="https://pay.example/creator/billing",
+        promo_code="FOUNDING50",
+    )
+    assert url == "https://checkout.stripe.test/cs_test"
+    created = fake.checkout.sessions.created[0]
+    assert created["discounts"] == [{"promotion_code": "promo_founding"}]
+    assert "allow_promotion_codes" not in created
 
 
 def test_subscribe_webhook_is_idempotent(monkeypatch):

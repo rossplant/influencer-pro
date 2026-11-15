@@ -21,7 +21,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ```bash
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port $PORT
+uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
 ```
 
 Set `PORT=8000` when you run that command locally. The default xAI model is `grok-4.3`.
@@ -46,6 +46,7 @@ Copy `.env.example`. `main.py` reads these variables:
 | `RATE_LIMIT_REQUESTS` | Requests allowed per window for each valid API key, or per client IP when the request has no valid key. Defaults to `30`. |
 | `RATE_LIMIT_WINDOW_SECONDS` | Length of that window. Defaults to `60`. |
 | `DATABASE_URL` | Postgres URL. `postgres://` and `postgresql://` are rewritten to `postgresql+psycopg://`. When unset, the API logs a warning and keeps the in-memory fallback so it can boot before Postgres is attached. The URL is not logged. |
+| `PUBLIC_BASE_URL` | Public https origin, with no trailing path. Checkout, the billing portal, and tracking links use it. Behind Railway, set this to the public site URL. |
 | `SHOPIFY_STORE` and `SHOPIFY_TOKEN` | Both must be set or `/sync-shopify` reports that Shopify is not configured. The sync itself is not implemented in this version. |
 | `NOTION_TOKEN`, `NOTION_PRODUCTS_DB`, `NOTION_INFLUENCERS_DB` | Optional and unused. `main.py` does not read them. Notion is not the database. |
 

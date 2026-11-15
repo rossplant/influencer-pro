@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import auth
+import billing_config
 import pilots
 import portal
 import services
@@ -340,9 +341,9 @@ async def _checkout(request: Request, role: str):
     session = portal.require_seller(request) if role == "seller" else portal.require_creator(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    base = str(request.base_url).rstrip("/")
     path = "/seller/billing" if role == "seller" else "/creator/billing"
     context = stripe_billing.account_context(role, session["subject_id"])
+    base = billing_config.public_base_url(request)
     url = stripe_billing.checkout(
         role=role,
         subject_id=session["subject_id"],
@@ -361,7 +362,7 @@ async def _portal(request: Request, role: str):
     session = portal.require_seller(request) if role == "seller" else portal.require_creator(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    base = str(request.base_url).rstrip("/")
+    base = billing_config.public_base_url(request)
     path = "/seller/billing" if role == "seller" else "/creator/billing"
     url = stripe_billing.portal_session(role=role, subject_id=session["subject_id"], return_url=f"{base}{path}")
     return RedirectResponse(url, status_code=303)

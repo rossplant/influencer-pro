@@ -292,6 +292,16 @@ def feature_enabled(audience: str, tier: str, feature: str) -> bool:
     return feature in spec.get("features", ())
 
 
+def public_base_url(request) -> str:
+    """Absolute site origin. PUBLIC_BASE_URL wins. Otherwise use the request, which is https behind the proxy."""
+    configured = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    if request is None:
+        return ""
+    return str(request.base_url).rstrip("/")
+
+
 def price_label(cents: int) -> str:
     if cents <= 0:
         return "Included with your invite"

@@ -112,17 +112,19 @@ def checkout(
     lookup = billing_config.lookup_key(role, tier, interval)
     if not lookup:
         raise HTTPException(status_code=422, detail="That plan does not have a Stripe price")
+    promotion_id = _resolve_promotion_code(promo_code, role) if promo_code.strip() else ""
     customer_id = ensure_customer(role, subject_id, email=email, name=email)
     price_id = _price_id(lookup)
+    known = billing_config.PROMOTION_CODES.get(promo_code.strip().upper(), {})
     metadata = {
         "role": role,
         "subject_id": subject_id,
         "tier": tier,
         "interval": interval,
-        "promo_code": promo_code,
+        "promo_code": promo_code.strip(),
         "invite_code": invite_code,
-        "campaign": campaign or billing_config.PROMOTION_CODES.get(promo_code, {}).get("campaign", ""),
-        "channel": channel or billing_config.PROMOTION_CODES.get(promo_code, {}).get("channel", ""),
+        "campaign": campaign or known.get("campaign", ""),
+        "channel": channel or known.get("channel", ""),
     }
     subscription_data = {"metadata": metadata}
     if trial_end:
@@ -138,8 +140,8 @@ def checkout(
         "metadata": metadata,
         "subscription_data": subscription_data,
     }
-    if promo_code:
-        payload["discounts"] = [{"promotion_code": promo_code}]
+    if promotion_id:
+        payload["discounts"] = [{"promotion_code": promotion_id}]
     else:
         payload["allow_promotion_codes"] = True
     session = client().checkout.sessions.create(payload)
@@ -328,6 +330,56 @@ def account_context(role: str, subject_id: str) -> dict:
         "attribution_first": row.get("attribution_first") or {},
         "attribution_last": row.get("attribution_last") or {},
     }
+
+
+def _resolve_promotion_code(code: str, role: str) -> str:
+    """Turn a customer-facing code such as FOUNDING50 into the promo_ id Stripe Checkout requires."""
+    cleaned = code.strip()
+    try:
+        listed = client().promotion_codes.list({"code": cleaned, "active": True, "limit": 1})
+    except Exception as exc:
+        logger.info("promotion code lookup failed")
+        raise HTTPException(status_code=422, detail="That promotion code could not be checked. Try again.") from exc
+    rows = _promo_rows(listed)
+    if not rows:
+        raise HTTPException(status_code=422, detail="That promotion code is not recognised or is no longer active.")
+    promo = rows[0]
+    expected = _promo_role(cleaned, promo)
+    if expected and expected != role:
+        raise HTTPException(status_code=422, detail="That promotion code does not apply to this account.")
+    promo_id = str(_attr(promo, "id") or "")
+    if not promo_id:
+        raise HTTPException(status_code=422, detail="That promotion code could not be used.")
+    return promo_id
+
+
+def _promo_rows(result) -> list:
+    if result is None:
+        return []
+    if hasattr(result, "data") and result.data is not None:
+        return list(result.data)
+    if isinstance(result, dict):
+        return list(result.get("data") or [])
+    return []
+
+
+def _promo_role(code: str, promo) -> str:
+    spec = billing_config.PROMOTION_CODES.get(code.strip().upper())
+    campaign = ""
+    if spec:
+        campaign = spec.get("campaign") or ""
+    metadata = _attr(promo, "metadata") or {}
+    campaign = campaign or str(_attr(metadata, "campaign") or "")
+    if campaign == "founding_curators":
+        return "creator"
+    if campaign == "seller_pilot":
+        return "seller"
+    coupon = str(_attr(promo, "coupon") or "")
+    if "founding_curator" in coupon:
+        return "creator"
+    if "seller_growth" in coupon:
+        return "seller"
+    return ""
 
 
 def _period_label(interval: str) -> str:
