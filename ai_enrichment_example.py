@@ -1,5 +1,5 @@
 """
-Plant AI Enrichment Example
+Plantr enrichment example
 Simple scoring + enrichment skeleton for TikTok Shopping Assistant readiness.
 """
 

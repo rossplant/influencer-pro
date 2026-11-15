@@ -1,16 +1,18 @@
-# Notion Connection Guide — PlantR
+# Notion Connection Guide — Plantr
+
+Duplicate upload. Not the current API. `main.py` does not read or write Notion. Notion is not the database. Postgres is the planned system of record. See `docs/Influencer_Onboarding_Flow.md`.
 
 ## 1. Create Notion Integration
 1. Go to https://www.notion.so/my-integrations
 2. Click **New integration**
-3. Name: PlantR
+3. Name: Plantr
 4. Capabilities: Read content, Update content, Insert content
 5. Copy the **Internal Integration Token** (starts with `secret_`)
 
 ## 2. Share Databases
-1. Open your **Plant Products** database
-2. Click ••• → Connections → Add connection → select PlantR
-3. Repeat for **Plant Influencers** database
+1. Open your **Plantr products** scratch page
+2. Click ••• → Connections → Add connection → select Plantr
+3. Repeat for the **Plantr influencers** scratch page
 4. Copy each database ID from the URL (the long string after the last `/` and before `?`)
 
 ## 3. Environment Variables
@@ -21,7 +23,7 @@ NOTION_PRODUCTS_DB=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_INFLUENCERS_DB=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-## 4. Code (add to main_expanded.py)
+## 4. Old sketch (not in `main.py`, and `main_expanded.py` is not the entry point)
 ```python
 from notion_client import Client
 import os

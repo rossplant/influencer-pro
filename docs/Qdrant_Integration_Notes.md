@@ -1,4 +1,4 @@
-# Qdrant Integration Notes — plantr-collab
+# Qdrant Integration Notes — Plantr
 
 ## Why Qdrant
 - Fast vector search with strong metadata filtering
@@ -20,7 +20,9 @@
    QDRANT_URL=http://localhost:6333
    ```
 
-## Plug into main_expanded.py
+## Future hook (not a current endpoint)
+
+`POST /semantic-search` does not exist. `main.py` is the entry point. This sketch is not wired in.
 ```python
 from plantr_qdrant_sketch import upsert_products, semantic_search
 

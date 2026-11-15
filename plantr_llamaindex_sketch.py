@@ -1,10 +1,10 @@
-# plantr-collab — Minimal LlamaIndex RAG Sketch
+# Plantr — Minimal LlamaIndex RAG Sketch
 # Adds product knowledge retrieval + grounded talking-point generation
 #
 # Install:
 #   pip install llama-index llama-index-embeddings-huggingface
 #
-# This is a drop-in module. You can import the functions into main_expanded.py
+# Sketch only. POST /retrieve does not exist. main.py is the entry point.
 # or run this file standalone for testing.
 
 from typing import List, Dict, Any, Optional

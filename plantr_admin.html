@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>PlantR Admin</title>
+  <title>Plantr Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: system-ui, sans-serif; background: #f7faf8; margin: 0; padding: 24px; color: #1a2e22; }
@@ -17,10 +17,10 @@
 </head>
 <body>
   <div class="container">
-    <h1>PlantR Admin</h1>
+    <h1>Plantr Admin</h1>
     <div class="card">
       <h2>Shopify Sync</h2>
-      <p>Pull products from Shopify, enrich, and save to Notion.</p>
+      <p>Calls <code>POST /sync-shopify</code>. Sync is not implemented, and nothing is saved to Notion.</p>
       <button onclick="syncShopify()">Sync Now</button>
       <div id="sync-status" class="status"></div>
       <pre id="sync-result"></pre>
@@ -38,27 +38,45 @@
   </div>
 
   <script>
-    const API = "http://localhost:8000"; // change to your Railway URL after deploy
+    function plantrApiBase() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get("api");
+      if (fromQuery) return fromQuery.replace(/\/$/, "");
+      if (window.PLANTR_API_BASE) return String(window.PLANTR_API_BASE).replace(/\/$/, "");
+      return window.location.origin;
+    }
+    function plantrHeaders() {
+      const headers = {"Content-Type": "application/json"};
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key") || window.PLANTR_API_KEY || "";
+      if (key) headers["X-API-Key"] = key;
+      return headers;
+    }
+    const API = plantrApiBase();
 
     async function syncShopify() {
       document.getElementById("sync-status").textContent = "Syncing...";
-      const r = await fetch(`${API}/sync-shopify`, { method: "POST" });
-      const data = await r.json();
-      document.getElementById("sync-status").textContent = `Synced ${data.synced} products`;
+      const r = await fetch(`${API}/sync-shopify`, { method: "POST", headers: plantrHeaders() });
+      const data = await r.json().catch(() => ({}));
       document.getElementById("sync-result").textContent = JSON.stringify(data, null, 2);
+      if (!r.ok) {
+        document.getElementById("sync-status").textContent = data.detail || `Sync failed (${r.status})`;
+        return;
+      }
+      document.getElementById("sync-status").textContent = `Synced ${data.synced} products`;
     }
 
     async function testEnrich() {
       const r = await fetch(`${API}/enrich`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: plantrHeaders(),
         body: JSON.stringify({ title: "Test Snake Plant", description_short: "Easy care", images: ["a","b","c"] })
       });
       document.getElementById("enrich-result").textContent = JSON.stringify(await r.json(), null, 2);
     }
 
     async function checkStatus() {
-      const r = await fetch(API);
+      const r = await fetch(API, { headers: plantrHeaders() });
       document.getElementById("status-result").textContent = JSON.stringify(await r.json(), null, 2);
     }
   </script>

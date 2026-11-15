@@ -1,5 +1,5 @@
 """
-Simple influencer ↔ product matching example for Plant.
+Simple influencer ↔ product matching example for Plantr.
 """
 
 from typing import Dict, List, Any

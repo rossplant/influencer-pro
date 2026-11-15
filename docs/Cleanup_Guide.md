@@ -1,6 +1,8 @@
-# Cleanup Duplicate Files — PlantR Repo
+# Cleanup Duplicate Files — Plantr repo
 
-The repo has several duplicate files from uploads. Clean them up as follows:
+Applied in the Phase 0 cleanup. `main.py` is the only API entry point. Earlier drafts live in `archive/`. Planning notes live in `docs/`, and duplicate uploads of those notes live in `docs/archive/`. Do not run the commands below. They describe an older upload cleanup and would remove files this repo now keeps. The original checklist is below.
+
+The repo had several duplicate files from uploads. Clean them up as follows:
 
 ## Files to delete (keep the newest / best version)
 

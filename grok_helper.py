@@ -4,7 +4,7 @@ import json
 from typing import List, Dict, Any
 
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
-GROK_MODEL = os.getenv("GROK_MODEL") or "grok-2-latest"
+GROK_MODEL = os.getenv("GROK_MODEL") or "grok-4.3"
 GROK_URL = "https://api.x.ai/v1/chat/completions"
 
 def generate_with_grok(product: Dict[str, Any]) -> Dict[str, Any]:
@@ -20,7 +20,8 @@ def generate_with_grok(product: Dict[str, Any]) -> Dict[str, Any]:
         "faqs": [
             {"question": "Is it pet safe?", "answer": "Check the product details."},
             {"question": "How often to water?", "answer": "See care instructions."}
-        ]
+        ],
+        "source": "fallback",
     }
 
     if not GROK_API_KEY:
@@ -39,6 +40,7 @@ Return ONLY valid JSON:
   ]
 }}"""
 
+    resp = None
     try:
         resp = requests.post(
             GROK_URL,
@@ -52,11 +54,26 @@ Return ONLY valid JSON:
             timeout=20
         )
         resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        payload = resp.json()
+        usage = payload.get("usage")
+        print(f"Grok usage: {json.dumps(usage)}")
+        content = payload["choices"][0]["message"]["content"]
         if "```" in content:
             content = content.split("```")[1].replace("json", "").strip()
         data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("Grok response was not a JSON object")
+        data["source"] = "grok"
         return data
     except Exception as e:
-        print(f"Grok failed: {e}")
+        body = ""
+        if resp is not None:
+            try:
+                body = resp.text[:500]
+            except Exception:
+                body = ""
+        if body:
+            print(f"Grok failed: {e} | {body}")
+        else:
+            print(f"Grok failed: {e}")
         return fallback

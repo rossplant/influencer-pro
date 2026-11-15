@@ -1,4 +1,4 @@
-# LlamaIndex Integration Notes — plantr-collab
+# LlamaIndex Integration Notes — Plantr
 
 ## What this sketch provides
 - Product indexing with metadata (title, category, price, signal_score)
@@ -6,7 +6,9 @@
 - Grounded talking-point helper
 - Lightweight local embeddings (BAAI/bge-small)
 
-## How to plug into main_expanded.py
+## Future hook (not a current endpoint)
+
+`POST /retrieve` does not exist. `main.py` is the entry point. This sketch is not wired in. When it is, the steps would be:
 1. Add to requirements.txt:
    ```
    llama-index

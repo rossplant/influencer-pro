@@ -1,4 +1,4 @@
-# PlantR API — Notion + Shopify integrated
+# Plantr API — Notion + Shopify integrated
 # Run: uvicorn main_expanded:app --reload
 # Requires .env with NOTION_TOKEN, NOTION_PRODUCTS_DB, NOTION_INFLUENCERS_DB,
 # SHOPIFY_STORE, SHOPIFY_TOKEN
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="PlantR API", version="0.3")
+app = FastAPI(title="Plantr API", version="0.3")
 
 # Notion
 notion = None
@@ -151,7 +151,7 @@ def map_shopify_to_plant(sp):
 
 @app.get("/")
 def root():
-    return {"status": "PlantR API running", "version": "0.3"}
+    return {"status": "Plantr API running", "version": "0.3"}
 
 @app.post("/enrich", response_model=EnrichResponse)
 def enrich(product: ProductIn):

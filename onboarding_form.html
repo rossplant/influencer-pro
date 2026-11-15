@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Plant — Influencer Onboarding</title>
+  <title>Plantr — Influencer Onboarding</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
     label { display: block; margin-top: 12px; font-weight: 600; }
@@ -12,7 +12,7 @@
   </style>
 </head>
 <body>
-  <h1>Plant Influencer Onboarding</h1>
+  <h1>Plantr onboarding</h1>
   <form id="onboard">
     <label>Handle
       <input name="handle" placeholder="@plantlover" required>
@@ -38,6 +38,22 @@
   <div id="result" class="result" style="display:none;"></div>
 
   <script>
+    function plantrApiBase() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get("api");
+      if (fromQuery) return fromQuery.replace(/\/$/, "");
+      if (window.PLANTR_API_BASE) return String(window.PLANTR_API_BASE).replace(/\/$/, "");
+      return window.location.origin;
+    }
+    function plantrHeaders() {
+      const headers = {"Content-Type": "application/json"};
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key") || window.PLANTR_API_KEY || "";
+      if (key) headers["X-API-Key"] = key;
+      return headers;
+    }
+    const API = plantrApiBase();
+
     document.getElementById("onboard").onsubmit = async (e) => {
       e.preventDefault();
       const form = new FormData(e.target);
@@ -48,9 +64,9 @@
         preferred_promotion_styles: form.get("preferred_promotion_styles").split(",").map(s => s.trim()).filter(Boolean),
         availability: form.get("availability")
       };
-      const res = await fetch("http://localhost:8000/onboard-influencer", {
+      const res = await fetch(`${API}/onboard-influencer`, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: plantrHeaders(),
         body: JSON.stringify(payload)
       });
       const data = await res.json();

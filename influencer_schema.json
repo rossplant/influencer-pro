@@ -1,6 +1,6 @@
 {
   "influencer_schema_version": "1.0",
-  "description": "Influencer profile for targeted product matching in Plant app",
+  "description": "Influencer profile for targeted product matching in Plantr",
   "fields": {
     "influencer_id": {"type": "string", "required": true},
     "handle": {"type": "string", "required": true},

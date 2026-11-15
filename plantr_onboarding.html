@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>PlantR — Influencer Onboarding</title>
+  <title>Plantr — Influencer Onboarding</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
@@ -83,7 +83,7 @@
 </head>
 <body>
   <div class="container">
-    <div class="logo">PlantR</div>
+    <div class="logo">Plantr</div>
     <div class="tagline">Match products to your expertise. Grow with better signals.</div>
 
     <form id="onboard">
@@ -106,13 +106,29 @@
           <option value="paused">Paused</option>
         </select>
       </label>
-      <button type="submit">Join PlantR & Get Matches</button>
+      <button type="submit">Join Plantr & Get Matches</button>
     </form>
 
     <div id="result" class="result"></div>
   </div>
 
   <script>
+    function plantrApiBase() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get("api");
+      if (fromQuery) return fromQuery.replace(/\/$/, "");
+      if (window.PLANTR_API_BASE) return String(window.PLANTR_API_BASE).replace(/\/$/, "");
+      return window.location.origin;
+    }
+    function plantrHeaders() {
+      const headers = {"Content-Type": "application/json"};
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key") || window.PLANTR_API_KEY || "";
+      if (key) headers["X-API-Key"] = key;
+      return headers;
+    }
+    const API = plantrApiBase();
+
     document.getElementById("onboard").onsubmit = async (e) => {
       e.preventDefault();
       const form = new FormData(e.target);
@@ -123,9 +139,9 @@
         preferred_promotion_styles: form.get("preferred_promotion_styles").split(",").map(s => s.trim()).filter(Boolean),
         availability: form.get("availability")
       };
-      const res = await fetch("http://localhost:8000/onboard-influencer", {
+      const res = await fetch(`${API}/onboard-influencer`, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: plantrHeaders(),
         body: JSON.stringify(payload)
       });
       const data = await res.json();
