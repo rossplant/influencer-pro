@@ -55,12 +55,12 @@ def generate_with_grok(product: Dict[str, Any]) -> Dict[str, Any]:
     fallback = {
         "talking_points": [
             f"Meet {title}",
-            "Easy care and beginner friendly",
-            "Great for apartments and small spaces",
+            "Why it fits this creator's audience",
+            "The claim to show, and where it comes from",
         ],
         "faqs": [
-            {"question": "Is it pet safe?", "answer": "Check the product details."},
-            {"question": "How often to water?", "answer": "See care instructions."},
+            {"question": "Who is it for?", "answer": "See the product details."},
+            {"question": "What should I check before I post?", "answer": "Read each claim and its source."},
         ],
         "source": "fallback",
     }
@@ -70,7 +70,7 @@ def generate_with_grok(product: Dict[str, Any]) -> Dict[str, Any]:
         _log_grok(fallback["_obs"])
         return fallback
 
-    prompt = f"""Create short influencer talking points and FAQs for this plant product.
+    prompt = f"""Create short influencer talking points and FAQs for this product.
 Product: {title}
 Description: {desc}
 

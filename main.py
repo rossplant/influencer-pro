@@ -49,9 +49,6 @@ PromotionStyle = Literal[
 ExpertiseLevel = Literal["beginner", "intermediate", "expert"]
 Availability = Literal["open", "selective", "paused"]
 CommissionPreference = Literal["standard", "higher_for_exclusives"]
-LightLevel = Literal["low", "medium", "bright"]
-
-
 class AudienceDemographics(BaseModel):
     age_range: Optional[str] = None
     gender_skew: Optional[str] = None
@@ -75,6 +72,15 @@ class InfluencerIn(BaseModel):
     average_engagement_rate: Optional[float] = None
     past_categories: List[str] = Field(default_factory=list)
     restrictions: List[str] = Field(default_factory=list)
+    excluded_categories: List[str] = Field(default_factory=list)
+    excluded_claims: List[str] = Field(default_factory=list)
+    active_categories: List[str] = Field(default_factory=list)
+    desired_categories: List[str] = Field(default_factory=list)
+    avg_views: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    est_conversion_rate: Optional[float] = None
+    avg_order_value: Optional[float] = None
+    typical_price_band: Optional[Dict[str, Any]] = None
     availability: Availability = "open"
     commission_preference: Optional[CommissionPreference] = None
     platforms: List[str] = Field(default_factory=list)
@@ -93,16 +99,17 @@ class ProductIn(BaseModel):
     description_short: str = ""
     description_long: str = ""
     category: str = ""
+    subcategory: Optional[str] = None
     images: List[str] = []
     shop_id: Optional[str] = None
     product_id: Optional[str] = None
     creator_id: Optional[str] = None
-    pet_safe: Optional[bool] = None
-    light: Optional[LightLevel] = None
-    care_level: Optional[str] = None
-    size: Optional[str] = None
     price: Optional[float] = None
+    currency: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    attributes: Dict[str, Any] = Field(default_factory=dict)
     claims: List[ClaimIn] = Field(default_factory=list)
+    commission_rate: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class EnrichResponse(BaseModel):
@@ -112,6 +119,11 @@ class EnrichResponse(BaseModel):
     enriched: Dict[str, Any]
     source: Literal["grok", "fallback"]
     product_id: Optional[str] = None
+    brief_id: Optional[str] = None
+
+
+class BriefSentIn(BaseModel):
+    actor: Literal["system", "operator", "api"] = "api"
 
 
 class MatchIn(BaseModel):
@@ -127,6 +139,8 @@ class ShopIn(BaseModel):
     plan_tier: Optional[str] = None
     plan_status: Optional[str] = None
     is_pilot: bool = False
+    is_underserved: bool = False
+    underserved_reason: Optional[str] = None
 
 
 def _int_env(name: str, default: int) -> int:
@@ -246,6 +260,10 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
         record.pop("platforms", None)
     if not record.get("follower_band"):
         record.pop("follower_band", None)
+    if not record.get("excluded_categories"):
+        record.pop("excluded_categories", None)
+    if not record.get("excluded_claims"):
+        record.pop("excluded_claims", None)
     return record
 
 
@@ -307,6 +325,13 @@ class RequestLogMiddleware:
 
         started = time.perf_counter()
         status_code = 500
+        request_id = str(uuid.uuid4())
+        token = db.request_id_var.set(request_id)
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["request_id"] = request_id
+        else:
+            setattr(state, "request_id", request_id)
 
         async def send_wrapper(message):
             nonlocal status_code
@@ -324,6 +349,7 @@ class RequestLogMiddleware:
             record = {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "kind": "request",
+                "request_id": request_id,
                 "route": route,
                 "method": method,
                 "status": status_code,
@@ -338,10 +364,14 @@ class RequestLogMiddleware:
                 status=status_code,
                 latency_ms=latency_ms,
                 api_key_id=label,
+                request_id=request_id,
                 grok_tokens_prompt=_state_value(scope, "grok_tokens_prompt"),
                 grok_tokens_completion=_state_value(scope, "grok_tokens_completion"),
                 grok_fallback=_state_value(scope, "grok_fallback"),
+                grok_latency_ms=_state_value(scope, "grok_latency_ms"),
+                grok_model=_state_value(scope, "grok_model"),
             )
+            db.request_id_var.reset(token)
 
 
 def _header(scope, name: str) -> str:
@@ -386,7 +416,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plantr API", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Plantr Collab API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -410,12 +440,14 @@ def _attach_grok_obs(request: Request, grok: Dict[str, Any]) -> None:
     request.state.grok_tokens_prompt = obs.get("prompt_tokens")
     request.state.grok_tokens_completion = obs.get("completion_tokens")
     request.state.grok_fallback = obs.get("fallback")
+    request.state.grok_latency_ms = obs.get("latency_ms")
+    request.state.grok_model = obs.get("model")
 
 
 @app.get("/")
 def root():
     return {
-        "status": "Plantr API running",
+        "status": "Plantr Collab API running",
         "version": APP_VERSION,
         "grok_enabled": bool(os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")),
     }
@@ -449,6 +481,8 @@ def create_shop(body: ShopIn, _: None = Depends(guard_request)):
         plan_tier=body.plan_tier,
         plan_status=body.plan_status,
         is_pilot=body.is_pilot,
+        is_underserved=body.is_underserved,
+        underserved_reason=body.underserved_reason,
     )
 
 
@@ -484,9 +518,9 @@ def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request
     source = grok.get("source", "fallback")
     if source not in ("grok", "fallback"):
         source = "fallback"
-    saved_id = None
+    saved = None
     if product.shop_id or product.product_id:
-        saved_id = services.save_enrichment(
+        saved = services.save_enrichment(
             shop_id=product.shop_id,
             product_id=product.product_id,
             creator_id=product.creator_id,
@@ -494,13 +528,14 @@ def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request
             description_short=product.description_short,
             description_long=product.description_long,
             category=product.category,
+            subcategory=product.subcategory,
             images=product.images,
-            pet_safe=product.pet_safe,
-            light=product.light,
-            care_level=product.care_level,
-            size=product.size,
             price=product.price,
+            currency=product.currency,
+            tags=product.tags,
+            attributes=product.attributes,
             claims=[claim.model_dump() for claim in product.claims],
+            commission_rate=product.commission_rate,
             fields_set=set(product.model_fields_set),
             source=source,
             talking_points=grok.get("talking_points", []),
@@ -513,9 +548,15 @@ def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request
         "enriched": data,
         "source": source,
     }
-    if saved_id:
-        body["product_id"] = saved_id
+    if saved:
+        body["product_id"] = saved["product_id"]
+        body["brief_id"] = saved["brief_id"]
     return body
+
+
+@app.post("/briefs/{brief_id}/sent")
+def mark_brief_sent(brief_id: str, body: BriefSentIn, _: None = Depends(guard_request)):
+    return services.mark_brief_sent(brief_id, body.actor)
 
 
 @app.post("/match")

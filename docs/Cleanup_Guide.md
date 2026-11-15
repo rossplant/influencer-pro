@@ -1,4 +1,4 @@
-# Cleanup Duplicate Files — Plantr repo
+# Cleanup notes — Plantr Collab repo
 
 Applied in the Phase 0 cleanup. `main.py` is the only API entry point. Earlier drafts live in `archive/`. Planning notes live in `docs/`, and duplicate uploads of those notes live in `docs/archive/`. Do not run the commands below. They describe an older upload cleanup and would remove files this repo now keeps. The original checklist is below.
 

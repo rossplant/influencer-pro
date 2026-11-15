@@ -1,6 +1,6 @@
-# Plantr
+# Plantr Collab
 
-AI-powered overlay for TikTok Shop and other platforms. `main.py` is the API entry point.
+Plantr is the company. Plantr Collab is the product: brand–creator collaboration for any category, for small-to-mid Shopify sellers and nano and micro creators. There is no starting vertical. `main.py` is the API entry point.
 
 ## What's in this repo
 
@@ -49,9 +49,11 @@ Copy `.env.example`. `main.py` reads these variables:
 
 When `DATABASE_URL` is set, startup runs `alembic upgrade head` (revision `0001_initial`) and then deletes `api_requests` rows older than 90 days. A Postgres advisory lock wraps the migration so a single replica applies it safely; a second replica waits instead of racing. No Railway pre-deploy command is required. The in-memory profiles that existed before Postgres was attached are not imported.
 
-`events.emit(name, entity, actor, **props)` inserts an append-only `events` row. For `product_enriched`, `match_run`, and `brief_generated` it also increments the shop's usage counter and sets `first_enrich_at`, `first_match_at`, or `first_brief_at` the first time. Shop events copy `plan_tier`, `plan_status`, and the usage counters into `properties`. Operator actions use the same event names with `actor="operator"`.
+`events.emit(name, entity, actor, **props)` inserts an append-only `events` row. `product_enriched` increments `products_enriched` and sets `first_enrich_at` the first time. `match_run` increments `matches_run`, sets `first_match_at` the first time, and sets `last_match_at` every time. `brief_sent` (not enrichment) increments `briefs_generated`, sets `first_brief_at` the first time, and sets `last_campaign_at` every time. Shop events copy `plan_tier` and `plan_status` into `properties`. Catalogue and period counters are columns on the event. Names are listed in `docs/event_names.md`. Operator actions use the same names with `actor="operator"`.
 
-Starter allows 50 product enrichments and 5 match runs per UTC calendar month (`docs/PlantR_Pricing.md`). At the cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop (`is_pilot`) is allowed through and the event is still written. Pilot shops default to `plan_tier=starter` and MRR 0. MRR is the monthly price, an annual price divided by 12, or 0 for free, trial, and starter.
+Starter allows 50 products in the catalogue and 5 match runs per UTC calendar month (`docs/Pricing.md`). Enriching a product that already exists does not use another catalogue slot. Growth allows 500 products and unlimited matches. Scale is unlimited on both. At the cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop is allowed through. Pilot shops default to `plan_tier=starter`, `plan_status=free`, and MRR 0. Monthly list prices are Growth US$49 and Scale US$149. Annual list prices are US$490 and US$1,490, and annual MRR is that price / 12. Free, trial, and trialing are 0.
+
+If `alembic_version` is `0001_initial` but the tables still have the pre-analytics shape (`attributed_orders.amount`, or `events` without `products_count`), startup drops those Plantr Collab tables and recreates them from the edited `0001` revision. Production is not on 0.10 and has no tables, so this does not run there. Do not rely on that drop once production has data.
 
 Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `latency_ms`, `key`) and, when the database is configured, an `api_requests` row. The key is a `sha256:` label. Request and response bodies are not logged or stored. Each Grok call writes its own JSON line (`model`, `prompt_tokens`, `completion_tokens`, `fallback`, `latency_ms`).
 
@@ -59,10 +61,10 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. `version` is `0.10`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.10`.
 - `POST /shops` — create a shop. `is_pilot` and `plan_tier` are settable. The response includes `mrr`.
 - `GET /shops/{id}` and `GET /creators/{id}` — read one row.
-- `POST /enrich` — talking points and FAQs. The response keeps the existing fields and adds `source` (`grok` or `fallback`). Pass `shop_id` and/or `product_id` to store the product, write a brief, and emit `product_enriched`. Without those ids the call behaves as before. Token counts are logged, not returned.
+- `POST /enrich` — talking points and FAQs for any product. The response keeps the existing fields and adds `source` (`grok` or `fallback`). Pass `shop_id` and/or `product_id` to store the product (category, subcategory, price, currency, tags, attributes, claims with a source) and a brief draft, and emit `product_enriched`. That call does not set `first_brief_at`. `POST /briefs/{id}/sent` emits `brief_sent` (`actor` may be `operator`). Without shop or product ids, enrich behaves as before. Token counts are logged, not returned.
 - `POST /match` — body `{"influencer": {...}, "products": [...]}`. Returns up to 10 matches, each `{product, match_score}`. Scoring is still the placeholder. When a database is configured the call also stores a shortlist with `match_version='placeholder-0'` and emits `match_run`. Optional `shop_id` and `product_id` attach that shortlist to a shop and product.
 - `POST /onboard-influencer` — validates a profile against `influencer_schema.json`, stores the creator, emits `creator_onboarded`, and returns `id`. With a database, `id` is the row id. The response shape stays `{id, influencer}`.
 - `POST /sync-shopify` — `501`. The message says Shopify sync isn't configured until both Shopify variables are set. With those variables set, the response still says sync is not implemented, and no products are synced.
@@ -78,4 +80,4 @@ pytest
 
 GitHub Actions installs `requirements.txt`, `pytest`, and `httpx`, then runs `test_api.py` and `tests/` on every push and pull request. The xAI call is mocked. Persistence tests use a temporary SQLite file, so CI does not need Postgres.
 
-See `docs/Plant_Influencer_Platform_Overview.md` for the product model.
+See `docs/Pricing.md` and `docs/Plant_Influencer_Platform_Overview.md`. The overview filename is historical. The product is Plantr Collab.

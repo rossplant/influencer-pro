@@ -1,4 +1,4 @@
-# Qdrant Integration Notes — Plantr
+# Qdrant notes — Plantr Collab
 
 ## Why Qdrant
 - Fast vector search with strong metadata filtering

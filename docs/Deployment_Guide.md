@@ -1,4 +1,4 @@
-# Deployment Guide — Plantr API
+# Deployment — Plantr Collab API
 
 ## Local
 

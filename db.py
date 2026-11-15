@@ -17,17 +17,40 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import timedelta
 from pathlib import Path
 from typing import Iterator, Optional
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from models import ApiRequest, utcnow
 
 logger = logging.getLogger("plantr.db")
+request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", default=None)
+
+# Dropped only when revision 0001_initial is already applied with the
+# pre-analytics shape. Production has no tables until 0.10 is deployed there,
+# so this does not run against production. Do not keep using it once
+# production has data; add a new revision instead.
+PLANTR_TABLES = (
+    "attributed_orders",
+    "monthly_mrr_snapshots",
+    "subscription_changes",
+    "subscriptions",
+    "api_requests",
+    "briefs",
+    "shortlist_items",
+    "shortlists",
+    "events",
+    "products",
+    "creators",
+    "shops",
+    "categories",
+    "alembic_version",
+)
 
 ROOT = Path(__file__).resolve().parent
 API_REQUEST_RETENTION_DAYS = 90
@@ -49,6 +72,10 @@ memory_briefs: list = []
 
 def configured() -> bool:
     return SessionLocal is not None
+
+
+def current_request_id() -> Optional[str]:
+    return request_id_var.get()
 
 
 def normalise_database_url(url: str) -> str:
@@ -108,6 +135,12 @@ def init_storage() -> None:
         return
 
     url = normalise_database_url(raw)
+    if drop_stale_revision_0001(url):
+        logger.warning(
+            "Dropped the pre-analytics 0001 schema so Alembic can recreate it. "
+            "This only runs when alembic_version is 0001_initial and the old columns are present. "
+            "Production is not deployed at 0.10 and is not modified."
+        )
     run_migrations(url)
     engine = make_engine(url)
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
@@ -118,6 +151,48 @@ def init_storage() -> None:
         removed,
         API_REQUEST_RETENTION_DAYS,
     )
+
+
+def drop_stale_revision_0001(url: str) -> bool:
+    """Drop Plantr tables when revision 0001_initial has the old column shape.
+
+    Staging may already have applied the first cut of 0001 (attributed_orders.amount,
+    events without products_count). The revision id did not change, so Alembic
+    would skip it. Production has no tables yet and is left alone: this returns
+    false unless that old shape is actually present.
+    """
+    probe = make_engine(url)
+    try:
+        with probe.connect() as conn:
+            inspector = inspect(conn)
+            tables = set(inspector.get_table_names())
+            if "alembic_version" not in tables:
+                return False
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            if version != "0001_initial":
+                return False
+            stale = False
+            if "attributed_orders" in tables:
+                columns = {column["name"] for column in inspector.get_columns("attributed_orders")}
+                if "amount" in columns or "gmv_gross" not in columns:
+                    stale = True
+            if "events" in tables:
+                columns = {column["name"] for column in inspector.get_columns("events")}
+                if "products_count" not in columns:
+                    stale = True
+            if not stale:
+                return False
+            if conn.dialect.name == "postgresql":
+                conn.execute(text("DROP TABLE IF EXISTS " + ", ".join(PLANTR_TABLES) + " CASCADE"))
+            else:
+                conn.execute(text("PRAGMA foreign_keys=OFF"))
+                for table in PLANTR_TABLES:
+                    conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
+                conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
+            return True
+    finally:
+        probe.dispose()
 
 
 def run_migrations(url: str) -> None:
@@ -180,9 +255,12 @@ def record_api_request(
     status: int,
     latency_ms: int,
     api_key_id: Optional[str],
+    request_id: Optional[str],
     grok_tokens_prompt: Optional[int],
     grok_tokens_completion: Optional[int],
     grok_fallback: Optional[bool],
+    grok_latency_ms: Optional[int],
+    grok_model: Optional[str],
 ) -> None:
     """Insert one api_requests row. No-op when the database is not configured.
 
@@ -204,9 +282,12 @@ def record_api_request(
                     status=status,
                     latency_ms=latency_ms,
                     api_key_id=api_key_id,
+                    request_id=request_id,
                     grok_tokens_prompt=grok_tokens_prompt,
                     grok_tokens_completion=grok_tokens_completion,
                     grok_fallback=grok_fallback,
+                    grok_latency_ms=grok_latency_ms,
+                    grok_model=grok_model,
                 )
             )
     except Exception:

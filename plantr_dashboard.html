@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Plantr — Influencer Dashboard</title>
+  <title>Plantr Collab — Creator dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
@@ -86,7 +86,7 @@
   <div class="container">
     <div class="header">
       <div class="logo">P</div>
-      <h1>Plantr</h1>
+      <h1>Plantr Collab</h1>
     </div>
     <div class="tagline">Match products to your expertise. Better signals, better collaborations.</div>
 
@@ -96,7 +96,7 @@
         <label>Handle <input name="handle" placeholder="@yourhandle" required></label>
         <label>Name <input name="name" placeholder="Your name"></label>
         <label>Areas of Interest (comma separated)
-          <input name="areas_of_interest" placeholder="houseplants, low light, beginner friendly" required>
+          <input name="areas_of_interest" placeholder="niches this creator covers" required>
         </label>
         <label>Preferred Promotion Styles (comma separated)
           <input name="preferred_promotion_styles" placeholder="educational, lifestyle, unboxing" required>
@@ -161,9 +161,7 @@
 
       // Demo products. Phase 0 has no product catalog. Shopify sync is not implemented.
       const demoProducts = [
-        { title: "Snake Plant – Low Light", category: "Houseplants", target_audience: ["beginners"], occasions: ["home decor"], care_instructions: "Water every 2-3 weeks" },
-        { title: "Pothos Golden", category: "Houseplants", target_audience: ["beginners", "gift buyers"], occasions: ["home office"], care_instructions: "Water when dry" },
-        { title: "Orchid Phalaenopsis", category: "Houseplants", target_audience: ["experts"], occasions: ["gift"] }
+        { title: "Sample product", category: "general", target_audience: ["general"], occasions: ["everyday"], care_instructions: "See the product details" }
       ];
 
       const matchRes = await fetch(`${API}/match`, {

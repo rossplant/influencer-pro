@@ -12,11 +12,15 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 import db
 import events
+import taxonomy
 from events import PlanLimitReached
-from models import Brief, Creator, Product, Shop, Shortlist, ShortlistItem, utcnow
+from sqlalchemy import select
+
+from models import Brief, Category, Creator, Product, Shop, Shortlist, ShortlistItem, utcnow
 
 MATCH_VERSION = "placeholder-0"
 DISCLOSURE_LINE = "Paid partnership. The creator may earn a commission."
@@ -29,6 +33,8 @@ def create_shop(
     plan_tier: Optional[str],
     plan_status: Optional[str],
     is_pilot: bool,
+    is_underserved: bool = False,
+    underserved_reason: Optional[str] = None,
 ) -> dict:
     tier = (plan_tier or "").strip() or "starter"
     # Pilot shops default to starter. An explicit plan_tier is kept.
@@ -36,32 +42,44 @@ def create_shop(
         tier = "starter"
     if tier not in events.KNOWN_PLAN_TIERS:
         raise HTTPException(status_code=422, detail=f"Unknown plan_tier '{tier}'")
-    status = (plan_status or "").strip() or "active"
+    status = _default_plan_status(tier, plan_status)
     shop_id = str(uuid.uuid4())
     now = utcnow()
     fields = dict(
         id=shop_id,
         name=name,
-        shopify_domain=(shopify_domain or None),
+        shopify_domain=(shopify_domain or None) or None,
         plan_tier=tier,
         plan_status=status,
         is_pilot=bool(is_pilot),
+        is_underserved=bool(is_underserved),
+        underserved_reason=(underserved_reason or None),
         products_enriched=0,
         matches_run=0,
         briefs_generated=0,
         first_enrich_at=None,
         first_match_at=None,
         first_brief_at=None,
+        shopify_connected_at=None,
+        first_attributed_sale_at=None,
+        first_paid_at=None,
+        last_match_at=None,
+        last_campaign_at=None,
         created_at=now,
     )
-    if db.configured():
-        with db.session_scope() as session:
-            shop = Shop(**fields)
-            session.add(shop)
-            session.flush()
-            return shop_dict(shop)
+    try:
+        if db.configured():
+            with db.session_scope() as session:
+                shop = Shop(**fields)
+                session.add(shop)
+                session.flush()
+                events.emit("shop_signed_up", shop, "api")
+                return shop_dict(shop)
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="A shop with this Shopify domain already exists") from exc
     shop = SimpleNamespace(memory_kind="shop", **fields)
     db.memory_shops[shop_id] = shop
+    events.emit("shop_signed_up", shop, "api")
     return shop_dict(shop)
 
 
@@ -82,6 +100,8 @@ def shop_dict(shop: Any) -> dict:
         "plan_tier": shop.plan_tier,
         "plan_status": shop.plan_status,
         "is_pilot": bool(shop.is_pilot),
+        "is_underserved": bool(getattr(shop, "is_underserved", False)),
+        "underserved_reason": getattr(shop, "underserved_reason", None),
         "mrr": events.mrr(shop.plan_tier, status=shop.plan_status),
         "products_enriched": int(shop.products_enriched or 0),
         "matches_run": int(shop.matches_run or 0),
@@ -89,44 +109,96 @@ def shop_dict(shop: Any) -> dict:
         "first_enrich_at": shop.first_enrich_at,
         "first_match_at": shop.first_match_at,
         "first_brief_at": shop.first_brief_at,
+        "shopify_connected_at": getattr(shop, "shopify_connected_at", None),
+        "first_attributed_sale_at": getattr(shop, "first_attributed_sale_at", None),
+        "first_paid_at": getattr(shop, "first_paid_at", None),
+        "last_match_at": getattr(shop, "last_match_at", None),
+        "last_campaign_at": getattr(shop, "last_campaign_at", None),
         "created_at": shop.created_at,
     }
 
 
+def _default_plan_status(plan_tier: str, explicit: Optional[str]) -> str:
+    """Starter and free default to free. Paid growth and scale default to active."""
+    chosen = (explicit or "").strip()
+    if chosen:
+        return chosen
+    if plan_tier in {"growth", "scale"}:
+        return "active"
+    return "free"
+
+
+def allowed_category_slugs() -> set[str]:
+    allowed = taxonomy.slugs()
+    if not db.configured():
+        return allowed
+    with db.session_scope() as session:
+        allowed.update(session.scalars(select(Category.slug)).all())
+    return allowed
+
+
+def validate_category_lists(*groups: list) -> None:
+    allowed = allowed_category_slugs()
+    unknown = [item for group in groups for item in group if item not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown categories: {unknown}. Use a taxonomy slug, including 'other'.",
+        )
+
+
 def persist_creator(record: dict) -> None:
+    active = list(record.get("active_categories") or [])
+    desired = list(record.get("desired_categories") or [])
+    validate_category_lists(active, desired)
     if not db.configured():
         db.memory_creators[record["influencer_id"]] = record
         creator = SimpleNamespace(
             memory_kind="creator",
             id=record["influencer_id"],
             handle=record.get("handle"),
+            profile_completed_at=None,
+            first_match_accepted_at=None,
+            first_post_at=None,
         )
         events.emit("creator_onboarded", creator, "api", handle=record.get("handle"))
         return
-    with db.session_scope() as session:
-        creator = Creator(
-            id=record["influencer_id"],
-            handle=record["handle"],
-            name=record.get("name"),
-            bio=record.get("bio"),
-            interests=list(record.get("areas_of_interest") or []),
-            expertise_level=record.get("expertise_level") or {},
-            preferred_promotion_styles=list(record.get("preferred_promotion_styles") or []),
-            audience_demographics=record.get("audience_demographics"),
-            content_formats=list(record.get("content_formats") or []),
-            average_engagement_rate=record.get("average_engagement_rate"),
-            past_categories=list(record.get("past_categories") or []),
-            restrictions=list(record.get("restrictions") or []),
-            availability=record.get("availability") or "open",
-            commission_preference=record.get("commission_preference"),
-            platforms=list(record.get("platforms") or []),
-            follower_band=record.get("follower_band"),
-            profile=record,
-            created_at=utcnow(),
-        )
-        session.add(creator)
-        session.flush()
-        events.emit("creator_onboarded", creator, "api", handle=creator.handle)
+    try:
+        with db.session_scope() as session:
+            creator = Creator(
+                id=record["influencer_id"],
+                handle=record["handle"],
+                name=record.get("name"),
+                bio=record.get("bio"),
+                interests=list(record.get("areas_of_interest") or []),
+                expertise_level=record.get("expertise_level") or {},
+                preferred_promotion_styles=list(record.get("preferred_promotion_styles") or []),
+                audience_demographics=record.get("audience_demographics"),
+                content_formats=list(record.get("content_formats") or []),
+                average_engagement_rate=record.get("average_engagement_rate"),
+                past_categories=list(record.get("past_categories") or []),
+                restrictions=list(record.get("restrictions") or []),
+            excluded_categories=list(record.get("excluded_categories") or []),
+            excluded_claims=list(record.get("excluded_claims") or []),
+            active_categories=active,
+            desired_categories=desired,
+            avg_views=record.get("avg_views"),
+            engagement_rate=record.get("engagement_rate"),
+            est_conversion_rate=record.get("est_conversion_rate"),
+            avg_order_value=record.get("avg_order_value"),
+            typical_price_band=record.get("typical_price_band"),
+                availability=record.get("availability") or "open",
+                commission_preference=record.get("commission_preference"),
+                platforms=list(record.get("platforms") or []),
+                follower_band=record.get("follower_band"),
+                profile=record,
+                created_at=utcnow(),
+            )
+            session.add(creator)
+            session.flush()
+            events.emit("creator_onboarded", creator, "api", handle=creator.handle)
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="A creator with this handle already exists") from exc
 
 
 def fetch_creator(creator_id: str) -> Optional[dict]:
@@ -159,11 +231,13 @@ def prepare_enrichment(shop_id: Optional[str], product_id: Optional[str]) -> Non
     try:
         if db.configured():
             with db.session_scope() as session:
-                shop, _product = _resolve_db(session, shop_id, product_id)
-                events.guard_plan_limit(shop, "products", session)
+                shop, product = _resolve_db(session, shop_id, product_id)
+                if product is None:
+                    events.guard_plan_limit(shop, "products", session)
             return
-        shop, _product = _resolve_memory(shop_id, product_id)
-        events.guard_plan_limit(shop, "products", None)
+        shop, product = _resolve_memory(shop_id, product_id)
+        if product is None:
+            events.guard_plan_limit(shop, "products", None)
     except PlanLimitReached as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
 
@@ -177,18 +251,19 @@ def save_enrichment(
     description_short: str,
     description_long: str,
     category: str,
+    subcategory: Optional[str],
     images: list,
-    pet_safe: Optional[bool],
-    light: Optional[str],
-    care_level: Optional[str],
-    size: Optional[str],
     price: Optional[float],
+    currency: Optional[str],
+    tags: list,
+    attributes: dict,
     claims: list,
+    commission_rate: Optional[float] = None,
     fields_set: Optional[set] = None,
     source: str,
     talking_points: list,
     faqs: list,
-) -> Optional[str]:
+) -> Optional[dict]:
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
     creator_id = _clean(creator_id)
@@ -209,30 +284,33 @@ def save_enrichment(
                 description_short=description_short,
                 description_long=description_long,
                 category=category,
+                subcategory=subcategory,
                 images=images,
-                pet_safe=pet_safe,
-                light=light,
-                care_level=care_level,
-                size=size,
                 price=price,
+                currency=currency,
+                tags=tags,
+                attributes=attributes,
                 claims=claims,
+                commission_rate=commission_rate,
             )
             session.flush()
             events.emit("product_enriched", product, "api", source=brief_source)
             brief = Brief(
                 id=str(uuid.uuid4()),
+                shop_id=shop.id,
                 product_id=product.id,
                 creator_id=_existing_creator_id(session, creator_id),
                 content=content,
                 source=brief_source,
                 disclosure_line=DISCLOSURE_LINE,
+                sent_at=None,
                 created_at=utcnow(),
                 product=product,
+                shop=shop,
             )
             session.add(brief)
             session.flush()
-            events.emit("brief_generated", brief, "api", source=brief_source)
-            return product.id
+            return {"product_id": product.id, "brief_id": brief.id}
 
     shop, product = _resolve_memory(shop_id, product_id)
     product = _apply_product_memory(
@@ -244,29 +322,52 @@ def save_enrichment(
         description_short=description_short,
         description_long=description_long,
         category=category,
+        subcategory=subcategory,
         images=images,
-        pet_safe=pet_safe,
-        light=light,
-        care_level=care_level,
-        size=size,
         price=price,
+        currency=currency,
+        tags=tags,
+        attributes=attributes,
         claims=claims,
+        commission_rate=commission_rate,
     )
     events.emit("product_enriched", product, "api", source=brief_source)
     brief = SimpleNamespace(
         memory_kind="brief",
         id=str(uuid.uuid4()),
+        shop_id=shop.id,
+        shop=shop,
         product_id=product.id,
         product=product,
         creator_id=creator_id if creator_id in db.memory_creators else None,
         content=content,
         source=brief_source,
         disclosure_line=DISCLOSURE_LINE,
+        sent_at=None,
         created_at=utcnow(),
     )
     db.memory_briefs.append(brief)
-    events.emit("brief_generated", brief, "api", source=brief_source)
-    return product.id
+    return {"product_id": product.id, "brief_id": brief.id}
+
+
+def mark_brief_sent(brief_id: str, actor: str) -> dict:
+    """Record that a brief was actually sent. Operators pass actor='operator'."""
+    if actor not in events.ACTORS:
+        raise HTTPException(status_code=422, detail="actor must be 'system', 'operator', or 'api'")
+    if not db.configured():
+        brief = next((row for row in db.memory_briefs if row.id == brief_id), None)
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Brief not found")
+        events.emit("brief_sent", brief, actor)
+        return {"id": brief.id, "shop_id": brief.shop_id, "sent_at": brief.sent_at, "actor": actor}
+    with db.session_scope() as session:
+        brief = session.get(Brief, brief_id)
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Brief not found")
+        if brief.shop is None and brief.shop_id:
+            brief.shop = session.get(Shop, brief.shop_id)
+        events.emit("brief_sent", brief, actor)
+        return {"id": brief.id, "shop_id": brief.shop_id, "sent_at": brief.sent_at, "actor": actor}
 
 
 def persist_match(
@@ -416,7 +517,16 @@ def _resolve_memory(shop_id, product_id):
     return shop, None
 
 
-_OPTIONAL_PRODUCT_FIELDS = ("images", "pet_safe", "light", "care_level", "size", "price", "claims")
+_OPTIONAL_PRODUCT_FIELDS = (
+    "images",
+    "subcategory",
+    "price",
+    "currency",
+    "tags",
+    "attributes",
+    "claims",
+    "commission_rate",
+)
 
 
 def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
@@ -429,12 +539,18 @@ def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
     for name in _OPTIONAL_PRODUCT_FIELDS:
         if creating or name in fields_set:
             value = fields[name]
-            if name in {"images", "claims"}:
+            if name in {"images", "tags", "claims"}:
                 value = list(value or [])
+            if name == "attributes":
+                value = dict(value or {})
             values[name] = value
     if creating:
         values.setdefault("images", [])
+        values.setdefault("tags", [])
+        values.setdefault("attributes", {})
         values.setdefault("claims", [])
+        if not values.get("currency"):
+            values["currency"] = "USD"
     return values
 
 
