@@ -202,7 +202,11 @@ def test_seller_and_creator_apps(monkeypatch):
     assert link.json()["created"] is False
     assert link.json()["shortlist_item_id"] == item_id
     code = link.json()["discount_code"]
-    assert code in client.get("/seller/accepted", headers=seller_cookie).text
+    accepted_page = client.get("/seller/accepted", headers=seller_cookie).text
+    assert code in accepted_page
+    assert f"http://testserver/r/{code}" in accepted_page
+    assert "Copy code" in accepted_page
+    assert "Copy link" in accepted_page
     from types import SimpleNamespace
 
     db.memory_briefs.append(
@@ -225,7 +229,10 @@ def test_seller_and_creator_apps(monkeypatch):
     offers = client.get("/creator/offers", headers=creator_cookie)
     assert "Lamp" in offers.text
     assert "Mention the cord" in offers.text
-    assert code in client.get("/creator/links", headers=creator_cookie).text
+    offers = client.get("/creator/offers", headers=creator_cookie).text
+    links_page = client.get("/creator/links", headers=creator_cookie).text
+    assert code in offers and f"http://testserver/r/{code}" in offers and "Copy link" in offers
+    assert code in links_page and f"http://testserver/r/{code}" in links_page and "Copy code" in links_page
 
 
 def test_portal_flow_with_admin_cookie(monkeypatch):

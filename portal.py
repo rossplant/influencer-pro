@@ -361,6 +361,9 @@ def creator_offers(creator_id: str) -> list[dict]:
                 points = []
         item["talking_points"] = points
         item["brief"] = brief.get("content") if brief else None
+        link = _link_for(item.get("creator_id"), item.get("product_id"))
+        item["discount_code"] = link.get("discount_code") if link else None
+        item["tracking_path"] = link.get("tracking_path") if link else None
         offers.append(item)
     return offers
 
@@ -369,7 +372,7 @@ def creator_links(creator_id: str) -> list[dict]:
     return attribution.list_links(shop_id=None, creator_id=creator_id)
 
 
-def render_seller(session: Optional[dict], page: str, **data) -> HTMLResponse:
+def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
     if session is None:
@@ -399,11 +402,11 @@ def render_seller(session: Optional[dict], page: str, **data) -> HTMLResponse:
       <a href="/seller/accepted">Accepted</a>
     </nav>
     """
-    content = banner + nav + _seller_body(page, shop, csrf, **data)
+    content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
     return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"]))
 
 
-def render_creator(session: Optional[dict], page: str, **data) -> HTMLResponse:
+def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
     if session is None:
@@ -430,11 +433,11 @@ def render_creator(session: Optional[dict], page: str, **data) -> HTMLResponse:
       <a href="/creator/links">Links</a>
     </nav>
     """
-    content = banner + nav + _creator_body(page, profile, csrf, **data)
+    content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
     return HTMLResponse(_layout(profile.get("handle") or "Creator", content, "/creator/logout", session["csrf"]))
 
 
-def _seller_body(page: str, shop: dict, csrf: str, **data) -> str:
+def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
     if page == "profile":
         return f"<h1>{html.escape(shop['name'])}</h1><pre>{html.escape(json.dumps({k: shop[k] for k in ('id','name','country','market','currency','primary_category','plan_tier','is_pilot','is_underserved')}, default=str, indent=2))}</pre>"
     if page == "products":
@@ -488,15 +491,17 @@ def _seller_body(page: str, shop: dict, csrf: str, **data) -> str:
         """
     rows = []
     for item in data.get("accepted") or []:
-        code = item.get("discount_code") or "No code yet"
-        path = item.get("tracking_path") or ""
         rows.append(
-            f"<li>{html.escape(str(item.get('handle') or item.get('creator_id')))} · {html.escape(str(item.get('product_title') or ''))} · {html.escape(str(code))} {html.escape(path)}</li>"
+            "<li>"
+            f"{html.escape(str(item.get('handle') or item.get('creator_id')))} · "
+            f"{html.escape(str(item.get('product_title') or ''))}"
+            f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
+            "</li>"
         )
     return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
 
 
-def _creator_body(page: str, profile: dict, csrf: str, **data) -> str:
+def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
     if page == "profile":
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
@@ -514,14 +519,36 @@ def _creator_body(page: str, profile: dict, csrf: str, **data) -> str:
         for offer in data.get("offers") or []:
             points = "".join(f"<li>{html.escape(str(point))}</li>" for point in offer.get("talking_points") or [])
             blocks.append(
-                f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2><p>{html.escape(str(offer.get('shop_name') or ''))}</p><ul>{points or '<li>No talking points yet.</li>'}</ul></article>"
+                f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
+                f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
+                f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
+                f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url)}</article>"
             )
         return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
     items = "".join(
-        f"<li>{html.escape(str(row.get('discount_code') or ''))} · {html.escape(str(row.get('tracking_path') or ''))} · {html.escape(str(row.get('link_url') or ''))}</li>"
+        "<li>"
+        f"{html.escape(str(row.get('link_url') or ''))}"
+        f"{_tracking_block(row.get('discount_code'), row.get('tracking_path'), base_url)}"
+        "</li>"
         for row in data.get("links") or []
     )
     return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
+
+
+def _tracking_block(code: Optional[str], path: Optional[str], base_url: str) -> str:
+    if not code or not path:
+        return "<p class='tracking'>No tracking code yet.</p>"
+    full = f"{base_url.rstrip('/')}{path}"
+    safe_code = html.escape(str(code))
+    safe_url = html.escape(full)
+    return (
+        "<div class='tracking'>"
+        f"<p><span class='code'>{safe_code}</span> "
+        f"<button type='button' class='copy' data-copy='{safe_code}'>Copy code</button></p>"
+        f"<p><a href='{safe_url}'>{safe_url}</a> "
+        f"<button type='button' class='copy' data-copy='{safe_url}'>Copy link</button></p>"
+        "</div>"
+    )
 
 
 def _layout(title: str, body: str, logout: Optional[str], csrf: Optional[str]) -> str:
@@ -544,10 +571,26 @@ form, article {{ background: white; padding: 16px; border-radius: 12px; margin: 
 label {{ display: block; margin: 8px 0; }}
 input, textarea, select {{ font: inherit; padding: 8px; width: 100%; box-sizing: border-box; }}
 button {{ background: #1f6b4a; color: white; border: 0; border-radius: 8px; padding: 8px 12px; }}
+button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
+.tracking {{ margin-top: 8px; }}
 .banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
 </style></head><body>
 <header><strong>Plantr Collab</strong>{logout_form}</header>
-<main>{body}</main></body></html>"""
+<main>{body}</main>
+<script>
+document.querySelectorAll("button.copy").forEach((button) => {{
+  button.addEventListener("click", async () => {{
+    const value = button.getAttribute("data-copy") || "";
+    try {{
+      await navigator.clipboard.writeText(value);
+      button.textContent = "Copied";
+    }} catch (error) {{
+      button.textContent = "Copy failed";
+    }}
+  }});
+}});
+</script>
+</body></html>"""
 
 
 def _product_row(row) -> dict:
