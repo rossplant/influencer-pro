@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.11
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.12
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -26,7 +26,7 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 
 Set `PORT=8000` when you run that command locally. The default xAI model is `grok-4.3`.
 
-Open `/plantr_admin.html`, `/plantr_dashboard.html`, `/plantr_onboarding.html`, or `/onboarding_form.html` on that same host. The pages call the API at their own origin. Override the base with `?api=https://your-api.example` or `window.PLANTR_API_BASE`. When `API_KEYS` is set, pass the key as `?key=` or `window.PLANTR_API_KEY` and the pages send it as `X-API-Key`.
+Open `/admin`, `/plantr_dashboard.html`, `/plantr_onboarding.html`, or `/onboarding_form.html` on that same host. `/plantr_admin.html` redirects to `/admin`. The pages call the API at their own origin. Override the base with `?api=https://your-api.example` or `window.PLANTR_API_BASE`. Pages do not read an API key from the URL. The dashboard sends the admin session cookie.
 
 ## Environment
 
@@ -36,8 +36,12 @@ Copy `.env.example`. `main.py` reads these variables:
 | --- | --- |
 | `GROK_API_KEY` or `XAI_API_KEY` | xAI key. If neither is set, `/enrich` uses the local fallback. |
 | `GROK_MODEL` | xAI model. Defaults to `grok-4.3` when unset. |
-| `API_KEYS` | Comma-separated keys. When set, `/enrich`, `/match`, `/onboard-influencer`, `/sync-shopify`, `/shops`, and `/creators` require `X-API-Key`. `GET /` stays public. Leave unset until keys are ready. |
-| `CORS_ORIGINS` | Comma-separated browser origins, or `*`. Defaults to `*` and is read when the process starts. |
+| `API_KEYS` | Comma-separated keys. Protected routes accept a matching `X-API-Key` or an admin session. `GET /`, the onboarding pages, `POST /onboard-influencer`, `/docs`, and `/openapi.json` stay public. Production and staging fail closed with 401 when this is unset and there is no admin session. |
+| `SESSION_SECRET` | Signs the admin session cookie. Required for `/admin`. |
+| `ADMIN_EMAIL` | The single admin email. Required for `/admin`. |
+| `ADMIN_SETUP_TOKEN` | Required only until `POST /admin/setup` creates the admin user. Compare it in the browser form. Remove it afterwards. |
+| `ADMIN_PASSWORD_HASH` | Optional scrypt or bcrypt fallback. The normal password is set in the browser and stored in `admin_users`. `python -m tools.hash_password` reads a password from stdin and prints a scrypt hash. |
+| `CORS_ORIGINS` | Comma-separated browser origins. Unset means same-origin only. A wildcard is never used together with credentials. Read when the process starts. |
 | `MAX_BODY_BYTES` | Maximum request body size. Defaults to `1048576`. |
 | `RATE_LIMIT_REQUESTS` | Requests allowed per window for each valid API key, or per client IP when the request has no valid key. Defaults to `30`. |
 | `RATE_LIMIT_WINDOW_SECONDS` | Length of that window. Defaults to `60`. |
@@ -61,7 +65,10 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.11`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.12`.
+- `GET /admin/setup` and `POST /admin/setup` — set the admin password once. Afterwards these return 410.
+- `POST /admin/login` and `POST /admin/logout` — signed HttpOnly session cookie, 12 hours.
+- `GET /admin` — login and the read-only dashboard. Shop pilot and underserved flags, and shortlist accept or decline, are the only writes.
 - `POST /shops` — create a shop. `is_pilot` and `plan_tier` are settable. The response includes `mrr`.
 - `GET /shops/{id}` and `GET /creators/{id}` — read one row.
 - `POST /enrich` — talking points and FAQs for any product. The response keeps the existing fields and adds `source` (`grok` or `fallback`). Pass `shop_id` and/or `product_id` to store the product (category, subcategory, price, currency, tags, attributes, claims with a source) and a brief draft, and emit `product_enriched`. That call does not set `first_brief_at`. `POST /briefs/{id}/sent` emits `brief_sent` (`actor` may be `operator`). Without shop or product ids, enrich behaves as before. Token counts are logged, not returned.
@@ -69,7 +76,7 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 - `POST /onboard-influencer` — validates a profile against `influencer_schema.json`, stores the creator, emits `creator_onboarded`, and returns `id`. With a database, `id` is the row id. The response shape stays `{id, influencer}`.
 - `POST /sync-shopify` — `501`. The message says Shopify sync isn't configured until both Shopify variables are set. With those variables set, the response still says sync is not implemented, and no products are synced.
 
-`POST /shops`, `GET /shops/{id}`, and `GET /creators/{id}` use the same `X-API-Key` rule as the other guarded routes.
+`POST /shops`, `GET /shops/{id}`, `GET /creators/{id}`, enrich, match, briefs, shortlist decisions, and Shopify sync are protected. `POST /onboard-influencer` is public and still rate-limited.
 
 ## Tests
 

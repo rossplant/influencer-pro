@@ -125,6 +125,34 @@ def mrr(
     return amount
 
 
+def record_admin(name: str, **props: Any) -> Any:
+    """Append an admin login event. Passwords are refused and never stored."""
+    if any("password" in key.lower() for key in props):
+        raise ValueError("admin events must not include a password")
+    from types import SimpleNamespace
+
+    payload = {
+        "id": _new_id(),
+        "occurred_at": utcnow(),
+        "event_name": name,
+        "entity_type": "admin",
+        "entity_id": "admin",
+        "shop_id": None,
+        "actor": "operator",
+        "request_id": db.current_request_id(),
+        "properties": dict(props),
+    }
+    if not db.configured():
+        event = SimpleNamespace(**payload)
+        db.memory_events.append(event)
+        return event
+    with db.session_scope() as session:
+        event = Event(**payload)
+        session.add(event)
+        session.flush()
+        return event
+
+
 def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
     """Insert an event and update counters and milestones for that event name."""
     if actor not in ACTORS:

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plantr Collab admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f3f6f4; color: #17211c; }
+    header { background: #16352b; color: white; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    main { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    .card { background: white; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+    .count { background: #f7faf8; border-radius: 8px; padding: 12px; }
+    .count strong { display: block; font-size: 22px; }
+    label { display: block; margin: 8px 0 4px; }
+    input, select { padding: 8px; font: inherit; }
+    button { background: #1f6b4a; color: white; border: 0; border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; }
+    button.secondary { background: #e7eeea; color: #16352b; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #e4ebe7; font-size: 14px; vertical-align: top; }
+    .hidden { display: none; }
+    .error { color: #8d2b2b; }
+    .nav button { margin-right: 8px; margin-bottom: 8px; }
+    pre { white-space: pre-wrap; background: #f7faf8; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Plantr Collab admin</strong>
+    <button id="logout" class="secondary hidden" type="button">Log out</button>
+  </header>
+  <main>
+    <section id="login-card" class="card">
+      <h1>Log in</h1>
+      <p>First time? <a href="/admin/setup">Set the password</a>.</p>
+      <form id="login">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Log in</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </section>
+    <section id="app" class="hidden">
+      <div id="counts" class="counts"></div>
+      <div class="card">
+        <div class="nav">
+          <button type="button" data-list="shops">Shops</button>
+          <button type="button" data-list="creators">Creators</button>
+          <button type="button" data-list="products">Products</button>
+          <button type="button" data-list="shortlists">Shortlists</button>
+          <button type="button" data-list="events">Events</button>
+        </div>
+        <form id="search">
+          <input id="q" name="q" type="search" placeholder="Search">
+          <button type="submit">Search</button>
+          <button id="prev" class="secondary" type="button">Previous</button>
+          <button id="next" class="secondary" type="button">Next</button>
+          <span id="page-label"></span>
+        </form>
+        <div id="list"></div>
+      </div>
+      <div id="detail" class="card hidden"></div>
+    </section>
+  </main>
+  <script>
+    const state = { list: "shops", page: 1, q: "" };
+    const loginCard = document.getElementById("login-card");
+    const app = document.getElementById("app");
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        showLogin();
+        throw new Error(data.detail || "Login required");
+      }
+      if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+      return data;
+    }
+
+    function showLogin() {
+      loginCard.classList.remove("hidden");
+      app.classList.add("hidden");
+      document.getElementById("logout").classList.add("hidden");
+    }
+
+    function showApp() {
+      loginCard.classList.add("hidden");
+      app.classList.remove("hidden");
+      document.getElementById("logout").classList.remove("hidden");
+    }
+
+    async function loadSummary() {
+      const summary = await api("/admin/api/summary");
+      showApp();
+      const labels = [
+        ["shops", "Shops"],
+        ["creators", "Creators"],
+        ["products", "Products"],
+        ["shortlists", "Shortlists"],
+        ["accepted_matches", "Accepted"],
+        ["declined_matches", "Declined"],
+        ["briefs_sent", "Briefs sent"]
+      ];
+      document.getElementById("counts").innerHTML = labels.map(([key, label]) =>
+        `<div class="count"><strong>${summary[key]}</strong>${label}</div>`
+      ).join("");
+    }
+
+    function renderRows(payload) {
+      const rows = payload.items || [];
+      document.getElementById("page-label").textContent = `Page ${payload.page} of ${Math.max(1, Math.ceil(payload.total / payload.page_size))} (${payload.total})`;
+      if (!rows.length) {
+        document.getElementById("list").innerHTML = "<p>Nothing matches.</p>";
+        return;
+      }
+      const keys = Object.keys(rows[0]).filter((key) => !["profile", "attributes", "claims", "properties"].includes(key));
+      document.getElementById("list").innerHTML = `<table><thead><tr>${keys.map((key) => `<th>${key}</th>`).join("")}</tr></thead><tbody>${
+        rows.map((row) => `<tr data-id="${row.id}">${keys.map((key) => `<td>${row[key] ?? ""}</td>`).join("")}</tr>`).join("")
+      }</tbody></table>`;
+      document.querySelectorAll("#list tbody tr").forEach((row) => {
+        row.addEventListener("click", () => openDetail(row.dataset.id));
+      });
+    }
+
+    async function loadList() {
+      const params = new URLSearchParams({ q: state.q, page: String(state.page), page_size: "20" });
+      renderRows(await api(`/admin/api/${state.list}?${params}`));
+    }
+
+    async function openDetail(id) {
+      const detail = await api(`/admin/api/${state.list}/${id}`);
+      const box = document.getElementById("detail");
+      box.classList.remove("hidden");
+      box.innerHTML = `<pre>${JSON.stringify(detail, null, 2)}</pre>`;
+      if (state.list === "shops") box.insertAdjacentHTML("beforeend", shopEditor(detail));
+      if (state.list === "shortlists") box.insertAdjacentHTML("beforeend", itemActions(detail));
+    }
+
+    function shopEditor(shop) {
+      return `<form id="shop-flags">
+        <label><input name="is_pilot" type="checkbox" ${shop.is_pilot ? "checked" : ""}> Pilot</label>
+        <label><input name="is_underserved" type="checkbox" ${shop.is_underserved ? "checked" : ""}> Underserved</label>
+        <label for="underserved_reason">Reason</label>
+        <input id="underserved_reason" name="underserved_reason" value="${shop.underserved_reason || ""}">
+        <button type="submit">Save flags</button>
+      </form>`;
+    }
+
+    function itemActions(shortlist) {
+      return (shortlist.items || []).map((item) => `
+        <p>${item.handle || item.creator_id || item.id}
+          <button type="button" data-accept="${item.id}">Accept</button>
+          <button type="button" class="secondary" data-decline="${item.id}">Decline</button>
+        </p>`).join("");
+    }
+
+    document.getElementById("login").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const response = await fetch("/admin/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: form.get("email"), password: form.get("password") })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        document.getElementById("login-error").textContent = data.detail || "Login failed";
+        return;
+      }
+      document.getElementById("login-error").textContent = "";
+      await loadSummary();
+      await loadList();
+    });
+
+    document.getElementById("logout").addEventListener("click", async () => {
+      await fetch("/admin/logout", { method: "POST", credentials: "include" });
+      showLogin();
+    });
+
+    document.querySelectorAll("[data-list]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        state.list = button.dataset.list;
+        state.page = 1;
+        document.getElementById("detail").classList.add("hidden");
+        await loadList();
+      });
+    });
+
+    document.getElementById("search").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.q = document.getElementById("q").value;
+      state.page = 1;
+      await loadList();
+    });
+    document.getElementById("prev").addEventListener("click", async () => {
+      state.page = Math.max(1, state.page - 1);
+      await loadList();
+    });
+    document.getElementById("next").addEventListener("click", async () => {
+      state.page += 1;
+      await loadList();
+    });
+
+    document.getElementById("detail").addEventListener("submit", async (event) => {
+      if (event.target.id !== "shop-flags") return;
+      event.preventDefault();
+      const id = JSON.parse(document.querySelector("#detail pre").textContent).id;
+      const form = new FormData(event.target);
+      await api(`/admin/api/shops/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          is_pilot: form.get("is_pilot") === "on",
+          is_underserved: form.get("is_underserved") === "on",
+          underserved_reason: form.get("underserved_reason")
+        })
+      });
+      await openDetail(id);
+    });
+
+    document.getElementById("detail").addEventListener("click", async (event) => {
+      const accept = event.target.dataset.accept;
+      const decline = event.target.dataset.decline;
+      if (accept) await api(`/shortlist-items/${accept}/accept`, { method: "POST" });
+      if (decline) await api(`/shortlist-items/${decline}/decline`, { method: "POST", body: JSON.stringify({ reason: "" }) });
+      if (accept || decline) {
+        const id = JSON.parse(document.querySelector("#detail pre").textContent).id;
+        await openDetail(id);
+        await loadSummary();
+      }
+    });
+
+    loadSummary().then(loadList).catch(() => showLogin());
+  </script>
+</body>
+</html>

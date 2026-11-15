@@ -38,6 +38,7 @@ PILOT_TABLES = {
     "subscription_changes",
     "monthly_mrr_snapshots",
     "attributed_orders",
+    "admin_users",
 }
 
 

@@ -1,4 +1,5 @@
 import hashlib
+import html
 import hmac
 import json
 import os
@@ -11,12 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+import admin_data
+import auth
 import db
+import events
 import services
 from grok_helper import generate_with_grok
 import scoring
@@ -33,9 +37,8 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
     "plantr_dashboard.html",
-    "plantr_admin.html",
 )
-APP_VERSION = "0.11"
+APP_VERSION = "0.12"
 
 PromotionStyle = Literal[
     "educational",
@@ -144,6 +147,23 @@ class MatchIn(BaseModel):
     blocked_creator_ids: List[str] = Field(default_factory=list)
 
 
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class SetupIn(BaseModel):
+    token: str = ""
+    password: str = ""
+    password_confirm: str = ""
+
+
+class ShopFlagsIn(BaseModel):
+    is_pilot: bool
+    is_underserved: bool
+    underserved_reason: Optional[str] = None
+
+
 class ShopIn(BaseModel):
     name: str = Field(min_length=1)
     shopify_domain: Optional[str] = None
@@ -168,13 +188,22 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def cors_policy(raw: Optional[str] = None) -> tuple[List[str], bool]:
+    """Origins from CORS_ORIGINS. Credentials are never combined with *."""
+    if raw is None:
+        raw = os.environ.get("CORS_ORIGINS", "")
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    explicit = [part for part in parts if part != "*"]
+    if explicit:
+        return explicit, True
+    if "*" in parts:
+        return ["*"], False
+    return [], False
+
+
 def cors_origins() -> List[str]:
-    if "CORS_ORIGINS" not in os.environ:
-        return ["*"]
-    raw = os.environ["CORS_ORIGINS"].strip()
-    if raw == "*":
-        return ["*"]
-    return [part.strip() for part in raw.split(",") if part.strip()]
+    origins, _credentials = cors_policy()
+    return origins
 
 
 def max_body_bytes() -> int:
@@ -227,15 +256,60 @@ def enforce_rate_limit(identity: str) -> None:
 
 
 def guard_request(request: Request) -> None:
-    """Rate-limit every guarded call. Require X-API-Key only when API_KEYS is set."""
+    """Rate-limit a protected call. Accept an API key or an admin session.
+
+    Local processes with API_KEYS unset stay open so development can boot.
+    Production and staging fail closed: no key and no session is 401.
+    """
     keys = configured_api_keys()
     provided = request.headers.get("x-api-key", "")
-    valid = bool(keys) and bool(provided) and _key_matches(provided, keys)
-    if keys and not valid:
-        enforce_rate_limit(f"ip:{client_ip(request)}")
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    identity = f"key:{provided}" if valid else f"ip:{client_ip(request)}"
-    enforce_rate_limit(identity)
+    key_ok = bool(keys) and bool(provided) and _key_matches(provided, keys)
+    session_email = auth.session_email(request)
+    if key_ok or session_email:
+        identity = f"session:{session_email}" if session_email else f"key:{provided}"
+        enforce_rate_limit(identity)
+        return
+    enforce_rate_limit(f"ip:{client_ip(request)}")
+    if keys or auth.locked_environment():
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def rate_limit_public(request: Request) -> None:
+    enforce_rate_limit(f"ip:{client_ip(request)}")
+
+
+def require_admin(request: Request) -> str:
+    if not _admin_available():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    email = auth.session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Admin session required")
+    enforce_rate_limit(f"session:{email}")
+    return email
+
+
+def _admin_available() -> bool:
+    return auth.admin_enabled(user_exists=admin_data.admin_exists(auth.admin_email()))
+
+
+def _reject_setup_closed() -> None:
+    if not auth.secrets_configured() or not auth.setup_token_configured():
+        raise HTTPException(status_code=503, detail="Admin setup is disabled")
+    if admin_data.admin_exists(auth.admin_email()):
+        raise HTTPException(status_code=410, detail="Admin setup is no longer available")
+
+
+def _session_cookie(response: JSONResponse, email: str) -> JSONResponse:
+    response.set_cookie(
+        key=auth.COOKIE_NAME,
+        value=auth.issue_session(email),
+        max_age=auth.SESSION_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 def init_storage() -> None:
@@ -245,6 +319,7 @@ def init_storage() -> None:
 def reset_runtime_state() -> None:
     """Clear process-local data and rate-limit buckets, then re-read DATABASE_URL."""
     db.reset_memory()
+    auth.reset_login_limits()
     with _rate_lock:
         _rate_buckets.clear()
     init_storage()
@@ -434,12 +509,13 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+_cors_origins, _cors_credentials = cors_policy()
 app = FastAPI(title="Plantr Collab API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins(),
-    allow_credentials=False,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -488,7 +564,172 @@ def plantr_dashboard_page():
 
 @app.get("/plantr_admin.html")
 def plantr_admin_page():
-    return _html("plantr_admin.html")
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.get("/admin")
+def admin_page():
+    if not _admin_available():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    return _html("admin.html")
+
+
+@app.get("/admin/setup")
+def admin_setup_page():
+    _reject_setup_closed()
+    page = (ROOT / "admin_setup.html").read_text(encoding="utf-8")
+    email = html.escape(auth.admin_email(), quote=True)
+    page = page.replace('value=""', f'value="{email}"', 1)
+    return HTMLResponse(page)
+
+
+@app.post("/admin/setup")
+async def admin_setup(request: Request):
+    _reject_setup_closed()
+    if not auth.setup_attempt_allowed(client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many setup attempts", headers={"Retry-After": "900"})
+    payload = await _json_or_form(request)
+    if not auth.token_matches(str(payload.get("token") or "")):
+        raise HTTPException(status_code=401, detail="Invalid setup token")
+    password = str(payload.get("password") or "")
+    confirmation = str(payload.get("password_confirm") or "")
+    if len(password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    if not auth.passwords_match(password, confirmation):
+        raise HTTPException(status_code=422, detail="Password confirmation does not match")
+    if admin_data.admin_exists(auth.admin_email()):
+        raise HTTPException(status_code=410, detail="Admin setup is no longer available")
+    admin_data.create_admin(auth.admin_email(), auth.hash_password(password))
+    return {"ok": True}
+
+
+@app.post("/admin/login")
+def admin_login(body: LoginIn, request: Request):
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    user = admin_data.find_admin(auth.admin_email())
+    password_hash = user.password_hash if user is not None else auth.fallback_password_hash()
+    if not auth.admin_enabled(user_exists=user is not None):
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    if not auth.login_attempt_allowed(client_ip(request)):
+        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="rate_limited")
+        raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": "900"})
+    if not password_hash:
+        auth.verify_password(body.password, "invalid")
+        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not auth.credentials_match(body.email, body.password, password_hash):
+        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user is not None:
+        admin_data.mark_admin_login(user.email)
+    events.record_admin("admin_login_succeeded", email=auth.admin_email())
+    return _session_cookie(JSONResponse({"ok": True}), auth.admin_email())
+
+
+@app.post("/admin/logout")
+def admin_logout():
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
+@app.get("/admin/api/summary")
+def admin_summary(_: str = Depends(require_admin)):
+    return admin_data.summary()
+
+
+@app.get("/admin/api/shops")
+def admin_shops(q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), _: str = Depends(require_admin)):
+    return admin_data.list_shops(q, page, page_size)
+
+
+@app.get("/admin/api/shops/{shop_id}")
+def admin_shop(shop_id: str, _: str = Depends(require_admin)):
+    row = admin_data.shop_detail(shop_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    return row
+
+
+@app.patch("/admin/api/shops/{shop_id}")
+def admin_shop_flags(shop_id: str, body: ShopFlagsIn, _: str = Depends(require_admin)):
+    row = admin_data.update_shop_flags(
+        shop_id,
+        is_pilot=body.is_pilot,
+        is_underserved=body.is_underserved,
+        underserved_reason=body.underserved_reason,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    return row
+
+
+@app.get("/admin/api/creators")
+def admin_creators(q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), _: str = Depends(require_admin)):
+    return admin_data.list_creators(q, page, page_size)
+
+
+@app.get("/admin/api/creators/{creator_id}")
+def admin_creator(creator_id: str, _: str = Depends(require_admin)):
+    row = admin_data.creator_detail(creator_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Creator not found")
+    return row
+
+
+@app.get("/admin/api/products")
+def admin_products(q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), _: str = Depends(require_admin)):
+    return admin_data.list_products(q, page, page_size)
+
+
+@app.get("/admin/api/products/{product_id}")
+def admin_product(product_id: str, _: str = Depends(require_admin)):
+    row = admin_data.product_detail(product_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return row
+
+
+@app.get("/admin/api/shortlists")
+def admin_shortlists(q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), _: str = Depends(require_admin)):
+    return admin_data.list_shortlists(q, page, page_size)
+
+
+@app.get("/admin/api/shortlists/{shortlist_id}")
+def admin_shortlist(shortlist_id: str, _: str = Depends(require_admin)):
+    row = admin_data.shortlist_detail(shortlist_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Shortlist not found")
+    return row
+
+
+@app.get("/admin/api/events")
+def admin_events(q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), _: str = Depends(require_admin)):
+    return admin_data.list_events(q, page, page_size)
+
+
+@app.get("/admin/api/events/{event_id}")
+def admin_event(event_id: str, _: str = Depends(require_admin)):
+    row = admin_data.event_detail(event_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return row
+
+
+async def _json_or_form(request: Request) -> dict:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    form = await request.form()
+    return {key: form.get(key) for key in ("token", "password", "password_confirm")}
+
+
+def _login_email(email: str) -> str:
+    return email.strip().lower()[:255]
 
 
 @app.post("/shops")
@@ -636,7 +877,7 @@ def match(body: MatchIn, _: None = Depends(guard_request)):
 
 
 @app.post("/onboard-influencer")
-def onboard_influencer(influencer: InfluencerIn, _: None = Depends(guard_request)):
+def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_public)):
     influencer_id = str(uuid.uuid4())
     record = public_profile(influencer, influencer_id)
     services.persist_creator(record)
