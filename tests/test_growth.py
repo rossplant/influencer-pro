@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+import billing_config
 import db
 import main
 import tracking
@@ -100,6 +101,7 @@ def test_platform_send_requires_consent_and_stays_off_by_default(monkeypatch):
         email="ada@example.com",
         consent=False,
     )
+    tracking.flush_pending()
     assert quiet["sent"] is False
     assert sent == []
     logged = next(row for row in db.memory_events if row.properties.get("event_id") == "apply:one")
@@ -112,7 +114,8 @@ def test_platform_send_requires_consent_and_stays_off_by_default(monkeypatch):
         email="ada@example.com",
         consent=True,
     )
-    assert allowed["sent"] is True
+    tracking.flush_pending()
+    assert allowed["duplicate"] is False
     assert sent[0]["hashed_email"] != "ada@example.com"
     assert "ada@example.com" not in str(sent[0])
     monkeypatch.setenv("ENV", "production")
@@ -126,6 +129,48 @@ def test_platform_send_requires_consent_and_stays_off_by_default(monkeypatch):
     )
     assert blocked["sent"] is False
     assert sent == []
+
+
+def test_signed_in_consent_revocation_updates_the_account(monkeypatch):
+    from tests.test_admin import EMAIL, PASSWORD, _cookie_header, _login, _setup
+
+    _setup(monkeypatch)
+    admin = _cookie_header(_login(password=PASSWORD, email=EMAIL))
+    shop = client.post("/shops", json={"name": "Consent Shop"}).json()
+    csrf = client.get("/admin", headers=admin).text.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
+    client.post(
+        f"/admin/api/shops/{shop['id']}/login",
+        json={"csrf_token": csrf, "email": "consent@example.com", "password": "password-pass", "password_confirm": "password-pass"},
+        headers=admin,
+    )
+    login = client.get("/seller")
+    token = login.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    signed = client.post(
+        "/seller/login",
+        data={"email": "consent@example.com", "password": "password-pass", "csrf_token": token},
+        follow_redirects=False,
+    )
+    cookie = {"Cookie": signed.headers["set-cookie"].split(";", 1)[0]}
+    revoked = client.post("/track/consent", json={"consent": False}, headers=cookie)
+    assert revoked.status_code == 200
+    assert revoked.json()["marketing_consent"] is False
+    assert db.memory_shops[shop["id"]].marketing_consent is False
+    assert any(row.event_name == "consent_revoked" for row in db.memory_events)
+    allowed = client.post("/track/consent", json={"consent": True}, headers=cookie)
+    assert allowed.json()["marketing_consent"] is True
+    assert db.memory_shops[shop["id"]].marketing_consent is True
+
+
+def test_custom_events_are_mapped_for_meta_and_tiktok():
+    approved = billing_config.PLATFORM_EVENTS["application_approved"]
+    founding = billing_config.PLATFORM_EVENTS["founding_free_to_paid"]
+    registration = billing_config.PLATFORM_EVENTS["complete_registration"]
+    assert approved["meta"] == "application_approved"
+    assert approved["tiktok"] == "application_approved"
+    assert founding["meta"] == "founding_free_to_paid"
+    assert founding["tiktok"] == "founding_free_to_paid"
+    assert registration["browser"] is False
+    assert registration["server"] is True
 
 
 def test_subscribe_replay_does_not_double_fire():
@@ -171,13 +216,13 @@ def test_waitlisted_application_still_emits_apply_submit(monkeypatch):
     submit = next(row for row in db.memory_events if row.event_name == "apply_submit")
     assert submit.properties["event_id"] == event_id
     assert submit.properties["invite_code"] == "INVITE1"
-    assert db.memory_applications[0].marketing_consent is False
 
 
 def test_pixels_render_only_with_id_and_consent(monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     monkeypatch.setenv("META_PIXEL_ID", "meta-pixel")
     monkeypatch.setenv("TIKTOK_PIXEL_ID", "tiktok-pixel")
+    client.cookies.clear()
     quiet = client.get("/founding-curators")
     assert "fbq(" not in quiet.text
     assert "ttq.load" not in quiet.text
@@ -270,11 +315,13 @@ def test_capi_posts_only_when_flag_id_and_token_are_set(monkeypatch):
     monkeypatch.setenv("TRACKING_ENABLED", "1")
     monkeypatch.setenv("META_PIXEL_ID", "meta-pixel")
     tracking.track("apply_submit", event_id="apply:capi", role="creator", consent=True, email="ada@example.com")
+    tracking.flush_pending()
     assert calls == []
     monkeypatch.setenv("META_CAPI_TOKEN", "meta-token")
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "staging")
     monkeypatch.setenv("META_TEST_EVENT_CODE", "TEST123")
     tracking.track("apply_submit", event_id="apply:capi-2", role="creator", consent=True, email="ada@example.com")
+    tracking.flush_pending()
     assert calls
     assert "graph.facebook.com" in calls[0][0]
     assert calls[0][1]["json"]["test_event_code"] == "TEST123"

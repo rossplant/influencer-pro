@@ -2,6 +2,7 @@ import hashlib
 import html
 import hmac
 import json
+import logging
 import os
 import threading
 import time
@@ -40,7 +41,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.16.0"
+APP_VERSION = "0.16.1"
 
 PromotionStyle = Literal[
     "educational",
@@ -1047,6 +1048,14 @@ async def stripe_webhook(request: Request, _: None = Depends(rate_limit_public))
     event = stripe_billing.construct_event(payload, request.headers.get("stripe-signature", ""))
     if stripe_billing.record_event(event):
         stripe_billing.apply_event(event)
+    # Fan-out runs after the Stripe event is stored. A platform failure must not
+    # turn this into a 500, or Stripe would retry and skip apply_event.
+    try:
+        import tracking
+
+        tracking.flush_pending()
+    except Exception:
+        logging.getLogger("plantr.webhook").exception("tracking fan-out failed after the Stripe webhook was stored")
     return {"received": True}
 
 

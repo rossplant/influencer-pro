@@ -91,24 +91,24 @@ SHOP_TIER_ALIASES = {"free": "starter"}
 
 COUPONS = {
     "founding_curator_50_12mo": {
-        "name": "Founding Curator 50 percent for 12 months",
+        "name": "Founding Curator 50% for 12mo",
         "percent_off": 50,
         "duration": "repeating",
         "duration_in_months": 12,
     },
     "seller_growth_50_3mo": {
-        "name": "Seller Growth 50 percent for 3 months",
+        "name": "Growth 50% for 3 months",
         "percent_off": 50,
         "duration": "repeating",
         "duration_in_months": 3,
     },
     "curator_sale_waiver": {
-        "name": "Curator month waiver after 5 attributed sales",
+        "name": "Waiver after 5 sales",
         "percent_off": 100,
         "duration": "once",
     },
     "elite_grant_3mo": {
-        "name": "Elite recognition, no charge for 3 months",
+        "name": "Elite free for 3 months",
         "percent_off": 100,
         "duration": "repeating",
         "duration_in_months": 3,
@@ -167,6 +167,7 @@ EVENT_NAMES = {
     "subscribe": "subscribe",
     "founding_free_to_paid": "founding_free_to_paid",
     "attributed_sale": "attributed_sale",
+    "consent_revoked": "consent_revoked",
 }
 
 # server: fan out from the API. browser: the page may fire the same event_id.
@@ -176,11 +177,31 @@ PLATFORM_EVENTS = {
     "view_content": {"meta": "ViewContent", "tiktok": "ViewContent", "server": True, "browser": True},
     "apply_start": {"custom": True, "server": False, "browser": True},
     "apply_submit": {"meta": "Lead", "tiktok": ["SubmitForm", "Lead"], "server": True, "browser": True},
-    "application_approved": {"custom": True, "server": True, "browser": False},
+    # Custom server events. Meta and TikTok receive the name as a custom event.
+    "application_approved": {
+        "meta": "application_approved",
+        "tiktok": "application_approved",
+        "custom": True,
+        "server": True,
+        "browser": False,
+    },
     "application_rejected": {"internal": True},
-    "complete_registration": {"meta": "CompleteRegistration", "tiktok": "CompleteRegistration", "server": True, "browser": True},
+    # complete_registration is server-only. Do not fire it from the browser.
+    "complete_registration": {
+        "meta": "CompleteRegistration",
+        "tiktok": "CompleteRegistration",
+        "server": True,
+        "browser": False,
+    },
     "subscribe": {"meta": "Subscribe", "tiktok": "Subscribe", "server": True, "browser": False},
-    "founding_free_to_paid": {"custom": True, "server": True, "browser": False},
+    "founding_free_to_paid": {
+        "meta": "founding_free_to_paid",
+        "tiktok": "founding_free_to_paid",
+        "custom": True,
+        "server": True,
+        "browser": False,
+    },
+    "consent_revoked": {"internal": True},
     "attributed_sale": {"internal": True},
 }
 

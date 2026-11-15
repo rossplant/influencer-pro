@@ -11,7 +11,7 @@ import io
 import logging
 import secrets
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 import db
 import events
-from models import AttributedOrder, Brief, Creator, CreatorProductLink, Product, Shop, Shortlist, ShortlistItem, utcnow
+from models import AttributedOrder, Brief, Creator, CreatorProductLink, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
 from services import _currency_code
 
 logger = logging.getLogger("plantr.attribution")
@@ -369,6 +369,7 @@ def _validated_row(raw: dict) -> dict:
         raise HTTPException(status_code=422, detail="click window must be 7 days")
     source_cell = str(raw.get("code") or raw.get("link") or "")
     click_source = "link" if "://" in source_cell or source_cell.strip().startswith("/r/") else "code"
+    attributed = _clicked_within_window(link, attribution_date)
     return {
         "order_id": order_id[:128],
         "date": attribution_date,
@@ -380,6 +381,7 @@ def _validated_row(raw: dict) -> dict:
         "link": link,
         "click_window_days": 7,
         "click_window_source": click_source,
+        "attributed": attributed,
         "raw": {key: value for key, value in raw.items() if key != "password"},
     }
 
@@ -412,6 +414,7 @@ def _write_order(parsed: dict) -> dict:
         fee_revenue=0,
         ingest_source="csv",
         raw_payload=parsed["raw"],
+        attributed=parsed["attributed"],
         occurred_at=occurred,
         created_at=now,
     )
@@ -428,7 +431,7 @@ def _write_order(parsed: dict) -> dict:
             order = AttributedOrder(**fields)
             session.add(order)
             shop = session.get(Shop, parsed["shop_id"])
-            if shop is not None:
+            if shop is not None and parsed["attributed"]:
                 _emit_sale(shop, parsed, link)
             session.flush()
             return _order_dict(order)
@@ -437,7 +440,7 @@ def _write_order(parsed: dict) -> dict:
     order = SimpleNamespace(**fields)
     db.memory_attributed_orders.append(order)
     shop = db.memory_shops.get(parsed["shop_id"])
-    if shop is not None:
+    if shop is not None and parsed["attributed"]:
         _emit_sale(shop, parsed, link)
     return _order_dict(order)
 
@@ -459,6 +462,33 @@ def _emit_sale(shop, parsed, link) -> None:
         refunded=False,
         cancelled=False,
     )
+
+
+def _clicked_within_window(link: dict, order_date: date) -> bool:
+    """True when this link or code was clicked in the 7 days up to and including the order date."""
+    start = order_date - timedelta(days=7)
+    code = str(link.get("discount_code") or "")
+    link_id = str(link.get("id") or "")
+    clicks = _link_clicks()
+    for entity_id, occurred, props in clicks:
+        if str(props.get("discount_code") or "") != code and str(entity_id) != link_id:
+            continue
+        click_day = occurred.date() if hasattr(occurred, "date") else occurred
+        if start <= click_day <= order_date:
+            return True
+    return False
+
+
+def _link_clicks() -> list:
+    if db.configured():
+        with db.session_scope() as session:
+            rows = session.scalars(select(Event).where(Event.event_name == "link_clicked")).all()
+            return [(row.entity_id, row.occurred_at, dict(row.properties or {})) for row in rows]
+    return [
+        (row.entity_id, row.occurred_at, dict(row.properties or {}))
+        for row in db.memory_events
+        if getattr(row, "event_name", None) == "link_clicked"
+    ]
 
 
 def adjust_order(order_id: str, *, refunded_amount: Optional[float] = None, cancelled_amount: Optional[float] = None) -> dict:
@@ -669,4 +699,5 @@ def _order_dict(row: Any) -> dict:
         "attribution_date": row.attribution_date,
         "ingest_source": row.ingest_source,
         "created_at": row.created_at,
+        "attributed": bool(getattr(row, "attributed", True)),
     }

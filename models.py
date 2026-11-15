@@ -447,6 +447,7 @@ class AttributedOrder(Base):
     raw_payload: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    attributed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_true())
 
 
 class AdminUser(Base):
@@ -649,6 +650,18 @@ class TrackedEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     subject_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True)
     event_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class TrackingRetry(Base):
+    """A platform send that failed. The internal event is already stored."""
+
+    __tablename__ = "tracking_retries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 

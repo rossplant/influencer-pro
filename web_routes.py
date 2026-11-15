@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import auth
 import pilots
@@ -83,6 +83,33 @@ def register(app) -> None:
     @app.get("/privacy")
     def privacy_page():
         return HTMLResponse(site_copy.privacy_html())
+
+    @app.post("/track/consent")
+    async def update_consent(request: Request):
+        body = await request.json()
+        allowed = bool(body.get("consent"))
+        updated = _set_signed_in_consent(request, allowed)
+        if not allowed and updated:
+            tracking.track(
+                "consent_revoked",
+                event_id=f"consent-revoke:{updated}:{int(__import__('time').time())}",
+                role=updated.split(":", 1)[0],
+                entity_type=updated.split(":", 1)[0],
+                entity_id=updated.split(":", 1)[1],
+                shop_id=updated.split(":", 1)[1] if updated.startswith("seller:") else None,
+                actor="api",
+                consent=False,
+            )
+        response = JSONResponse({"marketing_consent": allowed, "account": updated})
+        response.set_cookie(
+            "plantr_consent",
+            "marketing" if allowed else "denied",
+            max_age=90 * 24 * 60 * 60,
+            httponly=False,
+            samesite="lax",
+            path="/",
+        )
+        return response
 
     @app.post("/track/apply-start")
     async def apply_start(request: Request):
@@ -231,7 +258,10 @@ class TouchMiddleware:
                 message["headers"] = headers
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            tracking.flush_pending()
 
 
 def _landing(request: Request, kind: str):
@@ -335,6 +365,18 @@ async def _portal(request: Request, role: str):
     path = "/seller/billing" if role == "seller" else "/creator/billing"
     url = stripe_billing.portal_session(role=role, subject_id=session["subject_id"], return_url=f"{base}{path}")
     return RedirectResponse(url, status_code=303)
+
+
+def _set_signed_in_consent(request: Request, allowed: bool) -> str:
+    seller = portal.seller_context(request)
+    if seller:
+        stripe_billing.set_marketing_consent("seller", seller["subject_id"], allowed)
+        return f"seller:{seller['subject_id']}"
+    creator = portal.creator_context(request)
+    if creator:
+        stripe_billing.set_marketing_consent("creator", creator["subject_id"], allowed)
+        return f"creator:{creator['subject_id']}"
+    return ""
 
 
 def _offer_for_creator(item_id: str, creator_id: str) -> bool:

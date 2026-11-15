@@ -38,12 +38,14 @@ PII_KEYS = {
 # Tests replace this. The default never calls the network.
 transport = None
 outbound: list = []
+pending_sends: list = []
 
 
 def reset() -> None:
     global transport
     transport = None
     outbound.clear()
+    pending_sends.clear()
 
 
 def enabled() -> bool:
@@ -110,23 +112,22 @@ def track(
     _copy_touch(clean, touch)
     target = entity if entity is not None else _detached(entity_type, entity_id, shop_id)
     events.emit(name, target, actor, **clean)
-    sent = False
     if spec.get("internal") or not spec.get("server"):
         return {"event_id": event_id, "event_name": name, "duplicate": False, "sent": False}
     if consent and enabled() and not production():
-        payload = _platform_payload(
-            key,
-            name,
-            event_id,
-            clean,
-            email=email,
-            phone=phone,
-            ip=ip,
-            user_agent=user_agent,
+        pending_sends.append(
+            _platform_payload(
+                key,
+                name,
+                event_id,
+                clean,
+                email=email,
+                phone=phone,
+                ip=ip,
+                user_agent=user_agent,
+            )
         )
-        _dispatch(payload)
-        sent = True
-    return {"event_id": event_id, "event_name": name, "duplicate": False, "sent": sent}
+    return {"event_id": event_id, "event_name": name, "duplicate": False, "sent": False}
 
 
 def _detached(entity_type: str, entity_id: str, shop_id: Optional[str]):
@@ -225,17 +226,29 @@ def _platform_payload(key, name, event_id, clean, *, email, phone, ip, user_agen
     return payload
 
 
+def flush_pending() -> None:
+    """Send queued platform events. A failure is logged and queued, never raised."""
+    batch = list(pending_sends)
+    pending_sends.clear()
+    for payload in batch:
+        _dispatch(payload)
+
+
 def _dispatch(payload: dict) -> None:
     """Tests set transport. Otherwise send through CAPI when flag, id, and token exist."""
-    if transport is not None:
-        transport(payload)
+    try:
+        if transport is not None:
+            transport(payload)
+            outbound.append(payload)
+            return
+        if not (capi_ready("meta") or capi_ready("tiktok")):
+            logger.info("tracking platform send skipped event=%s", payload.get("event_name"))
+            return
+        _send_capi(payload)
         outbound.append(payload)
-        return
-    if not (capi_ready("meta") or capi_ready("tiktok")):
-        logger.info("tracking platform send skipped event=%s", payload.get("event_name"))
-        return
-    _send_capi(payload)
-    outbound.append(payload)
+    except Exception as exc:
+        logger.exception("platform send failed event_id=%s", payload.get("event_id"))
+        _enqueue_retry(payload, exc)
 
 
 def capi_ready(platform: str) -> bool:
@@ -246,6 +259,34 @@ def capi_ready(platform: str) -> bool:
     if platform == "tiktok":
         return bool(os.getenv("TIKTOK_PIXEL_ID", "").strip() and os.getenv("TIKTOK_EVENTS_API_TOKEN", "").strip())
     return False
+
+
+def _enqueue_retry(payload: dict, exc: Exception) -> None:
+    row = {
+        "id": str(__import__("uuid").uuid4()),
+        "event_id": str(payload.get("event_id") or ""),
+        "payload": payload,
+        "error": str(exc)[:2000],
+        "created_at": utcnow(),
+    }
+    db.memory_tracking_retries.append(row)
+    if not db.configured():
+        return
+    try:
+        from models import TrackingRetry
+
+        with db.session_scope() as session:
+            session.add(
+                TrackingRetry(
+                    id=row["id"],
+                    event_id=row["event_id"],
+                    payload=payload,
+                    error=row["error"],
+                    created_at=row["created_at"],
+                )
+            )
+    except Exception:
+        logger.exception("could not persist tracking retry event_id=%s", row["event_id"])
 
 
 def _send_capi(payload: dict) -> None:
@@ -282,12 +323,16 @@ def _send_capi(payload: dict) -> None:
             body["test_event_code"] = payload["meta_test_event_code"]
         pixel = os.getenv("META_PIXEL_ID", "").strip()
         token = os.getenv("META_CAPI_TOKEN", "").strip()
-        httpx.post(
-            f"https://graph.facebook.com/v21.0/{pixel}/events",
-            params={"access_token": token},
-            json=body,
-            timeout=5.0,
-        )
+        try:
+            httpx.post(
+                f"https://graph.facebook.com/v21.0/{pixel}/events",
+                params={"access_token": token},
+                json=body,
+                timeout=5.0,
+            )
+        except Exception:
+            logger.exception("Meta CAPI failed event_id=%s", payload.get("event_id"))
+            raise
     if capi_ready("tiktok"):
         pixel = os.getenv("TIKTOK_PIXEL_ID", "").strip()
         token = os.getenv("TIKTOK_EVENTS_API_TOKEN", "").strip()
@@ -309,12 +354,16 @@ def _send_capi(payload: dict) -> None:
             }
             if payload.get("tiktok_test_event_code"):
                 event["test_event_code"] = payload["tiktok_test_event_code"]
-            httpx.post(
-                "https://business-api.tiktok.com/open_api/v1.3/event/track/",
-                headers={"Access-Token": token, "Content-Type": "application/json"},
-                json={"event_source": "web", "event_source_id": pixel, "data": [event]},
-                timeout=5.0,
-            )
+            try:
+                httpx.post(
+                    "https://business-api.tiktok.com/open_api/v1.3/event/track/",
+                    headers={"Access-Token": token, "Content-Type": "application/json"},
+                    json={"event_source": "web", "event_source_id": pixel, "data": [event]},
+                    timeout=5.0,
+                )
+            except Exception:
+                logger.exception("TikTok Events API failed event_id=%s", payload.get("event_id"))
+                raise
 
 
 def pixel_snippet(consent: bool, fires: Optional[list] = None) -> str:

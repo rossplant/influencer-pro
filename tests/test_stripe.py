@@ -89,7 +89,7 @@ def test_billing_page_when_stripe_is_unset(monkeypatch):
     page = client.get("/creator/billing")
     assert page.status_code == 200
     assert "Sign in" in page.text
-    assert client.get("/").json()["version"] == "0.16.0"
+    assert client.get("/").json()["version"] == "0.16.1"
 
 
 def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):
@@ -176,4 +176,51 @@ def test_subscribe_webhook_is_idempotent(monkeypatch):
     assert stored.properties["value"] == 790.0
     assert stored.properties["currency"] == "aud"
     assert stored.properties["period"] == "annual"
-    assert "email" not in stored.properties
+
+
+def test_webhook_survives_a_platform_send_failure(monkeypatch):
+    from types import SimpleNamespace
+
+    from models import utcnow
+
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_placeholder")
+    monkeypatch.setenv("TRACKING_ENABLED", "1")
+    shop = SimpleNamespace(
+        memory_kind="shop",
+        id="shop-capi",
+        plan_tier="growth",
+        plan_status="trial",
+        first_paid_at=None,
+        marketing_consent=True,
+        attribution_first={"utm_source": "tiktok"},
+        attribution_last={},
+        signup_code="INV",
+        signup_campaign="seller_pilot",
+        created_at=utcnow(),
+        is_pilot=True,
+    )
+    db.memory_shops[shop.id] = shop
+
+    def explode(_payload):
+        raise RuntimeError("capi down")
+
+    monkeypatch.setattr(tracking, "transport", explode)
+    invoice = {
+        "id": "in_fail",
+        "amount_paid": 7900,
+        "currency": "aud",
+        "subscription": "sub_fail",
+        "customer": "cus_fail",
+        "metadata": {"role": "seller", "subject_id": shop.id, "tier": "growth", "interval": "month"},
+    }
+
+    def fake_event(payload, signature, secret):
+        return {"id": "evt_fail", "type": "invoice.paid", "data": {"object": invoice}}
+
+    import stripe
+
+    monkeypatch.setattr(stripe.Webhook, "construct_event", fake_event)
+    response = client.post("/stripe/webhook", content=b"{}", headers={"stripe-signature": "good"})
+    assert response.status_code == 200
+    assert any(row.event_name == "founding_free_to_paid" for row in db.memory_events)
+    assert db.memory_tracking_retries

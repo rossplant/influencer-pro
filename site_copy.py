@@ -179,7 +179,11 @@ def consent_banner() -> str:
         "<button type='button' id='consent-no'>Essential only</button>"
         "</div>"
         "<script>"
-        "document.getElementById('consent-yes').onclick=function(){document.cookie='plantr_consent=marketing;path=/;max-age=7776000;samesite=lax'};"
-        "document.getElementById('consent-no').onclick=function(){document.cookie='plantr_consent=denied;path=/;max-age=7776000;samesite=lax'};"
+        "function plantrConsent(allowed){"
+        "document.cookie='plantr_consent='+(allowed?'marketing':'denied')+';path=/;max-age=7776000;samesite=lax';"
+        "fetch('/track/consent',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({consent:allowed})});"
+        "}"
+        "document.getElementById('consent-yes').onclick=function(){plantrConsent(true)};"
+        "document.getElementById('consent-no').onclick=function(){plantrConsent(false)};"
         "</script>"
     )

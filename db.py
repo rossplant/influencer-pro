@@ -36,6 +36,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", defa
 # so this does not run against production. Do not keep using it once
 # production has data; add a new revision instead.
 PLANTR_TABLES = (
+    "tracking_retries",
     "tracked_events",
     "email_messages",
     "pilot_surveys",
@@ -101,6 +102,7 @@ memory_emails: list = []
 memory_billing: list = []
 memory_tracked_event_ids: set = set()
 memory_tracked_subjects: set = set()
+memory_tracking_retries: list = []
 
 
 def configured() -> bool:
@@ -148,6 +150,7 @@ def reset_memory() -> None:
     memory_billing.clear()
     memory_tracked_event_ids.clear()
     memory_tracked_subjects.clear()
+    memory_tracking_retries.clear()
 
 
 def close() -> None:

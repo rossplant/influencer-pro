@@ -38,18 +38,18 @@ def main() -> int:
 
 def _find_or_create_product(client, name, tier, audience):
     existing = client.products.search({"query": f"metadata['tier']:'{tier}' AND metadata['audience']:'{audience}'"})
-    data = getattr(existing, "data", None) or existing.get("data", [])
+    data = _rows(existing)
     if data:
-        return data[0]["id"] if isinstance(data[0], dict) else data[0].id
+        return _stripe_id(data[0])
     created = client.products.create({"name": name, "metadata": {"tier": tier, "audience": audience}})
-    return created["id"] if isinstance(created, dict) else created.id
+    return _stripe_id(created)
 
 
 def _find_or_create_price(client, product_id, lookup_key, cents, interval):
     found = client.prices.list({"lookup_keys": [lookup_key], "limit": 1})
-    data = getattr(found, "data", None) or found.get("data", [])
+    data = _rows(found)
     if data:
-        return data[0]["id"] if isinstance(data[0], dict) else data[0].id
+        return _stripe_id(data[0])
     created = client.prices.create(
         {
             "product": product_id,
@@ -60,7 +60,7 @@ def _find_or_create_price(client, product_id, lookup_key, cents, interval):
             "tax_behavior": "exclusive",
         }
     )
-    return created["id"] if isinstance(created, dict) else created.id
+    return _stripe_id(created)
 
 
 def _find_or_create_coupon(client, coupon_id, spec):
@@ -83,9 +83,9 @@ def _find_or_create_coupon(client, coupon_id, spec):
 
 def _find_or_create_promo(client, code, spec):
     found = client.promotion_codes.list({"code": code, "limit": 1})
-    data = getattr(found, "data", None) or found.get("data", [])
+    data = _rows(found)
     if data:
-        return data[0]["id"] if isinstance(data[0], dict) else data[0].id
+        return _stripe_id(data[0])
     created = client.promotion_codes.create(
         {
             "code": code,
@@ -94,7 +94,38 @@ def _find_or_create_promo(client, code, spec):
             "metadata": {"campaign": spec["campaign"], "channel": spec["channel"]},
         }
     )
-    return created["id"] if isinstance(created, dict) else created.id
+    return _stripe_id(created)
+
+
+def _rows(result):
+    """Read a list or search result without calling .get() on a Stripe object.
+
+    An empty ``data`` list is a real answer. ``auto_paging_iter`` is used only
+    when Stripe says there is another page, or when the result has no ``data``.
+    """
+    if result is None:
+        return []
+    has_data = hasattr(result, "data")
+    data = list(result.data) if has_data and result.data is not None else None
+    if getattr(result, "has_more", False) and hasattr(result, "auto_paging_iter"):
+        try:
+            return list(result.auto_paging_iter())
+        except Exception:
+            return data or []
+    if data is not None:
+        return data
+    if hasattr(result, "auto_paging_iter"):
+        try:
+            return list(result.auto_paging_iter())
+        except Exception:
+            return []
+    return []
+
+
+def _stripe_id(obj):
+    if isinstance(obj, dict):
+        return obj["id"]
+    return obj.id
 
 
 if __name__ == "__main__":

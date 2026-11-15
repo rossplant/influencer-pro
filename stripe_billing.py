@@ -315,6 +315,10 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     _upsert_billing_row(role, subject_id, values, metadata)
 
 
+def set_marketing_consent(role: str, subject_id: str, allowed: bool) -> None:
+    _save_account(role, subject_id, {"marketing_consent": bool(allowed)})
+
+
 def account_context(role: str, subject_id: str) -> dict:
     row = _account(role, subject_id) or {}
     return {
@@ -579,7 +583,7 @@ def _sales_this_month(creator_id: str) -> int:
     start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     count = 0
     for order in db.memory_attributed_orders:
-        if getattr(order, "creator_id", None) != creator_id:
+        if getattr(order, "creator_id", None) != creator_id or not getattr(order, "attributed", True):
             continue
         occurred = getattr(order, "occurred_at", None)
         if occurred is not None and occurred >= start:
@@ -589,7 +593,7 @@ def _sales_this_month(creator_id: str) -> int:
 
         with db.session_scope() as session:
             rows = session.scalars(select(AttributedOrder).where(AttributedOrder.creator_id == creator_id)).all()
-            count = sum(1 for row in rows if row.occurred_at >= start)
+            count = sum(1 for row in rows if row.attributed and row.occurred_at >= start)
     return count
 
 

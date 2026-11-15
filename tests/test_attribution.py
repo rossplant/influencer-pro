@@ -173,6 +173,7 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
         json={"creator_id": creator["id"], "product_id": product_id, "destination_url": "https://brand.example/p"},
         headers=headers,
     ).json()["discount_code"]
+    assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
     csv_text = f"order_id,date,link,gross,currency,shop\n55,2026-11-15,/r/{code},19,USD,{shop['id']}\n"
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["created"] == 1
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["existing"] == 1
@@ -201,6 +202,7 @@ def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch)
         json={"creator_id": creator["id"], "product_id": product_id},
         headers=headers,
     ).json()["discount_code"]
+    assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
     csv_text = f"order_id,date,code,gross,currency,shop\n77,2026-11-15,{code},20,AUD,{shop['id']}\n"
     imported = client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers)
     assert imported.json()["created"] == 1
@@ -234,3 +236,14 @@ def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch)
         assert exc.status_code == 422
     else:
         raise AssertionError("a non-7-day click window was accepted")
+    missed = client.post(
+        "/attributed-orders/import",
+        json={"csv": f"order_id,date,code,gross,currency,shop\n88,2026-01-01,{code},8,AUD,{shop['id']}\n"},
+        headers=headers,
+    )
+    assert missed.json()["created"] == 1
+    outside = next(row for row in db.memory_attributed_orders if row.external_order_id == "88")
+    assert outside.attributed is False
+    assert not any(
+        row.event_name == "attributed_sale" and row.properties.get("order_id") == "88" for row in db.memory_events
+    )
