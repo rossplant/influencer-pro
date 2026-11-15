@@ -73,6 +73,8 @@ memory_shortlist_items: list = []
 memory_shortlist_exclusions: list = []
 memory_briefs: list = []
 memory_admin_users: dict = {}
+memory_creator_product_links: list = []
+memory_attributed_orders: list = []
 
 
 def configured() -> bool:
@@ -104,6 +106,8 @@ def reset_memory() -> None:
     memory_shortlist_exclusions.clear()
     memory_briefs.clear()
     memory_admin_users.clear()
+    memory_creator_product_links.clear()
+    memory_attributed_orders.clear()
 
 
 def close() -> None:
