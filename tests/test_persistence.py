@@ -254,7 +254,7 @@ def test_onboarding_persists_creator_and_emits(tmp_path, monkeypatch):
         assert creator.restrictions == ["no_competitor_brands"]
         assert creator.excluded_categories == ["alcohol"]
         assert creator.excluded_claims == ["clinically proven"]
-        assert creator.profile_completed_at is not None
+        assert creator.profile_completed_at is None
         assert creator.platforms == ["tiktok"]
         assert creator.follower_band == "10k_50k"
         assert creator.profile["influencer_id"] == body["id"]
@@ -619,6 +619,8 @@ def test_marketplace_fields_round_trip(tmp_path, monkeypatch):
             "est_conversion_rate": 0.02,
             "avg_order_value": 35,
             "typical_price_band": {"min": 20, "max": 50},
+            "platforms": ["tiktok"],
+            "average_engagement_rate": 0.04,
         },
     )
     assert onboard.status_code == 200
@@ -631,6 +633,9 @@ def test_marketplace_fields_round_trip(tmp_path, monkeypatch):
         assert creator.desired_categories == ["other"]
         assert creator.avg_views == 1200
         assert creator.engagement_rate == 0.04
+        assert creator.metrics_source == "self_reported"
+        assert creator.profile_completed_at is not None
+        assert not hasattr(creator, "average_engagement_rate")
         assert creator.typical_price_band == {"min": 20, "max": 50}
         from sqlalchemy import func
         from models import Category
@@ -648,6 +653,121 @@ def test_marketplace_fields_round_trip(tmp_path, monkeypatch):
         assert "pet_safe" not in columns
         assert "light" not in columns
         assert "care_level" not in columns
+
+
+def test_market_category_and_lineage_schema(tmp_path, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    from models import CreatorProductLink, Shortlist, ShortlistItem, Subscription
+
+    use_database(tmp_path, monkeypatch)
+    shop = client.post(
+        "/shops",
+        json={
+            "name": "Market",
+            "country": "us",
+            "market": "us",
+            "currency": "usd",
+            "primary_category": "home",
+        },
+    )
+    assert shop.status_code == 200
+    body = shop.json()
+    assert body["country"] == "US"
+    assert body["market"] == "us"
+    assert body["currency"] == "USD"
+    assert body["primary_category"] == "home"
+    assert client.post("/shops", json={"name": "Bad", "country": "USA"}).status_code == 422
+    assert client.post(
+        "/enrich",
+        json={**PRODUCT, "shop_id": body["id"], "category": "not-a-category"},
+    ).status_code == 422
+    alias = client.post(
+        "/onboard-influencer",
+        json={
+            **INFLUENCER,
+            "handle": "@alias",
+            "average_engagement_rate": 0.2,
+        },
+    )
+    assert alias.status_code == 200
+    assert alias.json()["influencer"]["engagement_rate"] == 0.2
+    assert "average_engagement_rate" not in alias.json()["influencer"]
+    with db.session_scope() as session:
+        assert session.get(Creator, alias.json()["id"]).engagement_rate == 0.2
+        subscription = Subscription(
+            id="sub-1",
+            shop_id=body["id"],
+            plan_tier="starter",
+            status="free",
+            interval="month",
+            price=0,
+            mrr=0,
+            currency="USD",
+            created_at=utcnow(),
+        )
+        session.add(subscription)
+        session.flush()
+        assert subscription.is_current is True
+        product = Product(
+            id="prod-link",
+            shop_id=body["id"],
+            title="Linked",
+            images=[],
+            tags=[],
+            attributes={},
+            claims=[],
+            currency="USD",
+            source="manual",
+            created_at=utcnow(),
+        )
+        creator = session.get(Creator, alias.json()["id"])
+        session.add(product)
+        session.flush()
+        session.add(
+            CreatorProductLink(
+                id="link-1",
+                shop_id=body["id"],
+                product_id=product.id,
+                creator_id=creator.id,
+                link_url="https://example.com/p",
+                discount_code="SAVE10",
+                platform="tiktok",
+                status="active",
+                created_at=utcnow(),
+            )
+        )
+        shortlist = Shortlist(
+            id="sl-1",
+            shop_id=body["id"],
+            product_id=product.id,
+            match_version="placeholder-0",
+            created_at=utcnow(),
+        )
+        session.add(shortlist)
+        session.flush()
+        session.add(
+            ShortlistItem(
+                id="item-1",
+                shortlist_id=shortlist.id,
+                creator_id=creator.id,
+                score=1,
+                reasons={},
+                rank=1,
+            )
+        )
+    with pytest.raises(IntegrityError):
+        with db.session_scope() as session:
+            session.add(
+                ShortlistItem(
+                    id="item-2",
+                    shortlist_id="sl-1",
+                    creator_id=alias.json()["id"],
+                    score=1,
+                    reasons={},
+                    rank=2,
+                )
+            )
 
 
 def test_duplicate_handle_is_rejected(tmp_path, monkeypatch):
@@ -730,8 +850,14 @@ def test_emit_sets_creator_and_item_milestones_once(tmp_path, monkeypatch):
         session.add(creator)
         session.flush()
         events.emit("creator_onboarded", creator, "api")
-        first = creator.profile_completed_at
+        assert creator.profile_completed_at is None
+        creator.active_categories = ["home"]
+        creator.preferred_promotion_styles = ["educational"]
+        creator.platforms = ["tiktok"]
         events.emit("creator_onboarded", creator, "operator")
+        first = creator.profile_completed_at
+        assert first is not None
+        events.emit("creator_onboarded", creator, "api")
         assert creator.profile_completed_at == first
         events.emit("creator_posted", creator, "operator")
         assert creator.first_post_at is not None

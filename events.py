@@ -277,6 +277,8 @@ def _apply_milestones(name: str, entity: Any, shop: Any, props: dict) -> None:
     if creator is None and name in {"match_accepted", "match_declined", "creator_posted"}:
         creator = _creator_of(entity)
     for column, mode in CREATOR_MILESTONES.get(name, ()):
+        if column == "profile_completed_at" and not profile_is_complete(creator):
+            continue
         _stamp(creator, column, mode)
     if _is(entity, ShortlistItem, "shortlist_item"):
         if name == "match_accepted":
@@ -288,6 +290,33 @@ def _apply_milestones(name: str, entity: Any, shop: Any, props: dict) -> None:
                 entity.decline_reason = reason
     if name == "brief_sent" and _is(entity, Brief, "brief"):
         _stamp(entity, "sent_at", "first")
+
+
+def profile_is_complete(entity: Any) -> bool:
+    """A creator profile is complete when matching does not have to guess the basics.
+
+    Required: a handle, at least one active category, at least one preferred
+    promotion style, and at least one platform. Desired categories, follower
+    band, and performance metrics are optional.
+    """
+    if entity is None:
+        return False
+    profile = getattr(entity, "profile", None)
+    profile = profile if isinstance(profile, dict) else {}
+
+    def values(attr: str, key: str) -> list:
+        raw = getattr(entity, attr, None)
+        if raw:
+            return list(raw)
+        return list(profile.get(key) or [])
+
+    handle = str(getattr(entity, "handle", None) or profile.get("handle") or "").strip()
+    return bool(
+        handle
+        and values("active_categories", "active_categories")
+        and values("preferred_promotion_styles", "preferred_promotion_styles")
+        and values("platforms", "platforms")
+    )
 
 
 def _stamp(obj: Any, column: str, mode: str) -> None:

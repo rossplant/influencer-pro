@@ -78,6 +78,8 @@ class InfluencerIn(BaseModel):
     desired_categories: List[str] = Field(default_factory=list)
     avg_views: Optional[int] = None
     engagement_rate: Optional[float] = None
+    metrics_source: Literal["self_reported", "platform_api", "manual_verified"] = "self_reported"
+    metrics_as_of: Optional[str] = None
     est_conversion_rate: Optional[float] = None
     avg_order_value: Optional[float] = None
     typical_price_band: Optional[Dict[str, Any]] = None
@@ -141,6 +143,10 @@ class ShopIn(BaseModel):
     is_pilot: bool = False
     is_underserved: bool = False
     underserved_reason: Optional[str] = None
+    country: Optional[str] = None
+    market: Optional[str] = None
+    currency: Optional[str] = None
+    primary_category: Optional[str] = None
 
 
 def _int_env(name: str, default: int) -> int:
@@ -256,6 +262,9 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
     """Profile dict returned to clients. Empty new fields stay off the payload."""
     record = influencer.model_dump()
     record["influencer_id"] = influencer_id
+    if record.get("engagement_rate") is None and record.get("average_engagement_rate") is not None:
+        record["engagement_rate"] = record["average_engagement_rate"]
+    record.pop("average_engagement_rate", None)
     if not record.get("platforms"):
         record.pop("platforms", None)
     if not record.get("follower_band"):
@@ -483,6 +492,10 @@ def create_shop(body: ShopIn, _: None = Depends(guard_request)):
         is_pilot=body.is_pilot,
         is_underserved=body.is_underserved,
         underserved_reason=body.underserved_reason,
+        country=body.country,
+        market=body.market,
+        currency=body.currency,
+        primary_category=body.primary_category,
     )
 
 

@@ -69,6 +69,10 @@ class Shop(Base):
     is_pilot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", index=True)
     is_underserved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     underserved_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, index=True)
+    market: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True, index=True)
+    primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     briefs_generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -89,6 +93,12 @@ class Creator(Base):
     """Influencer profile from influencer_schema.json, plus interests, restrictions, platforms, and follower band."""
 
     __tablename__ = "creators"
+    __table_args__ = (
+        CheckConstraint(
+            "metrics_source IN ('self_reported', 'platform_api', 'manual_verified')",
+            name="ck_creators_metrics_source",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     handle: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
@@ -99,7 +109,6 @@ class Creator(Base):
     preferred_promotion_styles: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     audience_demographics: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     content_formats: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
-    average_engagement_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     past_categories: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     restrictions: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     excluded_categories: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
@@ -108,6 +117,8 @@ class Creator(Base):
     desired_categories: Mapped[list] = mapped_column(JSON_TYPE, nullable=False, default=list)
     avg_views: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     engagement_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    metrics_source: Mapped[str] = mapped_column(String(32), nullable=False, default="self_reported", server_default="self_reported")
+    metrics_as_of: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     est_conversion_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     avg_order_value: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     typical_price_band: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
@@ -126,13 +137,16 @@ class Product(Base):
     """A catalogue item for a brand. Attributes are free-form; claims keep a source."""
 
     __tablename__ = "products"
+    __table_args__ = (
+        CheckConstraint("source IN ('shopify', 'csv', 'manual', 'api')", name="ck_products_source"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description_short: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description_long: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    category: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     subcategory: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     images: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
@@ -141,6 +155,7 @@ class Product(Base):
     attributes: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
     claims: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     commission_rate: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -194,6 +209,9 @@ class Shortlist(Base):
 
 class ShortlistItem(Base):
     __tablename__ = "shortlist_items"
+    __table_args__ = (
+        UniqueConstraint("shortlist_id", "creator_id", name="uq_shortlist_items_shortlist_creator"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     shortlist_id: Mapped[str] = mapped_column(ForeignKey("shortlists.id"), nullable=False, index=True)
@@ -218,6 +236,7 @@ class Brief(Base):
     shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True)
+    shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     disclosure_line: Mapped[str] = mapped_column(Text, nullable=False)
@@ -265,7 +284,7 @@ class Subscription(Base):
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     mrr: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
-    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     trial_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -338,6 +357,8 @@ class AttributedOrder(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    country: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, index=True)
+    market: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     external_order_id: Mapped[str] = mapped_column(String(128), nullable=False)
     external_creator_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     gmv_gross: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
@@ -347,6 +368,8 @@ class AttributedOrder(Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True)
     product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
+    brief_id: Mapped[Optional[str]] = mapped_column(ForeignKey("briefs.id"), nullable=True)
     attribution_date: Mapped[date] = mapped_column(Date, nullable=False)
     click_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     click_window_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -358,5 +381,22 @@ class AttributedOrder(Base):
     ingest_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     raw_payload: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreatorProductLink(Base):
+    """Schema only. A tracking link or discount code for one creator and one product."""
+
+    __tablename__ = "creator_product_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
+    link_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    discount_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 

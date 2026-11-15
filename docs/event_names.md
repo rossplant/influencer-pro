@@ -20,8 +20,10 @@ Shop events copy `plan_tier` and `plan_status` into `properties`. These counters
 | Event | Trigger | What it updates |
 | --- | --- | --- |
 | `shop_signed_up` | `POST /shops` | Shop snapshot only. No usage counter. |
-| `creator_onboarded` | `POST /onboard-influencer` | `creators.profile_completed_at` the first time. Not a shop event. |
-| `profile_completed` | Same milestone as onboarding, if emitted directly | `creators.profile_completed_at` the first time. |
+| `creator_onboarded` | `POST /onboard-influencer` | `creators.profile_completed_at` the first time, and only when the profile is complete. Not a shop event. |
+| `profile_completed` | Emitted directly for the same milestone | `creators.profile_completed_at` the first time, and only when the profile is complete. |
+
+A profile is complete when it has a handle, at least one `active_categories` slug, at least one preferred promotion style, and at least one platform. Desired categories and performance metrics are optional, so they do not gate this timestamp.
 | `product_enriched` | `POST /enrich` when a shop or product id resolves and the catalogue cap allows it | `products_enriched` +1, `first_enrich_at` the first time. Re-enriching an existing product still counts as an enrichment and does not add a catalogue row. |
 | `match_run` | `POST /match` after a shortlist is stored | `matches_run` +1, `first_match_at` the first time, `last_match_at` every time. Starter cap is 5 per UTC month. |
 | `brief_sent` | `POST /briefs/{id}/sent`, including `actor="operator"` | `briefs_generated` +1, `first_brief_at` the first time, `last_campaign_at` every time, `briefs.sent_at` the first time. Enrichment does not emit this. |

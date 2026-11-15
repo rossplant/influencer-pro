@@ -28,7 +28,7 @@ Fields follow `influencer_schema.json`:
 
 ### 3. What is stored
 - The response is `{id, influencer}`.
-- When `DATABASE_URL` is set, the profile is a `creators` row. `id` is the database id. `interests` stores the areas of interest. `restrictions` is a generic tag list. `excluded_categories` and `excluded_claims` are stored separately. The call emits `creator_onboarded` with `actor='api'`, which sets `profile_completed_at` the first time.
+- When `DATABASE_URL` is set, the profile is a `creators` row. `id` is the database id. `interests` stores the areas of interest. `restrictions` is a generic tag list. `excluded_categories` and `excluded_claims` are stored separately. The call emits `creator_onboarded` with `actor='api'`. `profile_completed_at` is set only when the profile is complete: a handle, at least one active category, at least one preferred promotion style, and at least one platform. `average_engagement_rate` is accepted as an alias and stored as `engagement_rate`.
 - A second profile with the same handle is rejected with 409.
 - When `DATABASE_URL` is unset, the API logs a warning and keeps the profile in process memory. That copy is lost on restart. Notion is not the database.
 - `GET /creators/{id}` reads the stored profile. It uses the same `X-API-Key` rule as onboarding.

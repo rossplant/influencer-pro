@@ -70,6 +70,10 @@ def upgrade() -> None:
         sa.Column("is_pilot", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("is_underserved", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("underserved_reason", sa.Text(), nullable=True),
+        sa.Column("country", sa.String(length=2), nullable=True),
+        sa.Column("market", sa.String(length=64), nullable=True),
+        sa.Column("currency", sa.String(length=3), nullable=True),
+        sa.Column("primary_category", sa.String(length=64), nullable=True),
         sa.Column("products_enriched", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("matches_run", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("briefs_generated", sa.Integer(), nullable=False, server_default="0"),
@@ -86,6 +90,10 @@ def upgrade() -> None:
     )
     op.create_index("ix_shops_is_pilot", "shops", ["is_pilot"])
     op.create_index("ix_shops_created_at", "shops", ["created_at"])
+    op.create_index("ix_shops_country", "shops", ["country"])
+    op.create_index("ix_shops_market", "shops", ["market"])
+    op.create_index("ix_shops_currency", "shops", ["currency"])
+    op.create_index("ix_shops_primary_category", "shops", ["primary_category"])
     op.create_table(
         "creators",
         sa.Column("id", sa.String(length=36), primary_key=True),
@@ -98,7 +106,6 @@ def upgrade() -> None:
         sa.Column("preferred_promotion_styles", json_type, nullable=False),
         sa.Column("audience_demographics", json_type, nullable=True),
         sa.Column("content_formats", json_type, nullable=False),
-        sa.Column("average_engagement_rate", sa.Float(), nullable=True),
         sa.Column("past_categories", json_type, nullable=False),
         sa.Column("restrictions", json_type, nullable=False),
         sa.Column("excluded_categories", json_type, nullable=False),
@@ -107,6 +114,8 @@ def upgrade() -> None:
         sa.Column("desired_categories", json_type, nullable=False),
         sa.Column("avg_views", sa.Integer(), nullable=True),
         sa.Column("engagement_rate", sa.Float(), nullable=True),
+        sa.Column("metrics_source", sa.String(length=32), nullable=False, server_default=sa.text("'self_reported'")),
+        sa.Column("metrics_as_of", sa.DateTime(timezone=True), nullable=True),
         sa.Column("est_conversion_rate", sa.Float(), nullable=True),
         sa.Column("avg_order_value", sa.Numeric(12, 2), nullable=True),
         sa.Column("typical_price_band", json_type, nullable=True),
@@ -119,6 +128,10 @@ def upgrade() -> None:
         sa.Column("first_post_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("profile", json_type, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.CheckConstraint(
+            "metrics_source IN ('self_reported', 'platform_api', 'manual_verified')",
+            name="ck_creators_metrics_source",
+        ),
     )
     op.create_table(
         "products",
@@ -127,7 +140,7 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=500), nullable=False),
         sa.Column("description_short", sa.Text(), nullable=True),
         sa.Column("description_long", sa.Text(), nullable=True),
-        sa.Column("category", sa.String(length=255), nullable=True),
+        sa.Column("category", sa.String(length=64), nullable=True),
         sa.Column("subcategory", sa.String(length=255), nullable=True),
         sa.Column("images", json_type, nullable=False),
         sa.Column("price", sa.Numeric(12, 2), nullable=True),
@@ -136,9 +149,12 @@ def upgrade() -> None:
         sa.Column("attributes", json_type, nullable=False),
         sa.Column("claims", json_type, nullable=False),
         sa.Column("commission_rate", sa.Numeric(5, 2), nullable=True),
+        sa.Column("source", sa.String(length=16), nullable=False, server_default=sa.text("'manual'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint("source IN ('shopify', 'csv', 'manual', 'api')", name="ck_products_source"),
     )
+    op.create_index("ix_products_category", "products", ["category"])
     op.create_index("ix_products_shop_id", "products", ["shop_id"])
     op.create_table(
         "events",
@@ -187,6 +203,7 @@ def upgrade() -> None:
         sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("declined_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("decline_reason", sa.Text(), nullable=True),
+        sa.UniqueConstraint("shortlist_id", "creator_id", name="uq_shortlist_items_shortlist_creator"),
     )
     op.create_index("ix_shortlist_items_shortlist_id", "shortlist_items", ["shortlist_id"])
     op.create_index("ix_shortlist_items_creator_id", "shortlist_items", ["creator_id"])
@@ -196,6 +213,7 @@ def upgrade() -> None:
         sa.Column("shop_id", sa.String(length=36), sa.ForeignKey("shops.id"), nullable=False),
         sa.Column("product_id", sa.String(length=36), sa.ForeignKey("products.id"), nullable=False),
         sa.Column("creator_id", sa.String(length=36), sa.ForeignKey("creators.id"), nullable=True),
+        sa.Column("shortlist_item_id", sa.String(length=36), sa.ForeignKey("shortlist_items.id"), nullable=True),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("source", sa.String(length=16), nullable=False),
         sa.Column("disclosure_line", sa.Text(), nullable=False),
@@ -232,7 +250,7 @@ def upgrade() -> None:
         sa.Column("price", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("mrr", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("currency", sa.String(length=8), nullable=False, server_default=sa.text("'USD'")),
-        sa.Column("is_current", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("is_current", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("cancelled_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("trial_ends_at", sa.DateTime(timezone=True), nullable=True),
@@ -285,6 +303,8 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("shop_id", sa.String(length=36), sa.ForeignKey("shops.id"), nullable=False),
         sa.Column("platform", sa.String(length=32), nullable=False),
+        sa.Column("country", sa.String(length=2), nullable=True),
+        sa.Column("market", sa.String(length=64), nullable=True),
         sa.Column("external_order_id", sa.String(length=128), nullable=False),
         sa.Column("external_creator_id", sa.String(length=128), nullable=True),
         sa.Column("gmv_gross", sa.Numeric(12, 2), nullable=False),
@@ -294,6 +314,8 @@ def upgrade() -> None:
         sa.Column("currency", sa.String(length=8), nullable=False, server_default=sa.text("'USD'")),
         sa.Column("creator_id", sa.String(length=36), sa.ForeignKey("creators.id"), nullable=True),
         sa.Column("product_id", sa.String(length=36), sa.ForeignKey("products.id"), nullable=True),
+        sa.Column("shortlist_item_id", sa.String(length=36), sa.ForeignKey("shortlist_items.id"), nullable=True),
+        sa.Column("brief_id", sa.String(length=36), sa.ForeignKey("briefs.id"), nullable=True),
         sa.Column("attribution_date", sa.Date(), nullable=False),
         sa.Column("click_window_days", sa.Integer(), nullable=False, server_default="7"),
         sa.Column("click_window_source", sa.String(length=64), nullable=True),
@@ -310,9 +332,34 @@ def upgrade() -> None:
     )
     op.create_index("ix_attributed_orders_shop_id", "attributed_orders", ["shop_id"])
     op.create_index("ix_orders_shop_attribution_date", "attributed_orders", ["shop_id", "attribution_date"])
+    op.create_index("ix_orders_country", "attributed_orders", ["country"])
+    op.create_index("ix_orders_market", "attributed_orders", ["market"])
+    op.create_table(
+        "creator_product_links",
+        sa.Column("id", sa.String(length=36), primary_key=True),
+        sa.Column("shop_id", sa.String(length=36), sa.ForeignKey("shops.id"), nullable=False),
+        sa.Column("product_id", sa.String(length=36), sa.ForeignKey("products.id"), nullable=False),
+        sa.Column("creator_id", sa.String(length=36), sa.ForeignKey("creators.id"), nullable=False),
+        sa.Column("shortlist_item_id", sa.String(length=36), sa.ForeignKey("shortlist_items.id"), nullable=True),
+        sa.Column("link_url", sa.Text(), nullable=True),
+        sa.Column("discount_code", sa.String(length=64), nullable=True),
+        sa.Column("platform", sa.String(length=32), nullable=False),
+        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'active'")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+    )
+    op.create_index("ix_creator_product_links_shop_id", "creator_product_links", ["shop_id"])
+    op.create_index(
+        "uq_links_product_creator_code",
+        "creator_product_links",
+        ["product_id", "creator_id", "discount_code"],
+        unique=True,
+        sqlite_where=sa.text("discount_code IS NOT NULL"),
+        postgresql_where=sa.text("discount_code IS NOT NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_table("creator_product_links")
     op.drop_table("attributed_orders")
     op.drop_table("monthly_mrr_snapshots")
     op.drop_table("subscription_changes")

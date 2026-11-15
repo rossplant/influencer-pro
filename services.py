@@ -35,6 +35,10 @@ def create_shop(
     is_pilot: bool,
     is_underserved: bool = False,
     underserved_reason: Optional[str] = None,
+    country: Optional[str] = None,
+    market: Optional[str] = None,
+    currency: Optional[str] = None,
+    primary_category: Optional[str] = None,
 ) -> dict:
     tier = (plan_tier or "").strip() or "starter"
     # Pilot shops default to starter. An explicit plan_tier is kept.
@@ -43,6 +47,10 @@ def create_shop(
     if tier not in events.KNOWN_PLAN_TIERS:
         raise HTTPException(status_code=422, detail=f"Unknown plan_tier '{tier}'")
     status = _default_plan_status(tier, plan_status)
+    country_code = _country_code(country)
+    currency_code = _currency_code(currency)
+    if primary_category:
+        validate_category_lists([primary_category])
     shop_id = str(uuid.uuid4())
     now = utcnow()
     fields = dict(
@@ -54,6 +62,10 @@ def create_shop(
         is_pilot=bool(is_pilot),
         is_underserved=bool(is_underserved),
         underserved_reason=(underserved_reason or None),
+        country=country_code,
+        market=(market or None),
+        currency=currency_code,
+        primary_category=(primary_category or None),
         products_enriched=0,
         matches_run=0,
         briefs_generated=0,
@@ -102,6 +114,10 @@ def shop_dict(shop: Any) -> dict:
         "is_pilot": bool(shop.is_pilot),
         "is_underserved": bool(getattr(shop, "is_underserved", False)),
         "underserved_reason": getattr(shop, "underserved_reason", None),
+        "country": getattr(shop, "country", None),
+        "market": getattr(shop, "market", None),
+        "currency": getattr(shop, "currency", None),
+        "primary_category": getattr(shop, "primary_category", None),
         "mrr": events.mrr(shop.plan_tier, status=shop.plan_status),
         "products_enriched": int(shop.products_enriched or 0),
         "matches_run": int(shop.matches_run or 0),
@@ -157,6 +173,10 @@ def persist_creator(record: dict) -> None:
             memory_kind="creator",
             id=record["influencer_id"],
             handle=record.get("handle"),
+            active_categories=active,
+            preferred_promotion_styles=list(record.get("preferred_promotion_styles") or []),
+            platforms=list(record.get("platforms") or []),
+            profile=record,
             profile_completed_at=None,
             first_match_accepted_at=None,
             first_post_at=None,
@@ -175,7 +195,6 @@ def persist_creator(record: dict) -> None:
                 preferred_promotion_styles=list(record.get("preferred_promotion_styles") or []),
                 audience_demographics=record.get("audience_demographics"),
                 content_formats=list(record.get("content_formats") or []),
-                average_engagement_rate=record.get("average_engagement_rate"),
                 past_categories=list(record.get("past_categories") or []),
                 restrictions=list(record.get("restrictions") or []),
             excluded_categories=list(record.get("excluded_categories") or []),
@@ -184,6 +203,8 @@ def persist_creator(record: dict) -> None:
             desired_categories=desired,
             avg_views=record.get("avg_views"),
             engagement_rate=record.get("engagement_rate"),
+            metrics_source=record.get("metrics_source") or "self_reported",
+            metrics_as_of=record.get("metrics_as_of"),
             est_conversion_rate=record.get("est_conversion_rate"),
             avg_order_value=record.get("avg_order_value"),
             typical_price_band=record.get("typical_price_band"),
@@ -269,6 +290,8 @@ def save_enrichment(
     creator_id = _clean(creator_id)
     if not shop_id and not product_id:
         return None
+    if category and category.strip():
+        validate_category_lists([category.strip()])
     brief_source = source if source in ("grok", "fallback") else "fallback"
     content = json.dumps({"talking_points": talking_points, "faqs": faqs})
     if db.configured():
@@ -551,7 +574,26 @@ def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
         values.setdefault("claims", [])
         if not values.get("currency"):
             values["currency"] = "USD"
+        values.setdefault("source", "manual")
     return values
+
+
+def _country_code(value: Optional[str]) -> Optional[str]:
+    if value is None or not str(value).strip():
+        return None
+    code = str(value).strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        raise HTTPException(status_code=422, detail="country must be an ISO-3166 alpha-2 code")
+    return code
+
+
+def _currency_code(value: Optional[str]) -> Optional[str]:
+    if value is None or not str(value).strip():
+        return None
+    code = str(value).strip().upper()
+    if len(code) != 3 or not code.isalpha():
+        raise HTTPException(status_code=422, detail="currency must be a 3-letter code")
+    return code
 
 
 def _apply_product(session, shop, product, requested_id, **fields):

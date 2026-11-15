@@ -36,6 +36,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("plantr_request_id", defa
 # so this does not run against production. Do not keep using it once
 # production has data; add a new revision instead.
 PLANTR_TABLES = (
+    "creator_product_links",
     "attributed_orders",
     "monthly_mrr_snapshots",
     "subscription_changes",
@@ -153,6 +154,36 @@ def init_storage() -> None:
     )
 
 
+def _revision_0001_is_stale(inspector, tables: set[str]) -> bool:
+    """True when 0001_initial is stamped but the tables are an older edit of that revision.
+
+    Staging may already be on a previous edit of 0001. Production has no tables.
+    """
+    if "creator_product_links" not in tables:
+        return True
+    if "shops" in tables:
+        columns = {column["name"] for column in inspector.get_columns("shops")}
+        if "country" not in columns or "primary_category" not in columns or "market" not in columns:
+            return True
+    if "creators" in tables:
+        columns = {column["name"] for column in inspector.get_columns("creators")}
+        if "average_engagement_rate" in columns or "metrics_source" not in columns:
+            return True
+    if "products" in tables:
+        columns = {column["name"] for column in inspector.get_columns("products")}
+        if "source" not in columns or "pet_safe" in columns or "care_level" in columns:
+            return True
+    if "attributed_orders" in tables:
+        columns = {column["name"] for column in inspector.get_columns("attributed_orders")}
+        if "amount" in columns or "country" not in columns or "market" not in columns:
+            return True
+    if "events" in tables:
+        columns = {column["name"] for column in inspector.get_columns("events")}
+        if "products_count" not in columns:
+            return True
+    return False
+
+
 def drop_stale_revision_0001(url: str) -> bool:
     """Drop Plantr tables when revision 0001_initial has the old column shape.
 
@@ -171,15 +202,7 @@ def drop_stale_revision_0001(url: str) -> bool:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
             if version != "0001_initial":
                 return False
-            stale = False
-            if "attributed_orders" in tables:
-                columns = {column["name"] for column in inspector.get_columns("attributed_orders")}
-                if "amount" in columns or "gmv_gross" not in columns:
-                    stale = True
-            if "events" in tables:
-                columns = {column["name"] for column in inspector.get_columns("events")}
-                if "products_count" not in columns:
-                    stale = True
+            stale = _revision_0001_is_stale(inspector, tables)
             if not stale:
                 return False
             if conn.dialect.name == "postgresql":

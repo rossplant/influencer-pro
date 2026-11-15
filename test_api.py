@@ -21,7 +21,7 @@ PRODUCT = {
     "title": "Sample item",
     "description_short": "Short description",
     "description_long": "Longer description.",
-    "category": "alpha",
+    "category": "home",
     "images": ["url1", "url2", "url3"],
 }
 
