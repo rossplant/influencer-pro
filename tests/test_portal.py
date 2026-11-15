@@ -31,6 +31,41 @@ def _cookie(response, cookie_name: str) -> dict:
     return {"Cookie": pair}
 
 
+def test_operator_api_key_creates_logins_without_csrf(monkeypatch):
+    _setup(monkeypatch)
+    monkeypatch.setenv("API_KEYS", "operator-key")
+    shop = client.post("/shops", json={"name": "Keyed Shop"}, headers={"X-API-Key": "operator-key"}).json()
+    creator = client.post(
+        "/onboard-influencer",
+        json={**INFLUENCER, "handle": "@keyed"},
+    ).json()
+    seller = client.post(
+        f"/admin/api/shops/{shop['id']}/login",
+        json={"email": "keyed-seller@example.com", "password": PASSWORD, "password_confirm": PASSWORD},
+        headers={"X-API-Key": "operator-key"},
+    )
+    assert seller.status_code == 200
+    assert seller.json()["role"] == "seller"
+    creator_login = client.post(
+        f"/admin/api/creators/{creator['id']}/login",
+        json={"email": "keyed-creator@example.com", "password": CREATOR_PASSWORD, "password_confirm": CREATOR_PASSWORD},
+        headers={"X-API-Key": "operator-key"},
+    )
+    assert creator_login.status_code == 200
+    assert creator_login.json()["role"] == "creator"
+    wrong = client.post(
+        f"/admin/api/shops/{shop['id']}/login",
+        json={"email": "other@example.com", "password": PASSWORD, "password_confirm": PASSWORD},
+        headers={"X-API-Key": "nope"},
+    )
+    assert wrong.status_code == 401
+    assert wrong.json()["detail"] == "Invalid API key"
+    still_session_only = client.get("/admin/api/summary", headers={"X-API-Key": "operator-key"})
+    assert still_session_only.status_code == 401
+    view = client.post(f"/admin/api/shops/{shop['id']}/view-as", headers={"X-API-Key": "operator-key"})
+    assert view.status_code == 401
+
+
 def test_seller_and_creator_apps(monkeypatch):
     _setup(monkeypatch)
     shop = client.post("/shops", json={"name": "Pilot Seller", "primary_category": "home"}).json()
