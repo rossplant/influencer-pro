@@ -34,6 +34,7 @@ A profile is complete when it has a handle, at least one `active_categories` slu
 | `match_accepted` | Emitted for a creator or shortlist item | `creators.first_match_accepted_at` the first time. On a shortlist item, `accepted_at` the first time. |
 | `match_declined` | Emitted for a shortlist item | `declined_at` the first time, and `decline_reason` when passed and still empty. |
 | `creator_posted` | Emitted when a creator's post is recorded | `creators.first_post_at` the first time. |
+| `link_clicked` | `GET /r/{code}` | No plan counter. Properties contain the code, creator, and product. |
 | `admin_login_succeeded` | `POST /admin/login` when the password matches | No shop counters. Properties contain the email, never the password. |
 | `admin_login_failed` | `POST /admin/login` when the password is wrong or the attempt is rate-limited | No shop counters. Properties contain the email and a reason, never the password. |
 

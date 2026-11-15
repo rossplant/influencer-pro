@@ -51,6 +51,8 @@
           <button type="button" data-list="products">Products</button>
           <button type="button" data-list="shortlists">Shortlists</button>
           <button type="button" data-list="events">Events</button>
+          <button type="button" data-list="links">Links</button>
+          <button type="button" data-list="orders">Orders</button>
         </div>
         <form id="search">
           <input id="q" name="q" type="search" placeholder="Search">
@@ -58,6 +60,13 @@
           <button id="prev" class="secondary" type="button">Previous</button>
           <button id="next" class="secondary" type="button">Next</button>
           <span id="page-label"></span>
+        </form>
+        <form id="import-orders" class="hidden">
+          <label for="csv">Import orders CSV</label>
+          <textarea id="csv" name="csv" rows="4" placeholder="order_id,date,code,gross,currency,shop"></textarea>
+          <label><input id="dry-run" name="dry_run" type="checkbox"> Dry run</label>
+          <button type="submit">Import</button>
+          <pre id="import-result"></pre>
         </form>
         <div id="list"></div>
       </div>
@@ -131,6 +140,7 @@
 
     async function loadList() {
       const params = new URLSearchParams({ q: state.q, page: String(state.page), page_size: "20" });
+      document.getElementById("import-orders").classList.toggle("hidden", state.list !== "orders");
       renderRows(await api(`/admin/api/${state.list}?${params}`));
     }
 
@@ -192,6 +202,17 @@
         document.getElementById("detail").classList.add("hidden");
         await loadList();
       });
+    });
+
+    document.getElementById("import-orders").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const dryRun = document.getElementById("dry-run").checked;
+      const data = await api(`/attributed-orders/import?dry_run=${dryRun}`, {
+        method: "POST",
+        body: JSON.stringify({ csv: document.getElementById("csv").value, dry_run: dryRun })
+      });
+      document.getElementById("import-result").textContent = JSON.stringify(data, null, 2);
+      await loadList();
     });
 
     document.getElementById("search").addEventListener("submit", async (event) => {

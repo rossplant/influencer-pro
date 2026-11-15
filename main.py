@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, Field
 
 import admin_data
+import attribution
 import auth
 import db
 import events
@@ -38,7 +39,7 @@ HTML_PAGES = (
     "onboarding_form.html",
     "plantr_dashboard.html",
 )
-APP_VERSION = "0.12"
+APP_VERSION = "0.13"
 
 PromotionStyle = Literal[
     "educational",
@@ -156,6 +157,14 @@ class SetupIn(BaseModel):
     token: str = ""
     password: str = ""
     password_confirm: str = ""
+
+
+class LinkIn(BaseModel):
+    creator_id: str = Field(min_length=1)
+    product_id: str = Field(min_length=1)
+    destination_url: Optional[str] = None
+    shortlist_item_id: Optional[str] = None
+    platform: str = "plantr"
 
 
 class ShopFlagsIn(BaseModel):
@@ -717,6 +726,116 @@ def admin_event(event_id: str, _: str = Depends(require_admin)):
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
     return row
+
+
+@app.post("/creator-product-links")
+def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends(require_admin)):
+    row, created = attribution.issue_link(
+        creator_id=body.creator_id,
+        product_id=body.product_id,
+        destination_url=body.destination_url,
+        shortlist_item_id=body.shortlist_item_id,
+        platform=body.platform,
+    )
+    row["tracking_url"] = str(request.base_url).rstrip("/") + row["tracking_path"]
+    row["created"] = created
+    return row
+
+
+@app.get("/creator-product-links")
+def get_creator_product_links(
+    shop_id: Optional[str] = None,
+    creator_id: Optional[str] = None,
+    _: str = Depends(require_admin),
+):
+    return attribution.list_links(shop_id=shop_id, creator_id=creator_id)
+
+
+@app.get("/r/{code}")
+def redirect_tracking_code(code: str, _: None = Depends(rate_limit_public)):
+    link = attribution.resolve_redirect(code)
+    destination = attribution.safe_destination((link or {}).get("link_url"))
+    if link is None or destination is None:
+        raise HTTPException(status_code=404, detail="Tracking code not found")
+    events.record_link_click(link)
+    return RedirectResponse(url=destination, status_code=302)
+
+
+@app.post("/attributed-orders/import")
+async def import_attributed_orders(request: Request, dry_run: bool = False, _: str = Depends(require_admin)):
+    csv_text, flag = await _csv_payload(request, dry_run)
+    return attribution.import_orders(csv_text, dry_run=flag)
+
+
+@app.get("/admin/api/links")
+def admin_links(
+    q: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    shop_id: Optional[str] = None,
+    creator_id: Optional[str] = None,
+    _: str = Depends(require_admin),
+):
+    return _paged(attribution.list_links(shop_id=shop_id, creator_id=creator_id), q, page, page_size)
+
+
+@app.get("/admin/api/links/{link_id}")
+def admin_link(link_id: str, _: str = Depends(require_admin)):
+    row = attribution.link_detail(link_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Link not found")
+    return row
+
+
+@app.get("/admin/api/orders")
+def admin_orders(
+    q: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    shop_id: Optional[str] = None,
+    _: str = Depends(require_admin),
+):
+    return _paged(attribution.list_orders(shop_id=shop_id), q, page, page_size)
+
+
+@app.get("/admin/api/orders/{order_id}")
+def admin_order(order_id: str, _: str = Depends(require_admin)):
+    row = attribution.order_detail(order_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return row
+
+
+def _paged(rows: list, q: str, page: int, page_size: int) -> dict:
+    needle = q.strip().lower()
+    if needle:
+        rows = [row for row in rows if needle in json.dumps(row, default=str).lower()]
+    start = (page - 1) * page_size
+    return {"items": rows[start : start + page_size], "page": page, "page_size": page_size, "total": len(rows)}
+
+
+async def _csv_payload(request: Request, dry_run: bool) -> tuple[str, bool]:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        return str(body.get("csv") or ""), _truthy(body.get("dry_run", dry_run))
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        form = await request.form()
+        upload = form.get("file")
+        if hasattr(upload, "read"):
+            text = (await upload.read()).decode("utf-8-sig")
+        else:
+            text = str(form.get("csv") or "")
+        return text, _truthy(form.get("dry_run", dry_run))
+    return (await request.body()).decode("utf-8-sig"), dry_run
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def _json_or_form(request: Request) -> dict:
