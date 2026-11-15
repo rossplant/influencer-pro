@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import db
 import services
 from grok_helper import generate_with_grok
+import scoring
 
 # Process-local creator profiles. This is db.memory_creators, used when
 # DATABASE_URL is unset. Postgres is the system of record once that variable is set.
@@ -34,7 +35,7 @@ HTML_PAGES = (
     "plantr_dashboard.html",
     "plantr_admin.html",
 )
-APP_VERSION = "0.10"
+APP_VERSION = "0.11"
 
 PromotionStyle = Literal[
     "educational",
@@ -128,11 +129,19 @@ class BriefSentIn(BaseModel):
     actor: Literal["system", "operator", "api"] = "api"
 
 
+class DeclineIn(BaseModel):
+    reason: Optional[str] = None
+
+
 class MatchIn(BaseModel):
-    influencer: Dict[str, Any]
-    products: List[Dict[str, Any]]
-    shop_id: Optional[str] = None
+    product: Optional[Dict[str, Any]] = None
     product_id: Optional[str] = None
+    creators: Optional[List[Dict[str, Any]]] = None
+    all_onboarded: bool = False
+    shop_id: Optional[str] = None
+    limit: int = Field(default=10, ge=1, le=50)
+    optimise_for: Literal["balanced", "reach", "sales", "revenue"] = "balanced"
+    blocked_creator_ids: List[str] = Field(default_factory=list)
 
 
 class ShopIn(BaseModel):
@@ -572,28 +581,58 @@ def mark_brief_sent(brief_id: str, body: BriefSentIn, _: None = Depends(guard_re
     return services.mark_brief_sent(brief_id, body.actor)
 
 
+@app.post("/shortlist-items/{item_id}/accept")
+def accept_shortlist_item(item_id: str, _: None = Depends(guard_request)):
+    return services.decide_shortlist_item(item_id, "match_accepted")
+
+
+@app.post("/shortlist-items/{item_id}/decline")
+def decline_shortlist_item(item_id: str, body: Optional[DeclineIn] = None, _: None = Depends(guard_request)):
+    return services.decide_shortlist_item(item_id, "match_declined", reason=None if body is None else body.reason)
+
+
 @app.post("/match")
 def match(body: MatchIn, _: None = Depends(guard_request)):
-    ranked = []
-    for product in body.products:
-        ranked.append(
-            {
-                "product": product,
-                "match_score": score_match(product, body.influencer),
-            }
-        )
-    ranked.sort(key=lambda item: item["match_score"], reverse=True)
-    ranked = ranked[:10]
-    shortlist_id = services.persist_match(
-        influencer=body.influencer,
-        ranked=ranked,
-        shop_id=body.shop_id,
+    if not body.product and not body.product_id:
+        raise HTTPException(status_code=422, detail="Provide a product or a product_id")
+    if not body.creators and not body.all_onboarded:
+        raise HTTPException(status_code=422, detail="Provide creators or set all_onboarded")
+    loaded = services.load_match_inputs(
+        product=body.product,
         product_id=body.product_id,
+        creators=body.creators,
+        all_onboarded=body.all_onboarded,
+        shop_id=body.shop_id,
     )
-    result: Dict[str, Any] = {"matches": ranked}
+    outcome = scoring.rank_creators(
+        loaded["product"],
+        loaded["creators"],
+        shop=loaded["shop"],
+        optimise_for=body.optimise_for,
+        blocked_creator_ids=body.blocked_creator_ids,
+        limit=body.limit,
+    )
+    shortlist_id, item_ids = services.persist_rules_match(
+        shop_id=loaded["shop_id"],
+        product_id=loaded["product_id"],
+        optimise_for=body.optimise_for,
+        excluded=outcome["excluded"],
+        matches=[
+            {
+                "creator_id": (row["creator"].get("influencer_id") or row["creator"].get("id")),
+                "score": row["score"],
+                "components": row["components"],
+                "estimates": row["estimates"],
+                "reasons": row["reasons"],
+            }
+            for row in outcome["matches"]
+        ],
+    )
+    for row, item_id in zip(outcome["matches"], item_ids):
+        row["shortlist_item_id"] = item_id
     if shortlist_id:
-        result["shortlist_id"] = shortlist_id
-    return result
+        outcome["shortlist_id"] = shortlist_id
+    return outcome
 
 
 @app.post("/onboard-influencer")

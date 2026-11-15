@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.10
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.11
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -61,11 +61,11 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.10`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.11`.
 - `POST /shops` — create a shop. `is_pilot` and `plan_tier` are settable. The response includes `mrr`.
 - `GET /shops/{id}` and `GET /creators/{id}` — read one row.
 - `POST /enrich` — talking points and FAQs for any product. The response keeps the existing fields and adds `source` (`grok` or `fallback`). Pass `shop_id` and/or `product_id` to store the product (category, subcategory, price, currency, tags, attributes, claims with a source) and a brief draft, and emit `product_enriched`. That call does not set `first_brief_at`. `POST /briefs/{id}/sent` emits `brief_sent` (`actor` may be `operator`). Without shop or product ids, enrich behaves as before. Token counts are logged, not returned.
-- `POST /match` — body `{"influencer": {...}, "products": [...]}`. Returns up to 10 matches, each `{product, match_score}`. Scoring is still the placeholder. When a database is configured the call also stores a shortlist with `match_version='placeholder-0'` and emits `match_run`. Optional `shop_id` and `product_id` attach that shortlist to a shop and product.
+- `POST /match` — one product (`product` or `product_id`) and either `creators` or `all_onboarded: true`. Returns the top `limit` (default 10) creators with a 0–100 `rules-v1` score, component breakdown, estimates, and plain-language reasons. `optimise_for` is `balanced` (default), `reach`, `sales`, or `revenue`. Hard exclusions are listed separately and are not ranked. When a database is configured the call stores a shortlist with `match_version='rules-v1'` and emits `match_run`. Optional `shop_id` applies plan limits and the underserved-supplier boost.
 - `POST /onboard-influencer` — validates a profile against `influencer_schema.json`, stores the creator, emits `creator_onboarded`, and returns `id`. With a database, `id` is the row id. The response shape stays `{id, influencer}`.
 - `POST /sync-shopify` — `501`. The message says Shopify sync isn't configured until both Shopify variables are set. With those variables set, the response still says sync is not implemented, and no products are synced.
 

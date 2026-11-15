@@ -316,31 +316,31 @@ def test_match_records_placeholder_shortlist(tmp_path, monkeypatch):
     )
     assert enrich.status_code == 200
     product_id = enrich.json()["product_id"]
-    influencer = {**INFLUENCER, "influencer_id": onboard["id"]}
+    influencer = {**INFLUENCER, "influencer_id": onboard["id"], "active_categories": ["alpha"]}
     response = client.post(
         "/match",
         json={
-            "influencer": influencer,
-            "products": [PRODUCT],
-            "shop_id": shop["id"],
             "product_id": product_id,
+            "creators": [influencer],
+            "shop_id": shop["id"],
         },
     )
     assert response.status_code == 200
     matches = response.json()["matches"]
-    assert matches[0]["product"]["title"] == PRODUCT["title"]
+    assert matches[0]["creator"]["handle"] == INFLUENCER["handle"]
+    assert response.json()["match_version"] == "rules-v1"
     shortlist_id = response.json()["shortlist_id"]
 
     with db.session_scope() as session:
         shortlist = session.get(Shortlist, shortlist_id)
-        assert shortlist.match_version == "placeholder-0"
+        assert shortlist.match_version == "rules-v1"
         assert shortlist.shop_id == shop["id"]
         assert shortlist.product_id == product_id
         item = session.scalars(select(ShortlistItem).where(ShortlistItem.shortlist_id == shortlist_id)).one()
         assert item.creator_id == onboard["id"]
         assert item.rank == 1
-        assert item.score == matches[0]["match_score"]
-        assert item.reasons["basis"] == "placeholder-0"
+        assert item.score == matches[0]["score"]
+        assert item.reasons["reasons"]
         event = session.scalars(
             select(Event).where(Event.event_name == "match_run", Event.shop_id == shop["id"])
         ).one()
@@ -460,7 +460,7 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
             events.emit("match_run", shop_row, "api")
     denied = client.post(
         "/match",
-        json={"influencer": INFLUENCER, "products": [PRODUCT], "shop_id": matcher["id"]},
+        json={"product": PRODUCT, "creators": [INFLUENCER], "shop_id": matcher["id"]},
     )
     assert denied.status_code == 402
     assert "matches_per_month" in denied.json()["detail"]
@@ -474,7 +474,7 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
         session.get(Shop, matcher["id"]).is_pilot = True
     allowed_match = client.post(
         "/match",
-        json={"influencer": INFLUENCER, "products": [PRODUCT], "shop_id": matcher["id"]},
+        json={"product": PRODUCT, "creators": [INFLUENCER], "shop_id": matcher["id"]},
     )
     assert allowed_match.status_code == 200
     assert allowed_match.json()["matches"]
