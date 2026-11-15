@@ -39,7 +39,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.14"
+APP_VERSION = "0.14.1"
 
 PromotionStyle = Literal[
     "educational",
@@ -908,14 +908,14 @@ async def admin_view_creator(creator_id: str, request: Request, admin: str = Dep
 @app.get("/seller")
 @app.get("/seller/profile")
 def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_seller(portal.seller_context(request), "profile")
+    return portal.render_seller(portal.seller_context(request), "profile", base_url=str(request.base_url))
 
 
 @app.get("/seller/products")
 def seller_products(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "products", products=products)
+    return portal.render_seller(session, "products", base_url=str(request.base_url), products=products)
 
 
 @app.post("/seller/products")
@@ -939,7 +939,7 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
 def seller_find(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "find", products=products, matches=[])
+    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=[])
 
 
 @app.post("/seller/find")
@@ -949,7 +949,7 @@ async def seller_run_match(request: Request, _: None = Depends(rate_limit_portal
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
     outcome = portal.run_match(session["subject_id"], str(form.get("product_id") or ""))
     products = portal.seller_products(session["subject_id"])
-    return portal.render_seller(session, "find", products=products, matches=outcome["matches"])
+    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=outcome["matches"])
 
 
 @app.post("/seller/shortlist-items/{item_id}/accept")
@@ -974,7 +974,7 @@ async def seller_decline(item_id: str, request: Request, _: None = Depends(rate_
 def seller_accepted(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     accepted = portal.accepted_for_shop(session["subject_id"]) if session else []
-    return portal.render_seller(session, "accepted", accepted=accepted)
+    return portal.render_seller(session, "accepted", base_url=str(request.base_url), accepted=accepted)
 
 
 @app.post("/seller/login")
@@ -1002,7 +1002,7 @@ async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
 @app.get("/creator")
 @app.get("/creator/profile")
 def creator_profile_page(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_creator(portal.creator_context(request), "profile")
+    return portal.render_creator(portal.creator_context(request), "profile", base_url=str(request.base_url))
 
 
 @app.post("/creator/profile")
@@ -1020,14 +1020,14 @@ async def creator_save_profile(request: Request, _: None = Depends(rate_limit_po
 def creator_offers_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     offers = portal.creator_offers(session["subject_id"]) if session else []
-    return portal.render_creator(session, "offers", offers=offers)
+    return portal.render_creator(session, "offers", base_url=str(request.base_url), offers=offers)
 
 
 @app.get("/creator/links")
 def creator_links_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     links = portal.creator_links(session["subject_id"]) if session else []
-    return portal.render_creator(session, "links", links=links)
+    return portal.render_creator(session, "links", base_url=str(request.base_url), links=links)
 
 
 @app.post("/creator/login")
