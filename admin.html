@@ -54,6 +54,7 @@
           <button type="button" data-list="events">Events</button>
           <button type="button" data-list="links">Links</button>
           <button type="button" data-list="orders">Orders</button>
+          <a href="/admin/pilots">Pilots</a>
         </div>
         <form id="search">
           <input id="q" name="q" type="search" placeholder="Search">
@@ -150,9 +151,17 @@
       const box = document.getElementById("detail");
       box.classList.remove("hidden");
       box.innerHTML = `<pre>${JSON.stringify(detail, null, 2)}</pre>`;
-      if (state.list === "shops") box.insertAdjacentHTML("beforeend", shopEditor(detail) + portalLogin(`/admin/api/shops/${detail.id}`));
-      if (state.list === "creators") box.insertAdjacentHTML("beforeend", portalLogin(`/admin/api/creators/${detail.id}`));
+      if (state.list === "shops") box.insertAdjacentHTML("beforeend", stripeLine(detail) + shopEditor(detail) + portalLogin(`/admin/api/shops/${detail.id}`));
+      if (state.list === "creators") box.insertAdjacentHTML("beforeend", stripeLine(detail) + portalLogin(`/admin/api/creators/${detail.id}`));
       if (state.list === "shortlists") box.insertAdjacentHTML("beforeend", itemActions(detail));
+    }
+
+    function stripeLine(detail) {
+      const customer = detail.stripe_customer_id || "not started";
+      const tier = detail.plan_tier || "starter";
+      const status = detail.subscription_status || detail.plan_status || "not started";
+      const number = detail.founding_number ? ` Founding Curator #${detail.founding_number}.` : "";
+      return `<p>Stripe subscription: ${customer}. Plan ${tier}. Status ${status}.${number}</p>`;
     }
 
     function csrfToken() {

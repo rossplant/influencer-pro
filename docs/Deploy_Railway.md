@@ -12,14 +12,14 @@
 4. Attach Postgres to the service and set `DATABASE_URL` to the plugin reference, `${{Postgres.DATABASE_URL}}`. Railway's value uses `postgres://`; the API rewrites it to `postgresql+psycopg://`. Leave `DATABASE_URL` unset only if you want the in-memory fallback. Do not add a pre-deploy command: startup runs `alembic upgrade head` and then purges `api_requests` older than 90 days.
 5. Settings → Deploy → Start Command:
    ```
-   uvicorn main:app --host 0.0.0.0 --port $PORT
+   uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
    ```
 6. Deploy. Railway gives you a public URL (e.g. `plantr-production.up.railway.app`). In-memory profiles from before Postgres was attached are not copied over.
 
 ## 3. Render (alternative)
 1. https://render.com → New Web Service → Connect GitHub
 2. Build Command: `pip install -r requirements.txt`
-3. Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+3. Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'`
 4. Add the same environment variables.
 
 ## 4. After Deploy

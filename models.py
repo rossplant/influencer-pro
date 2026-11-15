@@ -6,8 +6,8 @@ subscription_changes, monthly_mrr_snapshots, and attributed_orders are created
 here and have no endpoints yet.
 
 MRR rules for monthly_mrr_snapshots (and for the mrr value returned with a shop):
-- Monthly list price is the MRR (growth 49, scale 149).
-- Annual list price is divided by 12 (growth 490, scale 1490).
+- Monthly list price is the MRR (growth 79, scale 229), ex GST.
+- Annual list price is divided by 12 (growth 790, scale 2290).
 - Free, trial, trialing, and starter contribute 0.
 
 events is append-only: the application inserts rows and does not update or
@@ -34,6 +34,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false as sql_false,
+    true as sql_true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -95,6 +97,18 @@ class Shop(Base):
     country: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, index=True)
     market: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True, index=True)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    subscription_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    billing_interval: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    catalogue: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    first_look_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    attribution_first: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    attribution_last: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    signup_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -153,6 +167,20 @@ class Creator(Base):
     first_match_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     first_post_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     profile: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    plan_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="member", server_default="member")
+    plan_status: Mapped[str] = mapped_column(String(32), nullable=False, default="invited", server_default="invited")
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    subscription_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    billing_interval: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    age_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    founding_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    attribution_first: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    attribution_last: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    signup_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -173,7 +201,7 @@ class Product(Base):
     subcategory: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     images: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD", server_default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD", server_default="AUD")
     tags: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     attributes: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
     claims: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
@@ -320,7 +348,7 @@ class Subscription(Base):
     interval: Mapped[str] = mapped_column(String(16), nullable=False, default="month")
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     mrr: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD")
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -364,7 +392,7 @@ class MonthlyMrrSnapshot(Base):
 
     MRR rules:
     - Monthly list price is the MRR (growth 49, scale 149).
-    - Annual list price / 12 is the MRR (growth 490, scale 1490).
+    - Annual list price / 12 is the MRR (growth 790, scale 2290).
     - Free, trial, trialing, and starter contribute 0.
     """
 
@@ -402,7 +430,7 @@ class AttributedOrder(Base):
     refunded_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     cancelled_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     net_gmv: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="AUD")
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True)
     product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True)
     shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
@@ -419,6 +447,7 @@ class AttributedOrder(Base):
     raw_payload: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    attributed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_true())
 
 
 class AdminUser(Base):
@@ -454,6 +483,186 @@ class PortalAccount(Base):
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StripeEvent(Base):
+    """One Stripe webhook delivery. stripe_event_id makes processing idempotent."""
+
+    __tablename__ = "stripe_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    stripe_event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class Campaign(Base):
+    """A seller campaign. The count is capped by the shop's plan."""
+
+    __tablename__ = "campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class BillingSubscription(Base):
+    """The Stripe Billing subscription for a seller or a creator."""
+
+    __tablename__ = "billing_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True, index=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    plan_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="inactive")
+    interval: Mapped[str] = mapped_column(String(16), nullable=False, default="month")
+    lookup_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    trial_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    invite_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PilotCohort(Base):
+    __tablename__ = "pilot_cohorts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    seat_cap: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pilot_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    post_coupon_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_true())
+
+
+class PilotInvite(Base):
+    __tablename__ = "pilot_invites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cohort_id: Mapped[str] = mapped_column(ForeignKey("pilot_cohorts.id"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    campaign: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel: Mapped[str] = mapped_column(String(64), nullable=False, default="invite")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PilotApplication(Base):
+    __tablename__ = "pilot_applications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cohort_slug: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    categories: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    contact: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    founding_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    attribution: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    age_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PilotMembership(Base):
+    __tablename__ = "pilot_memberships"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cohort_id: Mapped[str] = mapped_column(ForeignKey("pilot_cohorts.id"), nullable=False, index=True)
+    application_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pilot_applications.id"), nullable=True)
+    invite_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pilot_invites.id"), nullable=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="invited")
+    founding_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    invited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_up_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    onboarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    active_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    converted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PilotVisit(Base):
+    __tablename__ = "pilot_visits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    path: Mapped[str] = mapped_column(String(128), nullable=False)
+    cohort_slug: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PilotSurvey(Base):
+    __tablename__ = "pilot_surveys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    subject_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    cohort_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    feels_right: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class EmailMessage(Base):
+    """A logged email. Nothing in this table has been delivered to an inbox."""
+
+    __tablename__ = "email_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    template_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class TrackedEvent(Base):
+    """Idempotency key for a business event. The row in events is the log."""
+
+    __tablename__ = "tracked_events"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    subject_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True)
+    event_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class TrackingRetry(Base):
+    """A platform send that failed. The internal event is already stored."""
+
+    __tablename__ = "tracking_retries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class CreatorProductLink(Base):

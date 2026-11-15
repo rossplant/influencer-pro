@@ -4,7 +4,7 @@
 
 ```bash
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port $PORT
+uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
 ```
 
 Open `/onboarding_form.html` on that same host. The page posts to the API at its own origin.
@@ -17,7 +17,7 @@ Open `/onboarding_form.html` on that same host. The page posts to the API at its
 4. Add environment variables from `.env.example` if needed. `NOTION_*` is unused. Notion is not the database. Attach Postgres and set `DATABASE_URL` when you want durable storage. Until then the API logs a warning and uses memory. Startup runs the migrations, so there is no pre-deploy command. The default model is `grok-4.3`.
 5. Railway auto-detects Python. Add a start command:
    ```
-   uvicorn main:app --host 0.0.0.0 --port $PORT
+   uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
    ```
 6. Deploy. You’ll get a public URL.
 
@@ -25,7 +25,7 @@ Open `/onboarding_form.html` on that same host. The page posts to the API at its
 
 1. render.com → New Web Service → Connect GitHub.
 2. Build command: `pip install -r requirements.txt`
-3. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+3. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'`
 
 ## Vercel (serverless)
 

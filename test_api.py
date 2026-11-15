@@ -56,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr Collab API running"
-    assert body["version"] == "0.14.1"
+    assert body["version"] == "0.16.1"
     assert body["grok_enabled"] is False
 
 
@@ -64,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.14.1"
+    assert response.json()["version"] == "0.16.1"
 
 
 def test_enrich_fallback_without_xai_key():
@@ -254,13 +254,14 @@ def test_cors_origins_parser(monkeypatch):
 
 def test_html_pages_use_the_same_origin():
     for page in main.HTML_PAGES:
-        response = client.get(f"/{page}")
-        assert response.status_code == 200
-        assert "localhost:8000" not in response.text
-        assert "window.location.origin" in response.text
-        assert "plantrApiBase" in response.text
-        assert 'params.get("key")' not in response.text
-        assert "?key=" not in response.text
+        response = client.get(f"/{page}", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/founding-curators"
+    landing = client.get("/founding-curators")
+    assert landing.status_code == 200
+    assert "localhost:8000" not in landing.text
+    assert 'params.get("key")' not in landing.text
+    assert "?key=" not in landing.text
     admin = client.get("/plantr_admin.html", follow_redirects=False)
     assert admin.status_code == 302
     assert admin.headers["location"] == "/admin"

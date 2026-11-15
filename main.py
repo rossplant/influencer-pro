@@ -2,6 +2,7 @@ import hashlib
 import html
 import hmac
 import json
+import logging
 import os
 import threading
 import time
@@ -20,12 +21,14 @@ from pydantic import BaseModel, Field
 import admin_data
 import attribution
 import auth
+import billing_config
 import portal
 import db
 import events
 import services
 from grok_helper import generate_with_grok
 import scoring
+import stripe_billing
 
 # Process-local creator profiles. This is db.memory_creators, used when
 # DATABASE_URL is unset. Postgres is the system of record once that variable is set.
@@ -39,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.14.1"
+APP_VERSION = "0.16.1"
 
 PromotionStyle = Literal[
     "educational",
@@ -94,6 +97,8 @@ class InfluencerIn(BaseModel):
     follower_band: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
+    invite_code: Optional[str] = None
+    age_confirmed: bool = False
 
 
 class ClaimIn(BaseModel):
@@ -403,6 +408,8 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
     record.pop("average_engagement_rate", None)
     record.pop("password", None)
     record.pop("email", None)
+    record.pop("invite_code", None)
+    record.pop("age_confirmed", None)
     if not record.get("platforms"):
         record.pop("platforms", None)
     if not record.get("follower_band"):
@@ -603,12 +610,12 @@ def root():
 
 @app.get("/plantr_onboarding.html")
 def plantr_onboarding_page():
-    return _html("plantr_onboarding.html")
+    return RedirectResponse(url="/founding-curators", status_code=302)
 
 
 @app.get("/onboarding_form.html")
 def onboarding_form_page():
-    return _html("onboarding_form.html")
+    return RedirectResponse(url="/founding-curators", status_code=302)
 
 
 @app.get("/plantr_dashboard.html")
@@ -784,7 +791,7 @@ def create_creator_product_link(body: LinkIn, request: Request, _: str = Depends
         shortlist_item_id=body.shortlist_item_id,
         platform=body.platform,
     )
-    row["tracking_url"] = str(request.base_url).rstrip("/") + row["tracking_path"]
+    row["tracking_url"] = billing_config.public_base_url(request) + row["tracking_path"]
     row["created"] = created
     return row
 
@@ -842,7 +849,9 @@ def admin_orders(
     shop_id: Optional[str] = None,
     _: str = Depends(require_admin),
 ):
-    return _paged(attribution.list_orders(shop_id=shop_id), q, page, page_size)
+    page = _paged(attribution.list_orders(shop_id=shop_id), q, page, page_size)
+    page["gmv"] = attribution.attributed_gmv(shop_id=shop_id)
+    return page
 
 
 @app.get("/admin/api/orders/{order_id}")
@@ -908,14 +917,14 @@ async def admin_view_creator(creator_id: str, request: Request, admin: str = Dep
 @app.get("/seller")
 @app.get("/seller/profile")
 def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_seller(portal.seller_context(request), "profile", base_url=str(request.base_url))
+    return portal.render_seller(portal.seller_context(request), "profile", base_url=billing_config.public_base_url(request))
 
 
 @app.get("/seller/products")
 def seller_products(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "products", base_url=str(request.base_url), products=products)
+    return portal.render_seller(session, "products", base_url=billing_config.public_base_url(request), products=products)
 
 
 @app.post("/seller/products")
@@ -931,6 +940,7 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
         price=str(form.get("price") or ""),
         url=str(form.get("url") or ""),
         description=str(form.get("description") or ""),
+        commission=str(form.get("commission") or ""),
     )
     return RedirectResponse("/seller/products", status_code=303)
 
@@ -939,7 +949,7 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
 def seller_find(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=[])
+    return portal.render_seller(session, "find", base_url=billing_config.public_base_url(request), products=products, matches=[])
 
 
 @app.post("/seller/find")
@@ -949,7 +959,7 @@ async def seller_run_match(request: Request, _: None = Depends(rate_limit_portal
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
     outcome = portal.run_match(session["subject_id"], str(form.get("product_id") or ""))
     products = portal.seller_products(session["subject_id"])
-    return portal.render_seller(session, "find", base_url=str(request.base_url), products=products, matches=outcome["matches"])
+    return portal.render_seller(session, "find", base_url=billing_config.public_base_url(request), products=products, matches=outcome["matches"])
 
 
 @app.post("/seller/shortlist-items/{item_id}/accept")
@@ -974,7 +984,7 @@ async def seller_decline(item_id: str, request: Request, _: None = Depends(rate_
 def seller_accepted(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     accepted = portal.accepted_for_shop(session["subject_id"]) if session else []
-    return portal.render_seller(session, "accepted", base_url=str(request.base_url), accepted=accepted)
+    return portal.render_seller(session, "accepted", base_url=billing_config.public_base_url(request), accepted=accepted)
 
 
 @app.post("/seller/login")
@@ -1002,7 +1012,7 @@ async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
 @app.get("/creator")
 @app.get("/creator/profile")
 def creator_profile_page(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_creator(portal.creator_context(request), "profile", base_url=str(request.base_url))
+    return portal.render_creator(portal.creator_context(request), "profile", base_url=billing_config.public_base_url(request))
 
 
 @app.post("/creator/profile")
@@ -1020,14 +1030,51 @@ async def creator_save_profile(request: Request, _: None = Depends(rate_limit_po
 def creator_offers_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     offers = portal.creator_offers(session["subject_id"]) if session else []
-    return portal.render_creator(session, "offers", base_url=str(request.base_url), offers=offers)
+    return portal.render_creator(session, "offers", base_url=billing_config.public_base_url(request), offers=offers)
+
+
+@app.get("/seller/billing")
+def seller_billing_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    billing = stripe_billing.shop_status(session["subject_id"]) if session else {}
+    return portal.render_seller(session, "billing", base_url=billing_config.public_base_url(request), billing=billing)
+
+
+@app.get("/creator/payouts")
+def creator_payouts_redirect():
+    return RedirectResponse("/creator/billing", status_code=302)
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, _: None = Depends(rate_limit_public)):
+    payload = await request.body()
+    try:
+        event = stripe_billing.construct_event(payload, request.headers.get("stripe-signature", ""))
+    except HTTPException:
+        raise
+    except Exception:
+        logging.getLogger("plantr.webhook").exception("stripe webhook could not be read")
+        return {"received": True}
+    try:
+        if stripe_billing.record_event(event):
+            stripe_billing.apply_event(event)
+        # Fan-out runs after the Stripe event is stored. A platform failure must not
+        # turn this into a 500, or Stripe would retry and skip apply_event.
+        import tracking
+
+        tracking.flush_pending()
+    except HTTPException:
+        raise
+    except Exception:
+        logging.getLogger("plantr.webhook").exception("stripe webhook failed after the event was stored")
+    return {"received": True}
 
 
 @app.get("/creator/links")
 def creator_links_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     links = portal.creator_links(session["subject_id"]) if session else []
-    return portal.render_creator(session, "links", base_url=str(request.base_url), links=links)
+    return portal.render_creator(session, "links", base_url=billing_config.public_base_url(request), links=links)
 
 
 @app.post("/creator/login")
@@ -1268,6 +1315,10 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
     record = public_profile(influencer, influencer_id)
     services.persist_creator(record)
     if influencer.email and influencer.password:
+        if not influencer.age_confirmed:
+            raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+        if not influencer.invite_code or not _invite_ok(influencer.invite_code):
+            raise HTTPException(status_code=422, detail="Creator membership is invite-only")
         portal.create_login(
             role="creator",
             email=influencer.email,
@@ -1276,6 +1327,16 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
             creator_id=influencer_id,
         )
     return {"id": influencer_id, "influencer": record}
+
+
+def _invite_ok(code: str) -> bool:
+    import pilots
+
+    try:
+        pilots.open_invite(code)
+    except HTTPException:
+        return False
+    return True
 
 
 @app.post("/sync-shopify")
@@ -1292,3 +1353,10 @@ def sync_shopify(_: None = Depends(guard_request)):
         status_code=501,
         detail="Shopify sync is not implemented yet. No products were synced.",
     )
+
+
+import web_routes
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+web_routes.register(app)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

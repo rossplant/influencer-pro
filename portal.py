@@ -22,8 +22,10 @@ from sqlalchemy.exc import IntegrityError
 import attribution
 import auth
 import db
+import events
 import scoring
 import services
+from events import PlanLimitReached
 from models import Brief, Creator, PortalAccount, Product, Shop, Shortlist, ShortlistItem, utcnow
 
 MIN_PASSWORD = 12
@@ -166,7 +168,7 @@ def seller_products(shop_id: str) -> list[dict]:
     return [_product_row(row) for row in db.memory_products.values() if row.shop_id == shop_id]
 
 
-def save_product(shop_id: str, *, product_id: str, title: str, category: str, price: str, url: str, description: str) -> str:
+def save_product(shop_id: str, *, product_id: str, title: str, category: str, price: str, url: str, description: str, commission: str = "") -> str:
     title = (title or "").strip()
     if not title:
         raise HTTPException(status_code=422, detail="title is required")
@@ -182,10 +184,22 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
     destination = (url or "").strip()
     if destination and attribution.safe_destination(destination) is None:
         raise HTTPException(status_code=422, detail="URL must be an http(s) address")
+    rate = None
+    if str(commission or "").strip():
+        try:
+            rate = float(commission)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="commission must be a number") from None
     if db.configured():
         with db.session_scope() as session:
             product = session.get(Product, product_id) if product_id else None
             if product is None:
+                shop = session.get(Shop, shop_id)
+                if shop is not None:
+                    try:
+                        events.guard_plan_limit(shop, "products", session)
+                    except PlanLimitReached as exc:
+                        raise HTTPException(status_code=402, detail=str(exc)) from exc
                 product = Product(
                     id=str(uuid.uuid4()),
                     shop_id=shop_id,
@@ -195,7 +209,7 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
                     category=category or None,
                     images=[],
                     price=amount,
-                    currency="USD",
+                    currency="AUD",
                     tags=[],
                     attributes={"url": destination} if destination else {},
                     claims=[],
@@ -217,6 +231,8 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
                     attributes.pop("url")
                 product.attributes = attributes
                 product.source = product.source or "manual"
+            if rate is not None:
+                product.commission_rate = rate
             session.flush()
             return product.id
     if product_id and product_id in db.memory_products:
@@ -224,6 +240,12 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
         if product.shop_id != shop_id:
             raise HTTPException(status_code=404, detail="Product not found")
     else:
+        shop = db.memory_shops.get(shop_id)
+        if shop is not None:
+            try:
+                events.guard_plan_limit(shop, "products", None)
+            except PlanLimitReached as exc:
+                raise HTTPException(status_code=402, detail=str(exc)) from exc
         product = SimpleNamespace(
             id=str(uuid.uuid4()),
             shop_id=shop_id,
@@ -234,7 +256,7 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
             subcategory=None,
             images=[],
             price=None,
-            currency="USD",
+            currency="AUD",
             tags=[],
             attributes={},
             claims=[],
@@ -252,6 +274,8 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
         attributes["url"] = destination
     product.attributes = attributes
     product.source = getattr(product, "source", None) or "manual"
+    if rate is not None:
+        product.commission_rate = rate
     return product.id
 
 
@@ -315,12 +339,19 @@ def creator_profile(creator_id: str) -> dict:
     if creator is None:
         raise HTTPException(status_code=404, detail="Creator not found")
     profile = creator.get("influencer") or {}
+    stored = db.memory_creator_objects.get(creator_id)
+    number = getattr(stored, "founding_number", None)
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.get(Creator, creator_id)
+            number = None if row is None else row.founding_number
     return {
         "id": creator_id,
         "handle": profile.get("handle"),
         "name": profile.get("name"),
         "active_categories": list(profile.get("active_categories") or []),
         "desired_categories": list(profile.get("desired_categories") or []),
+        "founding_number": number,
     }
 
 
@@ -350,7 +381,8 @@ def update_creator_categories(creator_id: str, active: list[str], desired: list[
 
 def creator_offers(creator_id: str) -> list[dict]:
     offers = []
-    for item in _accepted_items(creator_id=creator_id):
+    items = _offer_items(creator_id, pending=True) + _accepted_items(creator_id=creator_id)
+    for item in items:
         brief = _brief_for(item)
         points = []
         if brief and brief.get("content"):
@@ -400,6 +432,8 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
       <a href="/seller/products">Products</a>
       <a href="/seller/find">Find creators</a>
       <a href="/seller/accepted">Accepted</a>
+      <a href="/seller/campaigns">Campaigns</a>
+      <a href="/seller/billing">Billing</a>
     </nav>
     """
     content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
@@ -431,6 +465,7 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
       <a href="/creator/profile">Profile</a>
       <a href="/creator/offers">Offers</a>
       <a href="/creator/links">Links</a>
+      <a href="/creator/billing">Subscription</a>
     </nav>
     """
     content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
@@ -457,6 +492,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
           <label>Category <input name="category" value="{html.escape(edit.get('category') or '')}"></label>
           <label>Price <input name="price" value="{html.escape(str(edit.get('price') or ''))}"></label>
           <label>URL <input name="url" type="url" value="{html.escape(edit.get('url') or '')}"></label>
+          <label>Commission percent <input name="commission" value="{html.escape(str(edit.get('commission_rate') or ''))}"></label>
           <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
           <button type="submit">Save product</button>
         </form>
@@ -498,6 +534,19 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
             "</li>"
         )
+    if page == "campaigns":
+        rows = "".join(f"<li>{html.escape(row['name'])}</li>" for row in data.get("campaigns") or [])
+        return f"""
+        <h1>Campaigns</h1>
+        <ul>{rows or '<li>No campaigns yet.</li>'}</ul>
+        <form method="post" action="/seller/campaigns">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Name <input name="name" required></label>
+          <button type="submit">Create campaign</button>
+        </form>
+        """
+    if page == "billing":
+        return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
     return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
 
 
@@ -505,7 +554,9 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
     if page == "profile":
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
-        return f"""
+        number = profile.get("founding_number")
+        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        return badge + f"""
         <h1>{html.escape(profile.get('handle') or '')}</h1>
         <form method="post" action="/creator/profile">
           <input type="hidden" name="csrf_token" value="{csrf}">
@@ -518,10 +569,25 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         blocks = []
         for offer in data.get("offers") or []:
             points = "".join(f"<li>{html.escape(str(point))}</li>" for point in offer.get("talking_points") or [])
+            rate = offer.get("commission_rate")
+            rate_text = (
+                f"{rate}% of tracked sales, set and paid by the supplier."
+                if rate is not None
+                else "The supplier has not set a commission rate yet."
+            )
+            accept = ""
+            if not offer.get("accepted_at"):
+                accept = (
+                    f"<form method='post' action='/creator/offers/{html.escape(str(offer.get('id')))}/accept'>"
+                    f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+                    "<button type='submit'>Accept offer</button></form>"
+                )
             blocks.append(
                 f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
+                f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
+                f"{accept}"
                 f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url)}</article>"
             )
         return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
@@ -532,7 +598,59 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         "</li>"
         for row in data.get("links") or []
     )
+    if page == "billing":
+        number = profile.get("founding_number")
+        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        return badge + _billing_body("creator", data.get("billing") or {}, csrf, "/creator/billing")
     return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
+
+
+def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
+    notice = "" if billing.get("configured") else "<p>Stripe is not configured.</p>"
+    tier = billing.get("plan_tier") or ("starter" if role == "seller" else "member")
+    label = "Invited" if tier == "member" else tier
+    plans = []
+    for plan in billing.get("plans") or []:
+        soon = ", ".join(plan.get("coming_soon") or [])
+        soon_text = f" Coming soon: {html.escape(soon)}." if soon else ""
+        plans.append(
+            f"<li><strong>{html.escape(plan['label'])}</strong> "
+            f"{html.escape(plan['monthly'])} / month or {html.escape(plan['annual'])} / year, ex GST.{soon_text}</li>"
+        )
+    checkout = ""
+    subscribed = str(billing.get("subscription_status") or "").strip().lower() in {"active", "trialing", "past_due"}
+    manage = f"""
+        <form method="post" action="{action}/portal">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <button type="submit">Manage or cancel</button>
+        </form>
+        """
+    if billing.get("configured") and subscribed:
+        checkout = (
+            "<p>You already have a subscription. Use Manage to change plan, update payment, or cancel.</p>"
+            + manage
+        )
+    elif billing.get("configured"):
+        checkout = f"""
+        <form method="post" action="{action}/checkout">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Plan <input name="tier" value="{html.escape(tier)}"></label>
+          <label>Interval
+            <select name="interval"><option value="month">month</option><option value="year">year</option></select>
+          </label>
+          <label>Promotion code <input name="promo_code"></label>
+          <button type="submit">Continue to checkout</button>
+        </form>
+        {manage}
+        """
+    return f"""
+    <h1>Subscription</h1>
+    {notice}
+    <p>Current plan: {html.escape(str(label))}. Status: {html.escape(str(billing.get('plan_status') or 'not started'))}.</p>
+    <p>Prices are ex GST. Stripe Tax is not enabled.</p>
+    <ul>{''.join(plans)}</ul>
+    {checkout}
+    """
 
 
 def _tracking_block(code: Optional[str], path: Optional[str], base_url: str) -> str:
@@ -634,6 +752,7 @@ def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
                         "shop_id": shortlist.shop_id,
                         "shop_name": shop.name if shop is not None else None,
                         "accepted_at": item.accepted_at,
+                        "commission_rate": float(product.commission_rate) if product is not None and product.commission_rate is not None else None,
                     }
                 )
             return rows
@@ -661,6 +780,66 @@ def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
                 "shop_id": shortlist.shop_id,
                 "shop_name": getattr(shop, "name", None),
                 "accepted_at": item.accepted_at,
+                "commission_rate": float(product.commission_rate) if product is not None and getattr(product, "commission_rate", None) is not None else None,
+            }
+        )
+    return rows
+
+
+def _offer_items(creator_id: str, *, pending: bool) -> list[dict]:
+    if not pending:
+        return []
+    if db.configured():
+        with db.session_scope() as session:
+            query = (
+                select(ShortlistItem, Shortlist, Product, Shop, Creator)
+                .join(Shortlist, Shortlist.id == ShortlistItem.shortlist_id)
+                .join(Product, Product.id == Shortlist.product_id, isouter=True)
+                .join(Shop, Shop.id == Shortlist.shop_id, isouter=True)
+                .join(Creator, Creator.id == ShortlistItem.creator_id, isouter=True)
+                .where(ShortlistItem.creator_id == creator_id)
+                .where(ShortlistItem.accepted_at.is_(None))
+                .where(ShortlistItem.declined_at.is_(None))
+            )
+            rows = []
+            for item, shortlist, product, shop, creator in session.execute(query).all():
+                rate = product.commission_rate if product is not None else None
+                rows.append(
+                    {
+                        "id": item.id,
+                        "creator_id": item.creator_id,
+                        "handle": creator.handle if creator is not None else None,
+                        "product_id": shortlist.product_id,
+                        "product_title": product.title if product is not None else None,
+                        "shop_id": shortlist.shop_id,
+                        "shop_name": shop.name if shop is not None else None,
+                        "accepted_at": None,
+                        "commission_rate": float(rate) if rate is not None else None,
+                    }
+                )
+            return rows
+    rows = []
+    for item in db.memory_shortlist_items:
+        if getattr(item, "accepted_at", None) or getattr(item, "declined_at", None):
+            continue
+        if item.creator_id != creator_id:
+            continue
+        shortlist = next((row for row in db.memory_shortlists if row.id == item.shortlist_id), None)
+        if shortlist is None:
+            continue
+        product = db.memory_products.get(shortlist.product_id)
+        shop = db.memory_shops.get(shortlist.shop_id)
+        rate = getattr(product, "commission_rate", None) if product is not None else None
+        rows.append(
+            {
+                "id": item.id,
+                "creator_id": item.creator_id,
+                "product_id": shortlist.product_id,
+                "product_title": getattr(product, "title", None),
+                "shop_id": shortlist.shop_id,
+                "shop_name": getattr(shop, "name", None),
+                "accepted_at": None,
+                "commission_rate": float(rate) if rate is not None else None,
             }
         )
     return rows

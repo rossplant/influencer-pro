@@ -31,6 +31,9 @@ A profile is complete when it has a handle, at least one `active_categories` slu
 | `shopify_connected` | Emitted when a shop's Shopify connection is recorded | `shopify_connected_at` the first time. |
 | `attributed_sale` | Emitted when an attributed order is recorded | `first_attributed_sale_at` the first time. |
 | `payment_received` | Emitted when the first paid subscription is recorded | `first_paid_at` the first time. |
+| `subscribe` | Stripe webhook, first paid invoice only | `first_paid_at` the first time. Server fan-out only. |
+| `complete_registration` | Invite join creates the seller or creator account | Server-only. The browser must not fire this event. |
+| `consent_revoked` | A signed-in seller or creator turns marketing consent off | Internal only. Updates `marketing_consent` on the account. |
 | `match_accepted` | Emitted for a creator or shortlist item | `creators.first_match_accepted_at` the first time. On a shortlist item, `accepted_at` the first time. |
 | `match_declined` | Emitted for a shortlist item | `declined_at` the first time, and `decline_reason` when passed and still empty. |
 | `creator_posted` | Emitted when a creator's post is recorded | `creators.first_post_at` the first time. |

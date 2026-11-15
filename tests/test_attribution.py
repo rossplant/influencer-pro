@@ -159,7 +159,9 @@ def test_csv_import_is_idempotent_and_reports_row_errors(monkeypatch):
     assert len(db.memory_attributed_orders) == 2
     orders = client.get("/admin/api/orders", headers=headers)
     assert orders.status_code == 200
-    assert orders.json()["total"] == 2
+    assert orders.json()["total"] == 0
+    assert orders.json()["gmv"]["net_gmv"] == 0
+    assert float(first.gmv_gross) == 45.5
 
 
 def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
@@ -173,6 +175,7 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
         json={"creator_id": creator["id"], "product_id": product_id, "destination_url": "https://brand.example/p"},
         headers=headers,
     ).json()["discount_code"]
+    assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
     csv_text = f"order_id,date,link,gross,currency,shop\n55,2026-11-15,/r/{code},19,USD,{shop['id']}\n"
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["created"] == 1
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["existing"] == 1
@@ -188,3 +191,68 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
         assert shop_row.first_attributed_sale_at is not None
         names = set(session.scalars(select(events.Event.event_name)).all())
     assert "attributed_sale" in names
+
+
+def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch):
+    import attribution
+    from fastapi import HTTPException
+
+    shop, creator, product_id = _catalogue()
+    headers = _session(monkeypatch)
+    code = client.post(
+        "/creator-product-links",
+        json={"creator_id": creator["id"], "product_id": product_id},
+        headers=headers,
+    ).json()["discount_code"]
+    assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
+    csv_text = f"order_id,date,code,gross,currency,shop\n77,2026-11-15,{code},20,AUD,{shop['id']}\n"
+    imported = client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers)
+    assert imported.json()["created"] == 1
+    order = db.memory_attributed_orders[-1]
+    assert order.click_window_days == 7
+    assert order.click_window_source == "code"
+    assert order.net_gmv == 20
+    sale = next(row for row in db.memory_events if row.event_name == "attributed_sale" and row.properties.get("order_id") == "77")
+    assert sale.properties["source"] == "csv_import"
+    adjusted = client.post(
+        f"/admin/api/orders/{order.id}/adjustment",
+        json={"refunded_amount": 5, "cancelled_amount": 2},
+        headers=headers,
+    )
+    assert adjusted.status_code == 200
+    assert adjusted.json()["net_gmv"] == 13
+    assert sale.properties["refunded"] is False
+    try:
+        attribution._validated_row(
+            {
+                "order_id": "78",
+                "date": "2026-11-15",
+                "code": code,
+                "gross": "10",
+                "currency": "AUD",
+                "shop": shop["id"],
+                "click_window_days": "3",
+            }
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 422
+    else:
+        raise AssertionError("a non-7-day click window was accepted")
+    missed = client.post(
+        "/attributed-orders/import",
+        json={"csv": f"order_id,date,code,gross,currency,shop\n88,2026-01-01,{code},8,AUD,{shop['id']}\n"},
+        headers=headers,
+    )
+    assert missed.json()["created"] == 1
+    outside = next(row for row in db.memory_attributed_orders if row.external_order_id == "88")
+    assert outside.attributed is False
+    assert float(outside.gmv_gross) == 8
+    assert not any(
+        row.event_name == "attributed_sale" and row.properties.get("order_id") == "88" for row in db.memory_events
+    )
+    report = client.get("/admin/api/orders", headers=headers)
+    assert report.status_code == 200
+    assert report.json()["gmv"]["orders"] == 1
+    assert report.json()["gmv"]["gmv_gross"] == 20
+    assert report.json()["gmv"]["net_gmv"] == 13
+    assert all(item["external_order_id"] != "88" for item in report.json()["items"])

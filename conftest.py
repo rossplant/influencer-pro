@@ -9,6 +9,7 @@ import pytest
 
 import grok_helper
 import main
+import tracking
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,14 @@ def _isolated(monkeypatch):
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     monkeypatch.delenv("ADMIN_SETUP_TOKEN", raising=False)
     monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("STRIPE_PUBLISHABLE_KEY", raising=False)
+    monkeypatch.delenv("STRIPE_PLATFORM_FEE_PERCENT", raising=False)
+    monkeypatch.delenv("STRIPE_CREATOR_COMMISSION_PERCENT", raising=False)
     monkeypatch.setattr(grok_helper, "GROK_API_KEY", None)
     main.reset_runtime_state()
+    tracking.reset()
     yield
     main.reset_runtime_state()
+    tracking.reset()

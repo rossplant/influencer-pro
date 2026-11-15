@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.14.1
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.16.1
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -21,7 +21,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ```bash
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port $PORT
+uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
 ```
 
 Set `PORT=8000` when you run that command locally. The default xAI model is `grok-4.3`.
@@ -46,6 +46,7 @@ Copy `.env.example`. `main.py` reads these variables:
 | `RATE_LIMIT_REQUESTS` | Requests allowed per window for each valid API key, or per client IP when the request has no valid key. Defaults to `30`. |
 | `RATE_LIMIT_WINDOW_SECONDS` | Length of that window. Defaults to `60`. |
 | `DATABASE_URL` | Postgres URL. `postgres://` and `postgresql://` are rewritten to `postgresql+psycopg://`. When unset, the API logs a warning and keeps the in-memory fallback so it can boot before Postgres is attached. The URL is not logged. |
+| `PUBLIC_BASE_URL` | Public https origin, with no trailing path. Checkout, the billing portal, and tracking links use it. Behind Railway, set this to the public site URL. |
 | `SHOPIFY_STORE` and `SHOPIFY_TOKEN` | Both must be set or `/sync-shopify` reports that Shopify is not configured. The sync itself is not implemented in this version. |
 | `NOTION_TOKEN`, `NOTION_PRODUCTS_DB`, `NOTION_INFLUENCERS_DB` | Optional and unused. `main.py` does not read them. Notion is not the database. |
 
@@ -55,7 +56,7 @@ When `DATABASE_URL` is set, startup runs `alembic upgrade head` (revision `0001_
 
 `events.emit(name, entity, actor, **props)` inserts an append-only `events` row. `product_enriched` increments `products_enriched` and sets `first_enrich_at` the first time. `match_run` increments `matches_run`, sets `first_match_at` the first time, and sets `last_match_at` every time. `brief_sent` (not enrichment) increments `briefs_generated`, sets `first_brief_at` the first time, and sets `last_campaign_at` every time. Shop events copy `plan_tier` and `plan_status` into `properties`. Catalogue and period counters are columns on the event. Names are listed in `docs/event_names.md`. Operator actions use the same names with `actor="operator"`.
 
-Starter allows 50 products in the catalogue and 5 match runs per UTC calendar month (`docs/Pricing.md`). Enriching a product that already exists does not use another catalogue slot. Growth allows 500 products and unlimited matches. Scale is unlimited on both. At the cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop is allowed through. Pilot shops default to `plan_tier=starter`, `plan_status=free`, and MRR 0. Monthly list prices are Growth US$49 and Scale US$149. Annual list prices are US$490 and US$1,490, and annual MRR is that price / 12. Free, trial, and trialing are 0.
+Starter allows 5 products, 1 campaign, and 3 match runs per UTC calendar month (`docs/Pricing.md`). Enriching a product that already exists does not use another catalogue slot. Growth allows 50 products, 5 campaigns, and 25 matches. Scale does not cap products or campaigns and allows 100 matches. At the cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop is allowed through. Prices are AUD ex GST: Growth A$79 or A$790 a year, Scale A$229 or A$2,290 a year. Annual MRR is that price / 12. Free, trial, trialing, and starter contribute 0.
 
 If `alembic_version` is `0001_initial` but the tables still have the pre-analytics shape (`attributed_orders.amount`, or `events` without `products_count`), startup drops those Plantr Collab tables and recreates them from the edited `0001` revision. Production is not on 0.10 and has no tables, so this does not run there. Do not rely on that drop once production has data.
 
@@ -65,7 +66,8 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.14.1`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.16.1`.
+- `/creator/payouts` creates or reuses an Australian Stripe Accounts v2 recipient and returns an onboarding link. `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once. No charges or transfers in this version.
 - `/seller` — shop login, profile, products, find creators, accept or decline, and accepted creators with a tracking code when one exists.
 - `/creator` — creator login, categories, accepted offers, and tracking codes. `/plantr_dashboard.html` redirects here.
 - Admin shop and creator details can create those logins and open “view as”.
