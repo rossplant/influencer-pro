@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import timedelta
 from types import SimpleNamespace
 from typing import Optional
 
@@ -31,18 +30,15 @@ from models import (
 
 
 def ensure_cohorts() -> None:
-    now = utcnow()
+    """Both cohorts use the same 2 month window. An existing row is moved onto it."""
+    start = billing_config.pilot_start()
+    end = billing_config.pilot_end()
     for slug, spec in billing_config.PILOT_COHORTS.items():
-        if _cohort(slug) is not None:
-            continue
-        end = now + timedelta(weeks=billing_config.pilot_weeks())
-        row = dict(
-            id=str(uuid.uuid4()),
-            slug=slug,
+        fields = dict(
             name=spec["name"],
             role=spec["role"],
             seat_cap=billing_config.seat_cap(slug),
-            starts_at=now,
+            starts_at=start,
             ends_at=end,
             pilot_tier=spec["pilot_tier"],
             post_coupon_key=spec["post_coupon"],
@@ -50,10 +46,21 @@ def ensure_cohorts() -> None:
         )
         if db.configured():
             with db.session_scope() as session:
-                if session.scalar(select(PilotCohort).where(PilotCohort.slug == slug)) is None:
-                    session.add(PilotCohort(**row))
+                row = session.scalar(select(PilotCohort).where(PilotCohort.slug == slug))
+                if row is None:
+                    session.add(PilotCohort(id=str(uuid.uuid4()), slug=slug, **fields))
+                else:
+                    row.name = fields["name"]
+                    row.starts_at = start
+                    row.ends_at = end
+            continue
+        existing = db.memory_cohorts.get(slug)
+        if existing is None:
+            db.memory_cohorts[slug] = SimpleNamespace(id=str(uuid.uuid4()), slug=slug, **fields)
         else:
-            db.memory_cohorts[slug] = SimpleNamespace(**row)
+            existing.name = fields["name"]
+            existing.starts_at = start
+            existing.ends_at = end
 
 
 def apply(

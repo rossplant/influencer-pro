@@ -48,27 +48,29 @@ When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot s
 
 ## For creators
 
-Creators are free at launch. A launch creator can keep a profile and see matches. There is no creator subscription at launch.
+Internal tier values stay `member`, `curator`, and `elite`. The names on screen are Membr, Curatr, and Trendsettr.
 
-### Later options (not launch tiers)
+| tier | Label | Price, ex GST |
+| --- | --- | --- |
+| member | Membr | Included with an invite |
+| curator | Curatr | A$19 / month or A$190 / year |
+| elite | Trendsettr | A$49 / month or A$490 / year |
 
-#### Creator Pro — US$19 / month
-- Unlimited matches
-- Priority in seller recommendations
-- Talking points generated for each product
-- Performance analytics
+Foundrs are the invite-only cohort. They are free for the 2 month pilot (20 November 2026 through 20 January 2027), then A$9.50 a month for 12 months. The route stays `/founding-curators`.
 
-#### Elite (invite only)
-- Brand partnerships
-- Higher commission share
-- Co-branded campaigns
+## Pilot
+
+Both cohorts run for 2 months, from 20 November 2026, with paid plans starting 20 January 2027.
+
+- Suppliers: free during the pilot, then 50% off Growth (A$39.50) for 3 months, then A$79.
+- Foundrs: free during the pilot, then A$9.50 a month for 12 months.
 
 ## How money flows
 1. The seller pays the Plantr Collab subscription. The performance fee waits until attribution works.
 2. The creator earns commission from the seller.
-3. Plantr may later take a small cut of commission on Elite deals, or stay on subscription pricing only.
+3. Plantr may later take a small cut of commission on Trendsettr deals, or stay on subscription pricing only.
 
 ## Positioning
 - Sellers pay for clearer product signals and relevant creators, in any category.
-- Creators are free at launch. Creator Pro and Elite are later options.
+- Creator plans are Membr, Curatr, and Trendsettr. Foundrs are the numbered pilot cohort.
 - Plantr Collab does not hold inventory.

@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 import attribution
 import auth
+import billing_config
 import db
 import events
 import scoring
@@ -555,7 +556,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
         number = profile.get("founding_number")
-        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         return badge + f"""
         <h1>{html.escape(profile.get('handle') or '')}</h1>
         <form method="post" action="/creator/profile">
@@ -600,7 +601,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
     )
     if page == "billing":
         number = profile.get("founding_number")
-        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         return badge + _billing_body("creator", data.get("billing") or {}, csrf, "/creator/billing")
     return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
 
@@ -608,7 +609,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
 def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     notice = "" if billing.get("configured") else "<p>Stripe is not configured.</p>"
     tier = billing.get("plan_tier") or ("starter" if role == "seller" else "member")
-    label = "Invited" if tier == "member" else tier
+    label = billing_config.tier_label(role, str(tier))
     plans = []
     for plan in billing.get("plans") or []:
         soon = ", ".join(plan.get("coming_soon") or [])
@@ -631,10 +632,19 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
             + manage
         )
     elif billing.get("configured"):
+        options = []
+        for plan in billing.get("plans") or []:
+            if str(plan.get("monthly") or "").startswith("Included"):
+                continue
+            selected = " selected" if plan.get("tier") == tier else ""
+            options.append(
+                f"<option value=\"{html.escape(str(plan.get('tier') or ''))}\"{selected}>"
+                f"{html.escape(str(plan.get('label') or ''))}</option>"
+            )
         checkout = f"""
         <form method="post" action="{action}/checkout">
           <input type="hidden" name="csrf_token" value="{csrf}">
-          <label>Plan <input name="tier" value="{html.escape(tier)}"></label>
+          <label>Plan <select name="tier">{''.join(options)}</select></label>
           <label>Interval
             <select name="interval"><option value="month">month</option><option value="year">year</option></select>
           </label>

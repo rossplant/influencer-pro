@@ -160,7 +160,7 @@
       const customer = detail.stripe_customer_id || "not started";
       const tier = detail.plan_tier || "starter";
       const status = detail.subscription_status || detail.plan_status || "not started";
-      const number = detail.founding_number ? ` Founding Curator #${detail.founding_number}.` : "";
+      const number = detail.founding_number ? ` Foundr #${detail.founding_number}.` : "";
       return `<p>Stripe subscription: ${customer}. Plan ${tier}. Status ${status}.${number}</p>`;
     }
 

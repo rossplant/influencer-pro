@@ -52,7 +52,7 @@ SELLER_TIERS = {
 
 CREATOR_TIERS = {
     "member": {
-        "label": "Invited",
+        "label": "Membr",
         "audience": "creator",
         "amount_month_cents": 0,
         "amount_year_cents": 0,
@@ -62,7 +62,7 @@ CREATOR_TIERS = {
         "features": ("tracking_links", "basic_sales"),
     },
     "curator": {
-        "label": "Curator",
+        "label": "Curatr",
         "audience": "creator",
         "amount_month_cents": 1900,
         "amount_year_cents": 19000,
@@ -73,7 +73,7 @@ CREATOR_TIERS = {
         "first_look_hours": 48,
     },
     "elite": {
-        "label": "Elite Curator",
+        "label": "Trendsettr",
         "audience": "creator",
         "amount_month_cents": 4900,
         "amount_year_cents": 49000,
@@ -91,7 +91,7 @@ SHOP_TIER_ALIASES = {"free": "starter"}
 
 COUPONS = {
     "founding_curator_50_12mo": {
-        "name": "Founding Curator 50% for 12mo",
+        "name": "Foundr 50% for 12 months",
         "percent_off": 50,
         "duration": "repeating",
         "duration_in_months": 12,
@@ -108,7 +108,7 @@ COUPONS = {
         "duration": "once",
     },
     "elite_grant_3mo": {
-        "name": "Elite free for 3 months",
+        "name": "Trendsettr free for 3 months",
         "percent_off": 100,
         "duration": "repeating",
         "duration_in_months": 3,
@@ -141,7 +141,7 @@ PILOT_COHORTS = {
         "seat_env": "PILOT_SELLER_SEATS",
     },
     "founding_curators": {
-        "name": "Founding Curators",
+        "name": "Foundrs",
         "role": "creator",
         "seat_cap": 50,
         "pilot_tier": "curator",
@@ -211,13 +211,52 @@ def event_name(key: str) -> str:
     return override or EVENT_NAMES[key]
 
 
-def pilot_weeks() -> int:
-    raw = os.getenv("PILOT_WEEKS", "8").strip() or "8"
+def pilot_months() -> int:
+    """Length of the free pilot. A leftover PILOT_WEEKS value is not used."""
+    raw = os.getenv("PILOT_MONTHS", "2").strip() or "2"
     try:
-        weeks = int(raw)
+        months = int(raw)
     except ValueError:
-        weeks = 8
-    return min(8, max(6, weeks))
+        months = 2
+    return max(1, months)
+
+
+def pilot_start():
+    """Paid launch is this date plus pilot_months(). Default is 20 Nov 2026."""
+    from datetime import datetime, timezone
+
+    raw = os.getenv("PILOT_START", "2026-11-20").strip() or "2026-11-20"
+    try:
+        day = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        day = datetime(2026, 11, 20)
+    return day.replace(tzinfo=timezone.utc)
+
+
+def pilot_end():
+    return add_months(pilot_start(), pilot_months())
+
+
+def add_months(moment, months: int):
+    from datetime import datetime, timedelta
+
+    month_index = moment.month - 1 + months
+    year = moment.year + month_index // 12
+    month = month_index % 12 + 1
+    if month == 12:
+        following = datetime(year + 1, 1, 1, tzinfo=moment.tzinfo)
+    else:
+        following = datetime(year, month + 1, 1, tzinfo=moment.tzinfo)
+    last_day = (following - timedelta(days=1)).day
+    return moment.replace(year=year, month=month, day=min(moment.day, last_day))
+
+
+def tier_label(audience: str, tier: str) -> str:
+    table = SELLER_TIERS if audience == "seller" else CREATOR_TIERS
+    spec = table.get((tier or "").strip().lower())
+    if spec is None:
+        return tier or ""
+    return spec["label"]
 
 
 def conversion_target() -> float:

@@ -46,7 +46,7 @@ def register(app) -> None:
             age = "<label><input name='age_confirmed' type='checkbox' value='yes' required> I am 18 or older</label>"
         number = ""
         if opened.get("founding_number"):
-            number = f"<p>Founding Curator #{opened['founding_number']}</p>"
+            number = f"<p>Foundr #{opened['founding_number']}</p>"
         body = f"""
         <h1>You've been selected.</h1>
         {number}
@@ -355,6 +355,7 @@ async def _checkout(request: Request, role: str):
             promo_code=str(form.get("promo_code") or ""),
             invite_code=context["signup_code"],
             campaign=context["signup_campaign"],
+            trial_end=stripe_billing.pilot_trial_end(role, session["subject_id"]),
         )
     except HTTPException as exc:
         if exc.status_code != 409:

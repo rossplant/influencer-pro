@@ -67,6 +67,29 @@ def client():
     return stripe.StripeClient(key)
 
 
+def pilot_trial_end(role: str, subject_id: str) -> Optional[int]:
+    """Free until the shared pilot end. Stripe needs the trial to end at least 48 hours ahead."""
+    from datetime import timedelta
+
+    account = _account(role, subject_id) or {}
+    slug = str(account.get("signup_campaign") or "")
+    if slug not in billing_config.PILOT_COHORTS:
+        return None
+    import pilots
+
+    cohort = pilots._cohort(slug)
+    end = None if cohort is None else getattr(cohort, "ends_at", None)
+    if end is None:
+        return None
+    if end.tzinfo is None:
+        from datetime import timezone
+
+        end = end.replace(tzinfo=timezone.utc)
+    if end <= utcnow() + timedelta(hours=48):
+        return None
+    return int(end.timestamp())
+
+
 def subscription_in_force(role: str, subject_id: str) -> bool:
     """True when another Checkout would create a second subscription."""
     status = str((_account(role, subject_id) or {}).get("subscription_status") or "").strip().lower()
@@ -284,7 +307,7 @@ def apply_sale_waiver(creator_id: str) -> dict:
 
 
 def grant_elite(creator_id: str) -> dict:
-    """Admin recognition: Elite at no charge for 3 months."""
+    """Admin recognition: Trendsettr at no charge for 3 months."""
     _save_account("creator", creator_id, {"plan_tier": "elite", "plan_status": "trial", "billing_interval": "month"})
     if configured():
         subscription_id = (_account("creator", creator_id) or {}).get("stripe_subscription_id")
