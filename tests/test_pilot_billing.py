@@ -1,5 +1,6 @@
 """Pilot codes, the Curatr waiver, checkout disclosure, reminders, consent and sign-up records (v0.17.0)."""
 
+import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -392,6 +393,9 @@ def test_seller_application_needs_authority_and_a_valid_abn_and_records_acceptan
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     page = client.get("/pilot-sellers").text
     assert "authorised to act for this business" in page
+    fee = "Plantr charges no transaction fee on sales. You pay creators' commission directly."
+    assert fee in legal.SELLER_PANEL
+    assert html.escape(fee) in page
     assert "name='abn'" in page
     assert "email_consent" in page and "required> Send me" not in page
     assert client.post("/pilot-sellers/apply", data=_seller_form(page, authority_confirmed=None)).status_code == 422

@@ -44,7 +44,7 @@ When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot s
 - Shopify sync when it ships
 - API access
 
-**Performance fee, not at launch.** A 5% fee on attributed GMV is held until order attribution works. It is not billed now.
+**Subscriptions only.** Plantr charges subscriptions only, with no platform or transaction fee. This will be reviewed after March 2027. Commission is paid directly from seller to creator, and Plantr never handles that money.
 
 ## For creators
 
@@ -85,9 +85,8 @@ Checkout shows the disclosure from `09_Signup_Acceptance_Wording` section 10 nex
 `reminder_sends` is the idempotent send log. The job runs hourly inside the app (`REMINDERS_LOOP=off` turns it off) and can be run by hand with `POST /admin/api/reminders/run`. Until `RESEND_API_KEY` and `EMAIL_FROM` are set, nothing is sent, a warning is logged, and due reminders are retried on later runs until their date passes.
 
 ## How money flows
-1. The seller pays the Plantr Collab subscription. The performance fee waits until attribution works.
-2. The creator earns commission from the seller.
-3. Plantr may later take a small cut of commission on Trendsettr deals, or stay on subscription pricing only.
+1. The seller pays the Plantr Collab subscription. Plantr charges subscriptions only, with no platform or transaction fee. This will be reviewed after March 2027.
+2. Commission is paid directly from the seller to the creator. Plantr never handles that money.
 
 ## Positioning
 - Sellers pay for clearer product signals and relevant creators, in any category.

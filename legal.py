@@ -1,6 +1,6 @@
 """Sign-up acceptance wording and acceptance records.
 
-Wording is from 09_Signup_Acceptance_Wording (Draft v0.2). It is a draft for
+Wording is from 09_Signup_Acceptance_Wording (Draft v0.3). It is a draft for
 legal review. Every checkbox starts unticked. The email marketing checkbox is
 separate from the cookie choice and is always optional.
 """
@@ -17,13 +17,14 @@ import db
 from models import TermsAcceptance, utcnow
 
 TERMS_VERSION = os.getenv("TERMS_VERSION", "").strip() or "draft-v0.4.6"
-WORDING_VERSION = "09_Signup_Acceptance_Wording draft v0.2"
+WORDING_VERSION = "09_Signup_Acceptance_Wording draft v0.3"
 
 SELLER_PANEL = (
     "Plantr Collab is a paid subscription service. Plans: Starter A$29, Growth A$79 or Scale A$229 per month "
     "(or 10 times the monthly price per year). Prices exclude GST. We are not yet registered for GST, so no GST "
     "is charged now. If we register, we will give you 30 days' notice before adding GST. Plans renew automatically "
-    "until you cancel. Pilot sellers get Growth free from 20 November 2026 to 20 January 2027, then A$39.50 a month "
+    "until you cancel. Plantr charges no transaction fee on sales. You pay creators' commission directly. "
+    "Pilot sellers get Growth free from 20 November 2026 to 20 January 2027, then A$39.50 a month "
     "for 3 months, then A$79 a month, but only if they choose to subscribe."
 )
 CREATOR_PANEL = (

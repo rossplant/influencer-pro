@@ -198,9 +198,12 @@ def privacy_html() -> str:
 def consent_banner() -> str:
     return (
         "<div class='consent'>"
-        "<p>Marketing tags stay off unless you allow them.</p>"
-        "<button type='button' id='consent-yes'>Allow marketing cookies</button>"
-        "<button type='button' id='consent-no'>Essential only</button>"
+        "<p>We use essential cookies to run this site. With your permission, we also use marketing cookies "
+        "and share limited data (including hashed email and phone, and ad click IDs) with Meta and TikTok "
+        "to measure our ads.</p>"
+        "<button type='button' id='consent-yes'>Allow marketing cookies</button> "
+        "<button type='button' id='consent-no'>Essential only</button> "
+        "Cookie and Tracking Notice"
         "</div>"
         "<script>"
         "function plantrConsent(allowed){"

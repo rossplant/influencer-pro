@@ -67,7 +67,7 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 ## Endpoints
 
 - `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.17.0`.
-- `/creator/payouts` creates or reuses an Australian Stripe Accounts v2 recipient and returns an onboarding link. `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once. No charges or transfers in this version.
+- `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once.
 - `/seller` — shop login, profile, products, find creators, accept or decline, and accepted creators with a tracking code when one exists.
 - `/creator` — creator login, categories, accepted offers, and tracking codes. `/plantr_dashboard.html` redirects here.
 - Admin shop and creator details can create those logins and open “view as”.
