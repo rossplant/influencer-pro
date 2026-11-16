@@ -49,22 +49,22 @@ from models import (
     utcnow,
 )
 
-ESTIMATE_LABEL = "Estimate based on tracked sales. Your agreement with the creator governs the amount payable."
+ESTIMATE_LABEL = "Estimate based on tracked sales. Your agreement with the Creatr governs the amount payable."
 UNCONFIRMED_LABEL = "Marked paid by Seller, not confirmed"
 ABN_WARNING_VERSION = "abn-warning-v1"
 ABN_WARNING = (
-    "This creator hasn't given Plantr an ABN. If you pay a supplier who doesn't quote an ABN, "
+    "This Creatr hasn't given Plantr an ABN. If you pay a supplier who doesn't quote an ABN, "
     "you may need to withhold 47% of the payment for tax (no-ABN withholding). "
     "Please check with your accountant."
 )
 SHOPIFY_COLLABS_WARNING = (
-    "This collab is paid through Shopify Collabs. If you also pay this creator outside Shopify Collabs "
+    "This collab is paid through Shopify Collabs. If you also pay this Creatr outside Shopify Collabs "
     "for the same sales, you could pay twice. Check your Shopify Collabs payouts before paying separately."
 )
 UNDER_REVIEW_LABEL = "Under review"
 OPEN_CORRECTION = ("pending_creator", "disagreed")
 HOW_TO_CLEAR = (
-    "Pay the creator directly and mark the amount paid, or ask the creator to withdraw their dispute. "
+    "Pay the Creatr directly and mark the amount paid, or ask the Creatr to withdraw their dispute. "
     "Disputes open for 14 days or more can be reviewed by Plantr. Your live collabs keep running "
     "and you can still edit or correct existing briefs."
 )
@@ -340,11 +340,11 @@ def display_status(st: CommissionStatement, now: Optional[datetime] = None) -> d
     if st.status == "marked_paid":
         if st.marked_paid_at and now > st.marked_paid_at + timedelta(days=confirm_window_days()):
             return {"code": "unconfirmed", "label": UNCONFIRMED_LABEL}
-        return {"code": "awaiting_confirmation", "label": "Marked paid by Seller, waiting for the creator to confirm"}
+        return {"code": "awaiting_confirmation", "label": "Marked paid by Seller, waiting for the Creatr to confirm"}
     if st.status == "confirmed":
-        return {"code": "confirmed", "label": "Payment confirmed by creator"}
+        return {"code": "confirmed", "label": "Payment confirmed by the Creatr"}
     if st.status == "disputed":
-        return {"code": "disputed", "label": "Disputed by creator"}
+        return {"code": "disputed", "label": "Disputed by the Creatr"}
     return {"code": "resolved", "label": "Dispute closed by Plantr review"}
 
 

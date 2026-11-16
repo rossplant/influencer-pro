@@ -25,6 +25,7 @@ import billing_config
 import catalogue
 import db
 import events
+import portal_copy
 import scoring
 import services
 import stripe_billing
@@ -102,12 +103,17 @@ def creator_context(request: Request) -> Optional[dict]:
     return auth.read_role_session(request, auth.CREATOR_COOKIE)
 
 
+class ReadOnlyView(Exception):
+    """An operator is viewing an account and tried to change it."""
+
+
 def require_seller(request: Request) -> dict:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
     session = seller_context(request)
     if session is None:
         raise HTTPException(status_code=401, detail="Seller session required")
+    _reject_view_as_write(request, session)
     return session
 
 
@@ -117,7 +123,45 @@ def require_creator(request: Request) -> dict:
     session = creator_context(request)
     if session is None:
         raise HTTPException(status_code=401, detail="Creator session required")
+    _reject_view_as_write(request, session)
     return session
+
+
+def _reject_view_as_write(request: Request, session: dict) -> None:
+    if not session.get("impersonator"):
+        return
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    path = request.url.path.rstrip("/") or "/"
+    if path in {"/seller/logout", "/creator/logout"}:
+        return
+    raise ReadOnlyView()
+
+
+def begin_impersonation(response, role: str, admin_email: str, subject_id: str, name: str, reason: str = ""):
+    """Open a read-only view and record that it started. The password is not logged."""
+    set_role_cookie(response, role, admin_email, subject_id, impersonator=admin_email)
+    props = {
+        "role": role,
+        "subject_id": subject_id,
+        "subject_name": name or "",
+        "operator": admin_email,
+    }
+    text = " ".join((reason or "").split())
+    if text:
+        props["reason"] = text[:500]
+    events.record_admin("view_as_started", **props)
+
+
+def end_impersonation(session: dict) -> None:
+    if not session.get("impersonator"):
+        return
+    events.record_admin(
+        "view_as_ended",
+        role=session.get("role") or "",
+        subject_id=session.get("subject_id") or "",
+        operator=session.get("impersonator") or "",
+    )
 
 
 def check_login_csrf(token: str, purpose: str) -> None:
@@ -311,7 +355,7 @@ def run_match(shop_id: str, product_id: str) -> dict:
             status_code=422,
             detail=(
                 "Complete this product before it can be matched or used in a brief. "
-                "Add why you chose it, the value for creators, and a commission."
+                "Add what makes it special, what's in it for Creatrs, and the commission you'll pay."
             ),
         )
     loaded = services.load_match_inputs(
@@ -442,6 +486,90 @@ def creator_links(creator_id: str) -> list[dict]:
     return attribution.list_links(shop_id=None, creator_id=creator_id)
 
 
+_ICONS = {
+    "home": '<path d="M4 11 12 4l8 7v9a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/>',
+    "user": '<circle cx="12" cy="8" r="3"/><path d="M5 19c1.5-3 3.8-4.5 7-4.5S17.5 16 19 19"/>',
+    "star": '<path d="m12 3 2.4 5.2L20 9.2l-4 3.9.9 5.7L12 16.8 7.1 18.8 8 13.1 4 9.2l5.6-.9z"/>',
+    "spark": '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>',
+    "check": '<path d="m5 12 5 5L20 7"/>',
+    "flag": '<path d="M6 4v16M6 5h11l-2 4 2 4H6"/>',
+    "card": '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/>',
+    "link": '<path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"/>',
+}
+_NAV_ICON = {
+    "dashboard": "home",
+    "profile": "user",
+    "products": "star",
+    "find": "spark",
+    "offers": "spark",
+    "accepted": "check",
+    "campaigns": "flag",
+    "billing": "card",
+    "links": "link",
+}
+
+
+def _icon(name: str) -> str:
+    return (
+        '<svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
+        'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        f"{_ICONS[name]}</svg>"
+    )
+
+
+def _logo(mark: str) -> str:
+    return (
+        f'<span class="logo"><svg width="34" height="24" viewBox="0 0 34 24" aria-hidden="true">'
+        f'<circle cx="12" cy="12" r="10" fill="none" stroke="{mark}" stroke-width="3"/>'
+        '<circle cx="22" cy="12" r="10" fill="none" stroke="#C2127F" stroke-width="3"/>'
+        '<path d="M17 3.3a10 10 0 0 1 0 17.4 10 10 0 0 1 0-17.4z" fill="url(#plantrLens)"/></svg>'
+        '<span>Plantr <span class="collab">Collab</span></span></span>'
+    )
+
+
+def _empty(heading: str, body: str, button: str = "", href: str = "") -> str:
+    action = f'<a class="button" href="{html.escape(href)}">{html.escape(button)}</a>' if button and href else ""
+    return (
+        f'<div class="empty-art" id="first-product"><div class="orb" aria-hidden="true"></div>'
+        f"<h2>{html.escape(heading)}</h2><p>{html.escape(body)}</p>{action}</div>"
+    )
+
+
+def _hero(heading: str, intro: str, *, badge: str = "", tag: str = "") -> str:
+    flag = f'<span class="hero-badge">{html.escape(badge)}</span>' if badge else ""
+    who = f'<span class="hero-tag">{html.escape(tag)}</span>' if tag else ""
+    return (
+        f'<section class="hero">{flag}{who}<h1>{html.escape(heading)}</h1>'
+        f"<p>{html.escape(intro)}</p></section>"
+    )
+
+
+def _aside(items, current: str, csrf: str, logout: str, shop_or_none, *, seller: bool) -> str:
+    links = []
+    for key, href, label in items:
+        on = ' class="on" aria-current="page"' if key == current else ""
+        links.append(f'<a href="{href}"{on}>{_icon(_NAV_ICON.get(key, "home"))}{html.escape(label)}</a>')
+    pill = ""
+    if seller and shop_or_none:
+        plan = billing_config.tier_label("seller", str(shop_or_none.get("plan_tier") or "starter"))
+        title, detail = portal_copy.pilot_pill(plan, is_pilot=bool(shop_or_none.get("is_pilot")))
+        pill = f'<div class="plan-pill"><b>{html.escape(title)}</b>{html.escape(detail)}</div>'
+    sign_out = (
+        f'<form method="post" action="{html.escape(logout)}">'
+        f'<input type="hidden" name="csrf_token" value="{html.escape(csrf)}">'
+        '<button class="secondary" type="submit">Sign out</button></form>'
+    )
+    mark = "#0A64E0" if seller else "#5B2EFF"
+    return (
+        "<aside><div class=\"logo-lock\">"
+        '<svg width="0" height="0" aria-hidden="true"><defs><linearGradient id="plantrLens" x1="0" x2="1">'
+        '<stop offset="0" stop-color="#5B2EFF"/><stop offset="1" stop-color="#C2127F"/></linearGradient></defs></svg>'
+        f"{_logo(mark)}</div>"
+        f'<p class="value-strip">{html.escape(portal_copy.VALUE_STRIP)}</p>'
+        f"<nav>{''.join(links)}</nav>{pill}{sign_out}</aside>"
+    )
+
+
 def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
@@ -458,27 +586,25 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
           <button type="submit">Sign in</button>
         </form>
         """
-        return HTMLResponse(_layout("Seller", body, None, None))
+        return HTMLResponse(_layout("Seller", body, None, None, theme="seller"))
     shop = shop_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
     data["locked"] = not stripe_billing.commerce_open("seller", session["subject_id"])
     banner = ""
     if session.get("impersonator"):
-        banner = "<p class='banner'>Viewing as this shop.</p>"
+        label = (shop.get("business_name") or shop.get("name") or "this seller").strip() or "this seller"
+        banner = (
+            "<div class='view-as-bar' role='status'>"
+            f"<p>Viewing as {html.escape(label)}, read-only.</p>"
+            "<form method='post' action='/seller/logout'>"
+            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+            "<button type='submit'>Exit</button></form></div>"
+        )
     if data["locked"] and page != "profile":
         banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
-    nav = """
-    <nav>
-      <a href="/seller/profile">Profile</a>
-      <a href="/seller/products">Products</a>
-      <a href="/seller/find">Find creators</a>
-      <a href="/seller/accepted">Accepted</a>
-      <a href="/seller/campaigns">Campaigns</a>
-      <a href="/seller/billing">Billing</a>
-    </nav>
-    """
-    content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
-    return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"]))
+    aside = _aside(portal_copy.SELLER_NAV, page, session["csrf"], "/seller/logout", shop, seller=True)
+    content = banner + _seller_body(page, shop, csrf, base_url=base_url, **data)
+    return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"], theme="seller", aside=aside))
 
 
 def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
@@ -487,7 +613,7 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
     if session is None:
         token = auth.issue_form_token("creator-login")
         body = f"""
-        <h1>Creator sign in</h1>
+        <h1>Creatr sign in</h1>
         <form method="post" action="/creator/login">
           <input type="hidden" name="csrf_token" value="{html.escape(token)}">
           <label for="email">Email</label>
@@ -497,23 +623,26 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
           <button type="submit">Sign in</button>
         </form>
         """
-        return HTMLResponse(_layout("Creator", body, None, None))
+        return HTMLResponse(_layout("Creatr", body, None, None, theme="creatr"))
     profile = creator_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
     data["locked"] = not stripe_billing.commerce_open("creator", session["subject_id"])
-    banner = "<p class='banner'>Viewing as this creator.</p>" if session.get("impersonator") else ""
+    if session.get("impersonator"):
+        label = (profile.get("handle") or profile.get("name") or "this Creatr").strip() or "this Creatr"
+        banner = (
+            "<div class='view-as-bar' role='status'>"
+            f"<p>Viewing as {html.escape(label)}, read-only.</p>"
+            "<form method='post' action='/creator/logout'>"
+            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+            "<button type='submit'>Exit</button></form></div>"
+        )
+    else:
+        banner = ""
     if data["locked"] and page not in {"profile", "links"}:
         banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
-    nav = """
-    <nav>
-      <a href="/creator/profile">Profile</a>
-      <a href="/creator/offers">Offers</a>
-      <a href="/creator/links">Links</a>
-      <a href="/creator/billing">Subscription</a>
-    </nav>
-    """
-    content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
-    return HTMLResponse(_layout(profile.get("handle") or "Creator", content, "/creator/logout", session["csrf"]))
+    aside = _aside(portal_copy.CREATR_NAV, page, session["csrf"], "/creator/logout", None, seller=False)
+    content = banner + _creator_body(page, profile, csrf, base_url=base_url, **data)
+    return HTMLResponse(_layout(profile.get("handle") or "Creatr", content, "/creator/logout", session["csrf"], theme="creatr", aside=aside))
 
 
 def _profile_form(shop: dict, csrf: str, error: str) -> str:
@@ -523,84 +652,146 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
         selected = " selected" if slug == current else ""
         options.append(f"<option value='{html.escape(slug)}'{selected}>{html.escape(label)}</option>")
     banner = f"<p class='banner'>{html.escape(error)}</p>" if error else ""
+    copy = portal_copy.SELLER_PROFILE
+    name = (shop.get("business_name") or shop.get("name") or "").strip()
+    intro = _hero(copy["heading"], copy["subhead"] + " The business name is the trading name.", tag=name)
+    empty = ""
+    if not (shop.get("business_name") or shop.get("store_url")):
+        empty = _empty(portal_copy.SELLER_PROFILE_EMPTY["heading"], portal_copy.SELLER_PROFILE_EMPTY["body"])
     return f"""
-    <h1>{html.escape(shop['name'])}</h1>
-    <p>The account name above is the name from your invite. The business name is the trading name, and you can change it here.</p>
+    {intro}
+    {empty}
     {banner}
-    <form method="post" action="/seller/profile">
+    <form class="sheet" method="post" action="/seller/profile">
       <input type="hidden" name="csrf_token" value="{csrf}">
-      <label>Business name <input name="business_name" value="{html.escape(shop.get('business_name') or '')}" autocomplete="organization"></label>
-      <label>ABN (optional) <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}"></label>
-      <label>Primary category <select name="primary_category">{''.join(options)}</select></label>
-      <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
-      <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
-      <button type="submit">Save profile</button>
+      <label>{html.escape(copy["business"])} <input name="business_name" value="{html.escape(shop.get('business_name') or '')}" autocomplete="organization"></label>
+      <label>{html.escape(copy["abn"])} <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}"></label>
+      <label>{html.escape(copy["category"])} <select name="primary_category">{''.join(options)}</select></label>
+      <label>{html.escape(copy["shop"])} <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
+      <label>{html.escape(copy["shopify"])} <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
+      <button type="submit">{html.escape(copy["button"])}</button>
     </form>
     """
 
 
+def _missing_details(row: dict) -> int:
+    missing = 0
+    if not str(row.get("why_chosen") or "").strip():
+        missing += 1
+    if not str(row.get("value_to_creators") or "").strip():
+        missing += 1
+    if row.get("commission_rate") is None:
+        missing += 1
+    return missing
+
+
+def _aud(amount) -> str:
+    if amount is None or amount == "":
+        return "—"
+    return f"A${float(amount):,.2f}"
+
+
 def _products_page(shop: dict, csrf: str, data: dict) -> str:
+    copy = portal_copy.PRODUCTS
     products = data.get("products") or []
     count = len(products)
-    noun = "product" if count == 1 else "products"
-    rows = []
-    for row in products:
-        prompt = ""
-        if row.get("needs_completion"):
-            prompt = (
-                f" <a href='/seller/products?edit={html.escape(row['id'])}'>{html.escape(catalogue.COMPLETE_PROMPT)}</a>"
-            )
-        rows.append(
-            "<li>"
-            f"{html.escape(row['title'])} · {html.escape(row.get('category') or '')} · "
-            f"{'' if row.get('price') is None else row.get('price')} · {html.escape(row.get('url') or '')}"
-            f" <a href='/seller/products?edit={html.escape(row['id'])}'>Edit</a>"
-            f"{prompt}"
-            "</li>"
+    cards = []
+    for index, row in enumerate(products):
+        missing = _missing_details(row)
+        chip = ""
+        if missing:
+            label = copy["detail"] if missing == 1 else copy["details"].format(n=missing)
+            chip = f'<span class="chip warn">{html.escape(label)}</span>'
+        finish = ""
+        if row.get("needs_completion") or missing:
+            finish = f'<a href="/seller/products?edit={html.escape(row["id"])}">{html.escape(copy["finish"])}</a>'
+        image = row.get("image_url") or ""
+        if image.startswith("http://") or image.startswith("https://"):
+            thumb = f'<img class="thumb" alt="" src="{html.escape(image)}">'
+        else:
+            thumb = f'<div class="thumb t{index % 4}" aria-hidden="true"></div>'
+        cards.append(
+            '<article class="product-card">'
+            f"{thumb}<div><h3>{html.escape(row['title'])}</h3>"
+            f'<span class="chip">{html.escape(taxonomy.TOP_LEVEL_CATEGORIES and next((label for slug, label in taxonomy.TOP_LEVEL_CATEGORIES if slug == (row.get("category") or "")), row.get("category") or "Category"))}</span>'
+            f"{chip}</div><div class=\"price\">{html.escape(_aud(row.get('price')))}{('<small>' + finish + '</small>') if finish else ''}</div></article>"
         )
     warning = catalogue.fee_warning(count)
     warning_html = f"<p class='banner' id='catalogue-fee'>{html.escape(warning)}</p>" if warning else ""
-    first = ""
+    empty = ""
     if count == 0:
-        first = f"<p class='curation' id='first-product'>{html.escape(catalogue.FIRST_PRODUCT_COPY)}</p>"
+        empty = _empty(portal_copy.PRODUCTS_EMPTY["heading"], portal_copy.PRODUCTS_EMPTY["body"])
     edit = data.get("edit") or {}
     form = ""
     if not data.get("locked"):
         commission = edit.get("commission_rate")
         commission_value = "" if commission is None else str(commission)
+        options = ['<option value="">Choose a category</option>']
+        current = edit.get("category") or ""
+        for slug, label in taxonomy.TOP_LEVEL_CATEGORIES:
+            selected = " selected" if slug == current else ""
+            options.append(f'<option value="{html.escape(slug)}"{selected}>{html.escape(label)}</option>')
+        button = copy["save"] if edit else copy["button"]
         form = f"""
-        <h2>{'Edit' if edit else 'Add'} product</h2>
-        <form method="post" action="/seller/products">
+        <form class="sheet" method="post" action="/seller/products">
+          <h2>{html.escape(copy["edit_form"] if edit else copy["form"])}</h2>
           <input type="hidden" name="csrf_token" value="{csrf}">
           <input type="hidden" name="product_id" value="{html.escape(edit.get('id') or '')}">
-          <label>Title <input name="title" value="{html.escape(edit.get('title') or '')}" required></label>
-          <label>Category <input name="category" value="{html.escape(edit.get('category') or '')}"></label>
-          <label>Price <input name="price" value="{html.escape('' if edit.get('price') is None else str(edit.get('price')))}"></label>
-          <label>URL <input name="url" type="url" value="{html.escape(edit.get('url') or '')}"></label>
-          <label>Image URL (optional) <input name="image_url" type="url" value="{html.escape(edit.get('image_url') or '')}"></label>
-          <label>Why you chose it <textarea name="why_chosen" required>{html.escape(edit.get('why_chosen') or '')}</textarea></label>
-          <label>Value for creators <textarea name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea></label>
-          <label>Commission percent <input name="commission" value="{html.escape(commission_value)}" required></label>
-          <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
-          <button type="submit">Save product</button>
+          <label for="title">{html.escape(copy["name"])}</label>
+          <input id="title" name="title" value="{html.escape(edit.get('title') or '')}" placeholder="{html.escape(copy["name_placeholder"])}" required>
+          <div class="two">
+            <div><label for="category">{html.escape(copy["category"])}</label>
+            <select id="category" name="category">{''.join(options)}</select></div>
+            <div><label for="price">{html.escape(copy["price"])}</label>
+            <input id="price" name="price" value="{html.escape('' if edit.get('price') is None else str(edit.get('price')))}" placeholder="{html.escape(copy["price_placeholder"])}"></div>
+          </div>
+          <label for="url">{html.escape(copy["url"])}</label>
+          <input id="url" name="url" type="text" value="{html.escape(edit.get('url') or '')}" placeholder="{html.escape(copy["url_placeholder"])}">
+          <input type="hidden" name="image_url" value="{html.escape(edit.get('image_url') or '')}">
+          <label for="why">{html.escape(copy["special"])}</label>
+          <p class="help">{html.escape(copy["special_help"])}</p>
+          <textarea id="why" name="why_chosen" required>{html.escape(edit.get('why_chosen') or '')}</textarea>
+          <p class="help guard" id="claim-guard" hidden>{html.escape(copy["guard"])}</p>
+          <label for="value">{html.escape(copy["creatr_value"])}</label>
+          <p class="help">{html.escape(copy["creatr_help"])}</p>
+          <textarea id="value" name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea>
+          <label for="commission">{html.escape(copy["commission"])}</label>
+          <p class="help">{html.escape(portal_copy.COMMISSION_LINE)}</p>
+          <input id="commission" name="commission" value="{html.escape(commission_value)}" required>
+          <input type="hidden" name="description" value="{html.escape(edit.get('description') or '')}">
+          <button class="btn" type="submit">{html.escape(button)}</button>
         </form>
-        <h2>Add from a CSV</h2>
-        <p>Upload a spreadsheet, tick the rows you want, and leave the rest. Nothing is ticked to start with. Drafts are not used for matching until you add why you chose them, the value for creators, and a commission.</p>
-        <p><a href="/seller/products/csv-template">Download the template</a></p>
-        <form method="post" action="/seller/products/import" enctype="multipart/form-data">
+        <form class="sheet" method="post" action="/seller/products/import" enctype="multipart/form-data">
+          <h2>Bring a list</h2>
+          <p class="help">Tick the rows you want. Nothing starts ticked. A product is ready for matching when the story and the commission are in.</p>
+          <p><a href="/seller/products/csv-template">Download the template</a></p>
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Products CSV <input type="file" name="file" accept=".csv,text/csv" required></label>
           <button type="submit">Preview CSV</button>
         </form>
         """
+    badge = portal_copy.HERO_BADGE if shop.get("is_pilot") else ""
+    tag = (shop.get("business_name") or shop.get("name") or "").strip()
+    cards_html = "".join(cards) if cards else empty
     return f"""
-    <h1>Products</h1>
-    <p class="curation">{html.escape(catalogue.PRODUCTS_COPY)}</p>
-    <p id="product-count">{count} {noun}</p>
+    {_hero(copy["heading"], copy["intro"], badge=badge, tag=tag)}
     {warning_html}
-    {first}
-    <ul>{''.join(rows) or '<li>No products yet.</li>'}</ul>
-    {form}
+    <div class="split">
+      <section>
+        <h2 id="product-count">{count} {"hero product" if count == 1 else "hero products"}</h2>
+        <div class="cards">{cards_html}</div>
+      </section>
+      {form}
+    </div>
+    <script>
+    (function(){{
+      var box = document.getElementById("why");
+      var note = document.getElementById("claim-guard");
+      if (!box || !note) return;
+      var flags = /\\b(best|greatest|guaranteed|exclusive|miracle|cure|clinically|before and after|customers rave|love it)\\b/i;
+      box.addEventListener("input", function(){{ note.hidden = !flags.test(box.value); }});
+    }})();
+    </script>
     """
 
 
@@ -661,14 +852,14 @@ def _csv_details(csrf: str, rows: list[dict], error: str) -> str:
               <input type="hidden" name="category_{index}" value="{html.escape(row.get('category') or '')}">
               <input type="hidden" name="image_url_{index}" value="{html.escape(row.get('image_url') or '')}">
               <label>Why you chose it <textarea name="why_chosen_{index}" required>{html.escape(row.get('why_chosen') or '')}</textarea></label>
-              <label>Value for creators <textarea name="value_to_creators_{index}" required>{html.escape(row.get('value_to_creators') or '')}</textarea></label>
+              <label>Value for Creatrs <textarea name="value_to_creators_{index}" required>{html.escape(row.get('value_to_creators') or '')}</textarea></label>
               <label>Commission percent <input name="commission_{index}" value="{html.escape(row.get('commission_text') or '')}" required></label>
             </fieldset>
             """
         )
     return f"""
     <h1>Finish each product</h1>
-    <p>These products are not used for matching until each one has a reason, the value for creators, and a commission.</p>
+    <p>These products are not used for matching until each one has a reason, the value for Creatrs, and a commission.</p>
     {banner}
     <form method="post" action="/seller/products/import/save">
       <input type="hidden" name="csrf_token" value="{csrf}">
@@ -743,6 +934,8 @@ def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) ->
 
 
 def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "dashboard":
+        return _seller_dashboard(shop)
     if page == "profile":
         return _profile_form(shop, csrf, data.get("profile_error") or "")
     if page == "products":
@@ -767,8 +960,8 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             actions = ""
             if item_id and not data.get("locked"):
                 actions = f"""
-                <form method="post" action="/seller/shortlist-items/{item_id}/accept"><input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">Accept</button></form>
-                <form method="post" action="/seller/shortlist-items/{item_id}/decline"><input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">Decline</button></form>
+                <form method="post" action="/seller/shortlist-items/{item_id}/accept"><input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">{html.escape(portal_copy.FIND["invite"])}</button></form>
+                <form method="post" action="/seller/shortlist-items/{item_id}/decline"><input type="hidden" name="csrf_token" value="{csrf}"><button class="secondary" type="submit">{html.escape(portal_copy.FIND["pass"])}</button></form>
                 """
             cards.append(f"<article><h3>{handle}</h3><p>Score {html.escape(str(match.get('score')))}</p><ul>{reasons}</ul><pre>{estimates}</pre>{actions}</article>")
         match_form = ""
@@ -777,17 +970,20 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         <form method="post" action="/seller/find">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Product <select name="product_id">{options}</select></label>
-          <button type="submit">Run match</button>
+          <button type="submit">{html.escape(portal_copy.FIND["run"])}</button>
         </form>
         """
         waiting = ""
         if not ready:
-            waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for creators, and a commission.</p>"
+            waiting = f"<p>{html.escape(portal_copy.FIND['need_product'])}</p>"
+        body = "".join(cards) or _empty(portal_copy.FIND_EMPTY["heading"], portal_copy.FIND_EMPTY["body"], portal_copy.FIND_EMPTY["button"], "/seller/campaigns")
         return f"""
-        <h1>Find creators</h1>
+        {_hero(portal_copy.FIND["heading"], portal_copy.FIND["subhead"])}
+        <p>{html.escape(portal_copy.FIND["reach"])}</p>
         {waiting}
-        {match_form}
-        {''.join(cards) or '<p>Run a match to see ranked creators.</p>'}
+        {match_form.replace("Run match", portal_copy.FIND["run"]) if match_form else ""}
+        {body}
+        <p class="help">{html.escape(portal_copy.FIND["footnote"])}</p>
         """
     rows = []
     for item in data.get("accepted") or []:
@@ -806,33 +1002,98 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             form = f"""
         <form method="post" action="/seller/campaigns">
           <input type="hidden" name="csrf_token" value="{csrf}">
-          <label>Name <input name="name" required></label>
-          <button type="submit">Create campaign</button>
+          <label>{html.escape(portal_copy.CAMPAIGNS["name"])} <input name="name" required></label>
+          <button type="submit">{html.escape(portal_copy.CAMPAIGNS["button"])}</button>
         </form>
         """
+        empty = _empty(portal_copy.CAMPAIGNS_EMPTY["heading"], portal_copy.CAMPAIGNS_EMPTY["body"]) if not rows else ""
         return f"""
-        <h1>Campaigns</h1>
-        <ul>{rows or '<li>No campaigns yet.</li>'}</ul>
+        {_hero(portal_copy.CAMPAIGNS["heading"], portal_copy.CAMPAIGNS["subhead"])}
+        {empty}
+        <ul class="plain">{rows}</ul>
         {form}
         """
     if page == "billing":
         return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
-    return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
+    listed = "".join(rows)
+    empty = "" if rows else _empty(portal_copy.ACCEPTED_EMPTY["heading"], portal_copy.ACCEPTED_EMPTY["body"], portal_copy.ACCEPTED_EMPTY["button"], "/seller/find")
+    return f"""
+    {_hero(portal_copy.ACCEPTED["heading"], portal_copy.ACCEPTED["subhead"])}
+    {empty}
+    <ul class="plain">{listed}</ul>
+    """
+
+
+def _seller_dashboard(shop: dict) -> str:
+    products = seller_products(shop["id"])
+    live = sum(1 for row in products if row.get("ready"))
+    need = len(products) - live
+    accepted = len(accepted_for_shop(shop["id"]))
+    campaigns = 0
+    if db.configured():
+        from sqlalchemy import func, select
+        from models import Campaign
+
+        with db.session_scope() as session:
+            campaigns = int(session.scalar(select(func.count()).select_from(Campaign).where(Campaign.shop_id == shop["id"])) or 0)
+    else:
+        campaigns = sum(1 for row in db.memory_campaigns if getattr(row, "shop_id", None) == shop["id"])
+    name = (shop.get("business_name") or shop.get("name") or "there").strip()
+    copy = portal_copy.SELLER_DASHBOARD
+    plan = billing_config.tier_label("seller", str(shop.get("plan_tier") or "starter"))
+    if shop.get("is_pilot"):
+        plan = f"{plan} · Pilot"
+    empty = ""
+    if not products:
+        state = portal_copy.SELLER_DASHBOARD_EMPTY
+        empty = _empty(state["heading"], state["body"], state["button"], "/seller/products")
+    cards = f"""
+    <div class="stat-grid">
+      <a class="stat" href="/seller/products"><span>Hero products</span><strong>{html.escape(copy["products"].format(live=live, need=need))}</strong></a>
+      <a class="stat" href="/seller/accepted"><span>Creatrs on board</span><strong>{html.escape(copy["crew"].format(n=accepted))}</strong></a>
+      <a class="stat" href="/seller/campaigns"><span>Live campaigns</span><strong>{html.escape(copy["campaigns"].format(n=campaigns))}</strong></a>
+      <div class="stat"><span>Your plan</span><strong>{html.escape(copy["plan"].format(plan=plan))}</strong></div>
+    </div>
+    <p>{html.escape(copy["next"])}</p>
+    <p class="actions">
+      <a class="button" href="/seller/find">{html.escape(copy["find"])}</a>
+      <a class="button" href="/seller/products">{html.escape(copy["add"])}</a>
+      <a class="button secondary" href="/seller/campaigns">{html.escape(copy["campaign"])}</a>
+    </p>
+    """
+    return _hero(copy["heading"].format(name=name), copy["subhead"]) + empty + cards
 
 
 def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "dashboard":
+        name = (profile.get("name") or profile.get("handle") or "there").strip()
+        copy = portal_copy.CREATR_DASHBOARD
+        offers = creator_offers(profile["id"]) if profile.get("id") else []
+        empty = ""
+        if not offers:
+            state = portal_copy.CREATR_DASHBOARD_EMPTY
+            empty = _empty(state["heading"], state["body"], state["button"], "/creator/profile")
+        actions = (
+            f'<p class="actions"><a class="button" href="/creator/offers">{html.escape(copy["matches"])}</a>'
+            f'<a class="button secondary" href="/creator/links">{html.escape(copy["links"])}</a></p>'
+        )
+        return _hero(copy["heading"].format(name=name), copy["subhead"]) + empty + actions
     if page == "profile":
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
         number = profile.get("founding_number")
-        badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
-        return badge + f"""
-        <h1>{html.escape(profile.get('handle') or '')}</h1>
-        <form method="post" action="/creator/profile">
+        copy = portal_copy.CREATR_PROFILE
+        badge = f"<p class='chip'>{html.escape(copy['foundr'])} {html.escape(copy['perks_note'])}</p>" if number else ""
+        name = (profile.get("name") or profile.get("handle") or "there").strip()
+        empty = ""
+        if not active:
+            empty = _empty(portal_copy.CREATR_PROFILE_EMPTY["heading"], portal_copy.CREATR_PROFILE_EMPTY["body"])
+        return badge + _hero(copy["heading"], copy["subhead"], tag=name) + empty + f"""
+        <form class="sheet" method="post" action="/creator/profile">
           <input type="hidden" name="csrf_token" value="{csrf}">
-          <label>Active categories <input name="active_categories" value="{html.escape(active)}"></label>
-          <label>Desired categories <input name="desired_categories" value="{html.escape(desired)}"></label>
-          <button type="submit">Save profile</button>
+          <label>{html.escape(copy["active"])} <input name="active_categories" value="{html.escape(active)}"></label>
+          <label>{html.escape(copy["desired"])} <input name="desired_categories" value="{html.escape(desired)}"></label>
+          <button type="submit">{html.escape(copy["button"])}</button>
         </form>
         """
     if page == "offers":
@@ -841,26 +1102,27 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
             points = "".join(f"<li>{html.escape(str(point))}</li>" for point in offer.get("talking_points") or [])
             rate = offer.get("commission_rate")
             rate_text = (
-                f"{rate}% of tracked sales, set and paid by the supplier."
+                portal_copy.MATCHES["commission"].format(rate=rate)
                 if rate is not None
-                else "The supplier has not set a commission rate yet."
+                else portal_copy.MATCHES["commission_missing"]
             )
             accept = ""
             if not offer.get("accepted_at") and not data.get("locked"):
                 accept = (
                     f"<form method='post' action='/creator/offers/{html.escape(str(offer.get('id')))}/accept'>"
                     f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                    "<button type='submit'>Accept offer</button></form>"
+                    f"<button type='submit'>{html.escape(portal_copy.MATCHES['in'])}</button></form>"
                 )
             blocks.append(
                 f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
-                f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
+                f"<p>{html.escape(rate_text)}</p><p class='help'>{html.escape(portal_copy.DISCLOSURE)}</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
                 f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url, offer.get('platform_links'), offer.get('direct_url'))}</article>"
             )
-        return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
+        empty = _empty(portal_copy.MATCHES_EMPTY["heading"], portal_copy.MATCHES_EMPTY["body"], portal_copy.MATCHES_EMPTY["button"], "/creator/profile")
+        return _hero(portal_copy.MATCHES["heading"], portal_copy.MATCHES["subhead"]) + ("".join(blocks) or empty)
     items = "".join(
         "<li>"
         f"{html.escape(str(row.get('link_url') or ''))}"
@@ -872,7 +1134,8 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         number = profile.get("founding_number")
         badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         return badge + _billing_body("creator", data.get("billing") or {}, csrf, "/creator/billing")
-    return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
+    empty = _empty(portal_copy.LINKS_EMPTY["heading"], portal_copy.LINKS_EMPTY["body"], portal_copy.LINKS_EMPTY["button"], "/creator/offers")
+    return _hero(portal_copy.LINKS["heading"], portal_copy.LINKS["subhead"]) + f"<p>{html.escape(portal_copy.LINKS['disclose'])}</p>" + (f"<ul class='plain'>{items}</ul>" if items else empty)
 
 
 def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
@@ -943,13 +1206,33 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     if billing.get("commerce_open") is False:
         prompt = f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
     shown_status = billing.get("plan_status") or "unsubscribed"
+    if role == "seller":
+        plan = portal_copy.SELLER_PLAN
+        billing_copy = portal_copy.SELLER_BILLING
+        pilot = ""
+        price = portal_copy.POST_PILOT_GROWTH_PRICE
+        if "pilot" in str(label).lower() or shown_status:
+            pilot = f"<p>{html.escape(plan['pilot_now'])} {html.escape(plan['pilot_after'].format(price=price))} {html.escape(plan['renewal'])}</p>"
+        invoices = _empty(portal_copy.BILLING_EMPTY["heading"], portal_copy.BILLING_EMPTY["body"])
+        heading, sub = plan["heading"], plan["subhead"]
+        extra = f"<p class='help'>{html.escape(plan['features'])}</p>{pilot}<h2>{html.escape(billing_copy['heading'])}</h2><p>{html.escape(billing_copy['subhead'])}</p><p>{html.escape(billing_copy['pilot'].format(price=price, renewal=portal_copy.PILOT_RENEWAL))}</p>{invoices}"
+    else:
+        plan = portal_copy.CREATR_PLAN
+        heading, sub = plan["heading"], plan["subhead"]
+        extra = (
+            f"<p class='help'>{html.escape(plan['features'])} {html.escape(plan['limits'])}</p>"
+            f"<h2>{html.escape(portal_copy.CREATR_BILLING['heading'])}</h2>"
+            f"<p>{html.escape(portal_copy.CREATR_BILLING['subhead'])}</p>"
+            f"<p class='help'>{html.escape(plan['pilot'])}</p>"
+            + _empty(portal_copy.CREATR_BILLING_EMPTY["heading"], portal_copy.CREATR_BILLING_EMPTY["body"])
+        )
     return f"""
-    <h1>Subscription</h1>
+    {_hero(heading, sub)}
     {prompt}
     {notice}
     <p>Current plan: {html.escape(str(label))}. Status: {html.escape(str(shown_status))}.</p>
-    <p>Prices are ex GST. Stripe Tax is not enabled.</p>
-    <ul>{''.join(plans)}</ul>
+    <ul class="plan-list">{''.join(plans)}</ul>
+    {extra}
     {checkout}
     """
 
@@ -1005,32 +1288,21 @@ def _tracking_block(
     )
 
 
-def _layout(title: str, body: str, logout: Optional[str], csrf: Optional[str]) -> str:
+def _layout(title: str, body: str, logout: Optional[str], csrf: Optional[str], theme: str = "seller", aside: str = "") -> str:
     logout_form = ""
     if logout and csrf:
         logout_form = (
             f'<form method="post" action="{html.escape(logout)}">'
             f'<input type="hidden" name="csrf_token" value="{html.escape(csrf)}">'
-            "<button type='submit'>Sign out</button></form>"
+            "<button class='secondary' type='submit'>Sign out</button></form>"
         )
+    mark = "#0A64E0" if theme == "seller" else "#C2127F"
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 0; background: #f3f6f4; color: #17211c; }}
-header, main {{ max-width: 880px; margin: 0 auto; padding: 16px; }}
-header {{ display: flex; justify-content: space-between; align-items: center; }}
-nav a {{ margin-right: 12px; }}
-form, article {{ background: white; padding: 16px; border-radius: 12px; margin: 12px 0; }}
-label {{ display: block; margin: 8px 0; }}
-input, textarea, select {{ font: inherit; padding: 8px; width: 100%; box-sizing: border-box; }}
-button {{ background: #1f6b4a; color: white; border: 0; border-radius: 8px; padding: 8px 12px; }}
-button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
-.tracking {{ margin-top: 8px; }}
-.banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
-</style></head><body>
-<header><strong>Plantr Collab</strong>{logout_form}</header>
-<main>{body}</main>
+<link rel="stylesheet" href="/assets/plantr.css">
+</head><body class="app app-{html.escape(theme)}">
+{('<div class="shell seller-shell">' + aside + '<main class="seller-main">' + body + '</main></div>') if aside else ('<header class="portal-bar"><a class="logo" href="/"><strong>Plantr</strong> <span class="collab">Collab</span></a>' + logout_form + '</header><main class="portal">' + body + '</main>')}
 <script>
 document.querySelectorAll("button.copy").forEach((button) => {{
   button.addEventListener("click", async () => {{

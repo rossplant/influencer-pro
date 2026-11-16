@@ -521,6 +521,29 @@ class PortalAccount(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PasswordReset(Base):
+    """A single-use link that lets a seller or creator choose their own password.
+
+    The raw token is never stored. token_hash is the SHA-256 of the secret.
+    """
+
+    __tablename__ = "password_resets"
+    __table_args__ = (
+        CheckConstraint("role IN ('seller', 'creator')", name="ck_password_resets_role"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True, index=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 class StripeEvent(Base):
     """One Stripe webhook delivery. stripe_event_id makes processing idempotent."""
 

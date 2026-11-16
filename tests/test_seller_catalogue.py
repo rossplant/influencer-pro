@@ -191,11 +191,11 @@ def test_join_copies_the_application_onto_the_shop(monkeypatch):
 def test_manual_product_requires_why_value_and_commission(monkeypatch):
     shop, cookie = _seller(monkeypatch)
     page = client.get("/seller/products", headers=cookie)
-    assert "No products yet." in page.text
-    assert "id='first-product'" in page.text
-    assert "Start with one product you have chosen on purpose." in page.text
-    assert "A short list, with a plain reason for each one, is what we use." in page.text
-    assert 'id="product-count">0 products' in page.text
+    assert "Your hero products" in page.text
+    assert 'id="first-product"' in page.text
+    assert "Your spotlight is waiting." in page.text
+    assert "genuinely get behind" in page.text
+    assert 'id="product-count">0 hero products' in page.text
     missing = client.post(
         "/seller/products",
         data={
@@ -232,7 +232,7 @@ def test_manual_product_requires_why_value_and_commission(monkeypatch):
     assert product.image_url == "https://brand.example/lamp.jpg"
     assert float(product.commission_rate) == 12
     listed = client.get("/seller/products", headers=cookie).text
-    assert "1 product" in listed
+    assert "1 hero product" in listed
     assert "Complete this product" not in listed
 
 
@@ -307,7 +307,7 @@ def test_incomplete_products_are_excluded_from_matching_and_briefs(monkeypatch):
     assert ready.status_code == 200
     assert ready.json()["brief_id"]
     products = client.get("/seller/products", headers=cookie).text
-    assert products.count("Complete this product") == 1
+    assert products.count("Finish it") == 1
     assert "Bare lamp" in products
     found = client.get("/seller/find", headers=cookie).text
     assert "Ready lamp" in found

@@ -205,7 +205,7 @@ def score_creator(
 def _exclusions(product: dict, creator: dict, creator_id: str, blocked: set[str]) -> list[str]:
     reasons = []
     if creator_id and creator_id in blocked:
-        reasons.append("Shop blocked this creator.")
+        reasons.append("Shop blocked this Creatr.")
     categories = {_norm(product.get("category")), _norm(product.get("subcategory"))} - {""}
     excluded_categories = {_norm(item) for item in creator.get("excluded_categories") or []}
     hit = categories & excluded_categories
@@ -236,7 +236,7 @@ def _category_fit(product: dict, creator: dict) -> dict:
     if targets & active:
         return {"fit": 1.0, "detail": "Active category match."}
     if targets & desired:
-        return {"fit": 0.5, "detail": "Desired category match (partial). The creator wants this category but does not work in it yet."}
+        return {"fit": 0.5, "detail": "Desired category match (partial). The Creatr wants this category but does not work in it yet."}
     return {"fit": 0.0, "detail": "No active or desired category match."}
 
 
@@ -248,7 +248,7 @@ def _tag_fit(product: dict, creator: dict) -> dict:
     overlap = [token for token in tokens if token in interests]
     fit = len(set(overlap)) / len(set(tokens))
     if not overlap:
-        return {"fit": 0.0, "detail": "No tag or attribute overlap with the creator's interests."}
+        return {"fit": 0.0, "detail": "No tag or attribute overlap with the Creatr's interests."}
     return {"fit": fit, "detail": "Tag or attribute overlap: " + ", ".join(sorted(set(overlap))) + "."}
 
 
@@ -262,10 +262,10 @@ def _price_fit(product: dict, creator: dict) -> dict:
     if price is None or (low is None and high is None):
         return {"fit": 0.0, "detail": "Price band unknown, so price fit is 0."}
     if low is not None and price < low:
-        return {"fit": 0.0, "detail": "Price is below the creator's typical band."}
+        return {"fit": 0.0, "detail": "Price is below the Creatr's typical band."}
     if high is not None and price > high:
-        return {"fit": 0.0, "detail": "Price is above the creator's typical band."}
-    return {"fit": 1.0, "detail": "Price is inside the creator's typical band."}
+        return {"fit": 0.0, "detail": "Price is above the Creatr's typical band."}
+    return {"fit": 1.0, "detail": "Price is inside the Creatr's typical band."}
 
 
 def _platform_fit(product: dict, creator: dict) -> dict:
@@ -351,20 +351,20 @@ def _performance(product: dict, creator: dict, shop: Optional[dict] = None) -> d
     if engagement_estimated:
         estimate_names.append("engagement_rate")
         reasons.append(
-            f"Engagement rate is an estimate. Default {DEFAULTS['engagement_rate']} was used because the creator did not provide one."
+            f"Engagement rate is an estimate. Default {DEFAULTS['engagement_rate']} was used because the Creatr did not provide one."
         )
     else:
-        reasons.append("Engagement rate uses the creator's figure.")
+        reasons.append("Engagement rate uses the Creatr's figure.")
     if conversion_estimated:
         estimate_names.append("conversion_rate")
         reasons.append(
-            f"Conversion rate is an estimate. Default {DEFAULTS['conversion_rate']} was used because the creator did not provide one."
+            f"Conversion rate is an estimate. Default {DEFAULTS['conversion_rate']} was used because the Creatr did not provide one."
         )
     else:
-        reasons.append("Conversion rate uses the creator's figure.")
+        reasons.append("Conversion rate uses the Creatr's figure.")
     reasons.append(
         "Estimated sales = reach × engagement × conversion"
-        + (" (estimate)." if estimate_names else " (uses the creator's figures).")
+        + (" (estimate)." if estimate_names else " (uses the Creatr's figures).")
     )
     if est_revenue is None:
         reasons.append("Estimated revenue was not calculated because price is missing.")
@@ -374,7 +374,7 @@ def _performance(product: dict, creator: dict, shop: Optional[dict] = None) -> d
         reasons.append("Estimated seller commission payout was not calculated because price or commission rate is missing.")
     else:
         reasons.append("Estimated seller commission payout = estimated revenue × commission rate.")
-    source = "estimated inputs" if estimate_names else "creator figures"
+    source = "estimated inputs" if estimate_names else "Creatr figures"
     currency = product.get("currency") or (shop or {}).get("currency")
     sales_detail = f"Estimated sales {_plain_number(est_sales)} from {source}."
     if est_revenue is None:
@@ -417,7 +417,7 @@ def _performance(product: dict, creator: dict, shop: Optional[dict] = None) -> d
 def _reach(creator: dict) -> tuple[float, bool, str]:
     views = _number(creator.get("avg_views"))
     if views is not None and views >= 0:
-        return views, False, "Reach uses the creator's average views."
+        return views, False, "Reach uses the Creatr's average views."
     midpoint = _follower_midpoint(creator.get("follower_band"))
     if midpoint is not None:
         estimated = midpoint * DEFAULTS["view_rate_of_followers"]

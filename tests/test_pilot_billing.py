@@ -393,7 +393,7 @@ def test_seller_application_needs_authority_and_a_valid_abn_and_records_acceptan
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     page = client.get("/pilot-sellers").text
     assert "authorised to act for this business" in page
-    fee = "Plantr charges no transaction fee on sales. You pay creators' commission directly."
+    fee = "Plantr charges no transaction fee on sales. You pay Creatrs' commission directly."
     assert fee in legal.SELLER_PANEL
     assert html.escape(fee) in page
     assert "name='abn'" in page

@@ -89,6 +89,7 @@ memory_admin_users: dict = {}
 memory_creator_product_links: list = []
 memory_attributed_orders: list = []
 memory_portal_accounts: list = []
+memory_password_resets: list = []
 memory_creator_stripe: dict = {}
 memory_stripe_events: dict = {}
 memory_campaigns: list = []
@@ -139,6 +140,7 @@ def reset_memory() -> None:
     memory_creator_product_links.clear()
     memory_attributed_orders.clear()
     memory_portal_accounts.clear()
+    memory_password_resets.clear()
     memory_creator_stripe.clear()
     memory_stripe_events.clear()
     memory_campaigns.clear()

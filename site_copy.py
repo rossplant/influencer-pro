@@ -12,8 +12,8 @@ APPROVED = True
 
 CORE_HEADLINE = "Sell more. Earn more. Matched with care."
 CORE_BODY = (
-    "An invite-only marketplace connecting selected creators with underserved suppliers. "
-    "Creators earn commission on the sales they drive; suppliers sell through creators who fit "
+    "An invite-only marketplace connecting selected Creatrs with underserved suppliers. "
+    "Creatrs earn commission on the sales they drive; suppliers sell through Creatrs who fit "
     "their products — matched on category, audience, performance and supplier fit, reviewed by our team."
 )
 
@@ -41,15 +41,15 @@ SUPPLIER_PAGE = {
     "path": "/pilot-sellers",
     "role": "seller",
     "cohort": "seller_pilot",
-    "headline": "Sell more through the right creators.",
+    "headline": "Sell more through the right Creatrs.",
     "subhead": "Great products deserve the right voices.",
     "cta": "Apply for a pilot place",
     "points": (
         "We select suppliers that are underserved on TikTok, Instagram and YouTube.",
-        "Curated creator shortlists, reviewed by our team.",
-        "Sales through your creators' tracking links and codes are reported to you.",
+        "Curated Creatr shortlists, reviewed by our team.",
+        "Sales through your Creatrs' tracking links and codes are reported to you.",
         "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
-        "Brief help for the creators you accept.",
+        "Brief help for the Creatrs you accept.",
         "10 pilot places. Growth has no charge for the pilot, from 20 November 2026 until 20 January 2027, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
         "Starter is A$29 a month ex GST or A$290 a year ex GST. Growth is A$79 ex GST or A$790 ex GST. Scale is A$229 ex GST or A$2,290 ex GST. Annual prices are two months off.",
     ),

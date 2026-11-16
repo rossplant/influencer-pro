@@ -46,7 +46,7 @@ def test_exclusions_remove_the_creator_and_say_why():
     )
     assert [row["creator"]["handle"] for row in result["matches"]] == ["@strong"]
     reasons = {row["handle"]: " ".join(row["reasons"]) for row in result["excluded"]}
-    assert "Shop blocked this creator." in reasons["@blocked"]
+    assert "Shop blocked this Creatr." in reasons["@blocked"]
     assert "Excluded category: home." in reasons["@cat"]
     assert "Excluded claim:" in reasons["@claim"]
     assert "Excluded tag: cotton." in reasons["@tag"]
@@ -258,7 +258,7 @@ def test_known_performance_is_not_marked_estimated():
     assert result["estimates"]["est_seller_commission_payout"] == result["estimates"]["est_revenue"] * 0.1
     assert result["components"]["sales"]["estimated"] is True
     assert result["components"]["revenue"]["estimated"] is True
-    assert result["components"]["revenue"]["detail"] == "Estimated revenue 1500 AUD-equivalent from creator figures."
-    assert result["components"]["sales"]["detail"] == "Estimated sales 50 from creator figures."
-    assert result["reasons"].count("Reach uses the creator's average views.") == 1
+    assert result["components"]["revenue"]["detail"] == "Estimated revenue 1500 AUD-equivalent from Creatr figures."
+    assert result["components"]["sales"]["detail"] == "Estimated sales 50 from Creatr figures."
+    assert result["reasons"].count("Reach uses the Creatr's average views.") == 1
     assert len(result["reasons"]) == len(set(result["reasons"]))

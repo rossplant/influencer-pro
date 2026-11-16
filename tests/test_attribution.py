@@ -100,8 +100,8 @@ def test_link_is_idempotent_and_redirect_logs_a_click(monkeypatch):
     assert client.get("/r/not-a-code", follow_redirects=False).status_code == 404
 
     page = client.get("/admin", headers=headers)
-    assert 'data-list="links"' in page.text
-    assert 'data-list="orders"' in page.text
+    assert "/admin/collabs/links" in page.text
+    assert "/admin/sales/orders" in page.text
 
 
 def test_csv_import_is_idempotent_and_reports_row_errors(monkeypatch):

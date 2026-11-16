@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0
+
+The operator area is a set of pages instead of one JSON dump. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.
+
+- A signed-in operator gets a left navigation for Dashboard, Sellers, Creators, Products, Collabs, Sales & commission, Applications, and Settings. Every item is a real URL. The header shows who is signed in, and a STAGING badge when the process is not production.
+- Lists search, sort, filter, and paginate. A row opens the record. Names, plan names, and statuses are plain words. Money is shown with two decimal places. Dates use Australia/Sydney. Record ids sit in Technical details.
+- A seller page shows the business, plan, Shopify connection, products, accepted creators, sales, and statements. A creator page shows the handle, platforms, categories, plan, offers, links, and sales. The Account card creates a sign-in, sets a password as a pilot fallback, or creates a one-time reset link (24 hours, single use, copied by the operator; email is not sent). The password is never shown. View as asks for a reason, opens a read-only session, and logs the start and the exit.
+- The dashboard counts records and lists what needs attention, each with one action. Settings is a launch-readiness checklist plus the non-secret configuration. Staging can show a Test accounts card. That card and the STAGING badge are absent in production.
+- `GET /admin/api/*` is unchanged.
+
 ## 0.19.0
 
 Seller onboarding and a curated catalogue for the pilot. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.
