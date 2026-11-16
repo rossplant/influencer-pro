@@ -318,12 +318,17 @@ def join_with_invite(
     invite = _invite_by_code(code)
     cleaned = email.strip().lower()
     if opened["role"] == "seller":
+        prefill = _seller_prefill(_application_for_invite(invite))
         shop = services.create_shop(
             name=name or cleaned,
             shopify_domain=None,
             plan_tier=billing_config.PILOT_COHORTS[opened["cohort"]]["pilot_tier"],
             plan_status="trial",
             is_pilot=True,
+            business_name=prefill.get("business_name"),
+            abn=prefill.get("abn"),
+            primary_category=prefill.get("primary_category"),
+            store_url=prefill.get("store_url"),
         )
         subject_id = shop["id"]
         import portal
@@ -736,6 +741,34 @@ def _applications():
                 for row in session.scalars(select(PilotApplication).order_by(PilotApplication.created_at.desc())).all()
             ]
     return list(db.memory_applications)
+
+
+def _application_for_invite(invite) -> Optional[object]:
+    membership = _membership_for_invite(_get(invite, "id"))
+    if membership is None:
+        return None
+    application_id = _get(membership, "application_id")
+    if not application_id:
+        return None
+    return _application(application_id)
+
+
+def _seller_prefill(application) -> dict:
+    """Copy the application onto the shop. The join form name stays shops.name.
+
+    business_name is the trading name. primary_category is the first recognised
+    category. store_url is the contact field when it is a website.
+    """
+    if application is None:
+        return {}
+    import catalogue
+
+    return {
+        "business_name": (_get(application, "business_name") or "").strip() or None,
+        "abn": _get(application, "abn") or None,
+        "primary_category": catalogue.first_category(_get(application, "categories")),
+        "store_url": catalogue.website_url(_get(application, "contact")),
+    }
 
 
 def _application(application_id: str):

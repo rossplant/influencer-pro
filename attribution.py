@@ -9,24 +9,49 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 import db
 import events
-from models import AttributedOrder, Brief, Creator, CreatorProductLink, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
+from models import (
+    AttributedOrder,
+    Brief,
+    Creator,
+    CreatorPlatformCode,
+    CreatorProductLink,
+    Event,
+    Product,
+    Shop,
+    Shortlist,
+    ShortlistItem,
+    utcnow,
+)
 from services import _currency_code
 
 logger = logging.getLogger("plantr.attribution")
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+SOURCE_PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "other", "unknown")
+TAGGED_PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "other")
+SOURCE_PARAMS = (
+    ("tt", "tiktok", "TikTok"),
+    ("ig", "instagram", "Instagram"),
+    ("yt", "youtube", "YouTube"),
+    ("fb", "facebook", "Facebook"),
+    ("ot", "other", "Other"),
+)
+SOURCE_PARAM_TO_PLATFORM = {param: platform for param, platform, _label in SOURCE_PARAMS}
+CODE_PLATFORM_UNKNOWN = "code, platform not known"
+PLATFORM_CODE_RE = re.compile(r"[A-Z0-9_\-]{3,64}")
 HEADER_ALIASES = {
     "order_id": "order_id",
     "order": "order_id",
@@ -49,6 +74,217 @@ HEADER_ALIASES = {
     "shop_id": "shop",
     "shop_name": "shop",
 }
+
+
+def normalise_source_param(raw: Optional[str]) -> str:
+    return SOURCE_PARAM_TO_PLATFORM.get((raw or "").strip().lower(), "unknown")
+
+
+def channel_from_query(source_param: Optional[str], channel_param: Optional[str]) -> tuple[str, str]:
+    """s=tt|ig|yt|fb|ot and c=ad. An ad click is always TikTok."""
+    if (channel_param or "").strip().lower() == "ad":
+        return "tiktok", "ad"
+    return normalise_source_param(source_param), "link"
+
+
+def direct_url(link_url: Optional[str], code: str, *, source_param: Optional[str] = None, channel: Optional[str] = None) -> Optional[str]:
+    """Seller product URL with plantr=<code>, plus optional s and c. Skips Plantr's redirect."""
+    base = safe_destination(link_url)
+    if not base or not code:
+        return None
+    parts = urlparse(base)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key not in {"plantr", "s", "c"}]
+    query.append(("plantr", code))
+    if source_param:
+        query.append(("s", source_param))
+    if channel:
+        query.append(("c", channel))
+    return urlunparse(parts._replace(query=urlencode(query)))
+
+
+def platform_variants(code: str, link_url: Optional[str] = None) -> list[dict]:
+    """One Plantr link and one direct seller URL per source platform. The untagged link stays separate."""
+    return [
+        {
+            "param": param,
+            "source_platform": platform,
+            "label": label,
+            "tracking_path": f"/r/{code}?s={param}",
+            "direct_url": direct_url(link_url, code, source_param=param),
+        }
+        for param, platform, label in SOURCE_PARAMS
+    ]
+
+
+def join_note(*parts: Optional[str]) -> Optional[str]:
+    text = "; ".join(part for part in parts if part)
+    return text[:255] or None
+
+
+def parse_direct_signal(order: dict) -> Optional[dict]:
+    """Read plantr, s and c from landing_site, then referring_site. The URL is not returned or stored."""
+    for field in ("landing_site", "referring_site"):
+        params = _query_params(str(order.get(field) or ""))
+        code = (params.get("plantr") or "").strip().upper()
+        if not code:
+            continue
+        return {"code": code, "s": params.get("s"), "c": params.get("c")}
+    return None
+
+
+def _query_params(value: str) -> dict:
+    text = value.strip()
+    if not text:
+        return {}
+    if "://" not in text:
+        text = "https://x" + (text if text.startswith("/") else "/" + text)
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return {}
+    return {key: values[-1] for key, values in parse_qs(parsed.query).items() if values}
+
+
+def classify_sale(
+    *,
+    method: Optional[str],
+    link: Optional[dict],
+    order_date: date,
+    code_platform: Optional[str] = None,
+    direct: Optional[dict] = None,
+) -> dict:
+    """source_platform and channel_kind for reporting. Does not decide whether the sale is credited."""
+    if not method:
+        return {"source_platform": "unknown", "channel_kind": None, "platform_note": None}
+    tagged = code_platform if code_platform in TAGGED_PLATFORMS else None
+    if method == "code" or (method == "link+code" and tagged):
+        if tagged:
+            return {"source_platform": tagged, "channel_kind": "code", "platform_note": None}
+        return {"source_platform": "unknown", "channel_kind": "code", "platform_note": CODE_PLATFORM_UNKNOWN}
+    if direct:
+        source, channel = channel_from_query(direct.get("s"), direct.get("c"))
+        return {"source_platform": source, "channel_kind": channel, "platform_note": None}
+    click = winning_click(link or {}, order_date) if link else None
+    if click:
+        if click.get("channel_kind") == "ad":
+            return {"source_platform": "tiktok", "channel_kind": "ad", "platform_note": None}
+        source = click.get("source_platform")
+        if source not in SOURCE_PLATFORMS:
+            source = "unknown"
+        return {"source_platform": source, "channel_kind": "link", "platform_note": None}
+    if method == "link+code":
+        return {"source_platform": "unknown", "channel_kind": "code", "platform_note": CODE_PLATFORM_UNKNOWN}
+    return {"source_platform": "unknown", "channel_kind": "link", "platform_note": None}
+
+
+def winning_click(link: dict, order_date: date) -> Optional[dict]:
+    """The latest click on this link in the 7 days up to and including the order date."""
+    start = order_date - timedelta(days=7)
+    code = str(link.get("discount_code") or "")
+    link_id = str(link.get("id") or "")
+    best = None
+    best_key = None
+    for click in _link_clicks():
+        props = click["properties"]
+        if str(props.get("discount_code") or "") != code and str(click["entity_id"]) != link_id:
+            continue
+        occurred = click["occurred_at"]
+        click_day = occurred.date() if hasattr(occurred, "date") else occurred
+        if not (start <= click_day <= order_date):
+            continue
+        key = (occurred, str(click["id"]))
+        if best_key is None or key >= best_key:
+            best = props
+            best_key = key
+    return best
+
+
+def match_shop_code(session, shop_id: str, code: str) -> tuple[Optional[CreatorProductLink], Optional[str]]:
+    """A shop code, and the source platform when it is an extra per-platform code."""
+    clean = (code or "").strip().upper()
+    if not clean:
+        return None, None
+    tagged = session.scalar(
+        select(CreatorPlatformCode).where(CreatorPlatformCode.shop_id == shop_id, CreatorPlatformCode.code == clean)
+    )
+    if tagged is not None:
+        link = session.get(CreatorProductLink, tagged.link_id)
+        if link is not None and link.shop_id == shop_id:
+            return link, tagged.source_platform
+    link = session.scalar(
+        select(CreatorProductLink).where(
+            CreatorProductLink.shop_id == shop_id,
+            or_(func.upper(CreatorProductLink.discount_code) == clean, func.upper(CreatorProductLink.store_discount_code) == clean),
+        )
+    )
+    return link, None
+
+
+def register_platform_code(shop_id: str, link_id: str, code: Optional[str], source_platform: Optional[str], *, actor: str) -> dict:
+    """Seller registers an extra code for the same creator, tagged to one platform."""
+    if not db.configured():
+        raise HTTPException(status_code=503, detail="Platform codes need the database")
+    platform = (source_platform or "").strip().lower()
+    if platform not in TAGGED_PLATFORMS:
+        raise HTTPException(status_code=422, detail="source_platform must be tiktok, instagram, youtube, facebook, or other")
+    clean = (code or "").strip().upper()
+    if not PLATFORM_CODE_RE.fullmatch(clean):
+        raise HTTPException(status_code=422, detail="Codes use letters, numbers, - and _ only")
+    with db.session_scope() as session:
+        link = session.get(CreatorProductLink, link_id)
+        if link is None or link.shop_id != shop_id:
+            raise HTTPException(status_code=404, detail="Link not found")
+        if clean in {(link.discount_code or "").upper(), (link.store_discount_code or "").upper()}:
+            raise HTTPException(status_code=409, detail="That code is already this creator's tracking or store code")
+        clash = session.scalar(
+            select(CreatorProductLink.id).where(
+                CreatorProductLink.shop_id == shop_id,
+                CreatorProductLink.id != link.id,
+                or_(func.upper(CreatorProductLink.discount_code) == clean, func.upper(CreatorProductLink.store_discount_code) == clean),
+            )
+        )
+        if clash is None:
+            clash = session.scalar(
+                select(CreatorPlatformCode.id).where(CreatorPlatformCode.shop_id == shop_id, CreatorPlatformCode.code == clean)
+            )
+        if clash is not None:
+            raise HTTPException(status_code=409, detail="That code is already linked to another creator")
+        row = CreatorPlatformCode(
+            id=str(uuid.uuid4()),
+            shop_id=shop_id,
+            creator_id=link.creator_id,
+            link_id=link.id,
+            code=clean,
+            source_platform=platform,
+            created_at=utcnow(),
+        )
+        session.add(row)
+        session.flush()
+        logger.info("Platform code set for link %s by %s on %s", link.id, actor, platform)
+        return {"id": row.id, "link_id": link.id, "creator_id": link.creator_id, "code": row.code, "source_platform": row.source_platform}
+
+
+def delete_platform_code(shop_id: str, link_id: str, code_id: str) -> dict:
+    if not db.configured():
+        raise HTTPException(status_code=503, detail="Platform codes need the database")
+    with db.session_scope() as session:
+        row = session.get(CreatorPlatformCode, code_id)
+        if row is None or row.shop_id != shop_id or row.link_id != link_id:
+            raise HTTPException(status_code=404, detail="Code not found")
+        session.delete(row)
+        return {"deleted": True, "id": code_id}
+
+
+def _group_codes(session, link_ids: list[str]) -> dict[str, list[dict]]:
+    if not link_ids:
+        return {}
+    grouped: dict[str, list[dict]] = {}
+    rows = session.scalars(select(CreatorPlatformCode).where(CreatorPlatformCode.link_id.in_(link_ids))).all()
+    for row in rows:
+        grouped.setdefault(row.link_id, []).append(
+            {"id": row.id, "code": row.code, "source_platform": row.source_platform}
+        )
+    return grouped
 
 
 def issue_link(
@@ -119,16 +355,14 @@ def backfill_accepted_links() -> int:
 
 
 def product_destination(product_id: str) -> Optional[str]:
+    import catalogue
+
     if db.configured():
         with db.session_scope() as session:
             product = session.get(Product, product_id)
-            attributes = product.attributes if product is not None else None
     else:
         product = db.memory_products.get(product_id)
-        attributes = getattr(product, "attributes", None) if product is not None else None
-    if not isinstance(attributes, dict):
-        return None
-    return safe_destination(attributes.get("url") or attributes.get("product_url"))
+    return safe_destination(catalogue.product_public_url(product))
 
 
 def list_links(*, shop_id: Optional[str], creator_id: Optional[str]) -> list[dict]:
@@ -141,7 +375,9 @@ def list_links(*, shop_id: Optional[str], creator_id: Optional[str]) -> list[dic
                 query = query.where(CreatorProductLink.shop_id == shop_id)
             if creator_id:
                 query = query.where(CreatorProductLink.creator_id == creator_id)
-            return [_link_dict(row) for row in session.scalars(query).all()]
+            rows = session.scalars(query).all()
+            grouped = _group_codes(session, [row.id for row in rows])
+            return [_link_dict(row, grouped.get(row.id, [])) for row in rows]
     rows = list(db.memory_creator_product_links)
     if shop_id:
         rows = [row for row in rows if row.shop_id == shop_id]
@@ -256,7 +492,7 @@ def _issue_db(creator_id, product_id, destination_url, shortlist_item_id, platfo
             if shortlist_item_id and not existing.shortlist_item_id:
                 existing.shortlist_item_id = shortlist_item_id
                 session.flush()
-            return _link_dict(existing), False
+            return _link_dict(existing, _group_codes(session, [existing.id]).get(existing.id, [])), False
         item_id = _checked_item(session, shortlist_item_id, product.id, creator.id)
         destination = _destination(destination_url, product.attributes)
         link = CreatorProductLink(
@@ -284,8 +520,8 @@ def _issue_db(creator_id, product_id, destination_url, shortlist_item_id, platfo
             )
             if existing is None:
                 raise
-            return _link_dict(existing), False
-        return _link_dict(link), True
+            return _link_dict(existing, _group_codes(session, [existing.id]).get(existing.id, [])), False
+        return _link_dict(link, []), True
 
 
 def _issue_memory(creator_id, product_id, destination_url, shortlist_item_id, platform) -> tuple[dict, bool]:
@@ -384,6 +620,12 @@ def _validated_row(raw: dict) -> dict:
     if shop is None:
         raise HTTPException(status_code=422, detail="shop was not found")
     link = _find_link_by_code(code)
+    code_platform = None
+    if link is None and db.configured():
+        with db.session_scope() as session:
+            found, code_platform = match_shop_code(session, shop["id"], code)
+            if found is not None:
+                link = _link_dict(found)
     if link is None:
         raise HTTPException(status_code=422, detail=f"Unknown code '{code}'")
     if link["shop_id"] != shop["id"]:
@@ -392,8 +634,20 @@ def _validated_row(raw: dict) -> dict:
     if window not in (None, "", "7", 7):
         raise HTTPException(status_code=422, detail="click window must be 7 days")
     source_cell = str(raw.get("code") or raw.get("link") or "")
-    click_source = "link" if "://" in source_cell or source_cell.strip().startswith("/r/") else "code"
+    click_source = "link" if _cell_is_link(source_cell) else "code"
     attributed = _clicked_within_window(link, attribution_date)
+    direct = None
+    if click_source == "link" and winning_click(link, attribution_date) is None:
+        params = _query_params(source_cell)
+        if params.get("plantr") or params.get("s") or params.get("c"):
+            direct = {"s": params.get("s"), "c": params.get("c")}
+    reporting = classify_sale(
+        method="code" if click_source == "code" else "link",
+        link=link,
+        order_date=attribution_date,
+        code_platform=code_platform if click_source == "code" else None,
+        direct=direct,
+    )
     return {
         "order_id": order_id[:128],
         "date": attribution_date,
@@ -406,6 +660,9 @@ def _validated_row(raw: dict) -> dict:
         "click_window_days": 7,
         "click_window_source": click_source,
         "attributed": attributed,
+        "source_platform": reporting["source_platform"],
+        "channel_kind": reporting["channel_kind"],
+        "attribution_note": reporting["platform_note"],
         "raw": {key: value for key, value in raw.items() if key != "password"},
     }
 
@@ -439,6 +696,10 @@ def _write_order(parsed: dict) -> dict:
         ingest_source="csv",
         raw_payload=parsed["raw"],
         attributed=parsed["attributed"],
+        attribution_method=parsed["click_window_source"],
+        attribution_note=parsed.get("attribution_note"),
+        source_platform=parsed.get("source_platform") or "unknown",
+        channel_kind=parsed.get("channel_kind"),
         occurred_at=occurred,
         created_at=now,
     )
@@ -490,26 +751,24 @@ def _emit_sale(shop, parsed, link) -> None:
 
 def _clicked_within_window(link: dict, order_date: date) -> bool:
     """True when this link or code was clicked in the 7 days up to and including the order date."""
-    start = order_date - timedelta(days=7)
-    code = str(link.get("discount_code") or "")
-    link_id = str(link.get("id") or "")
-    clicks = _link_clicks()
-    for entity_id, occurred, props in clicks:
-        if str(props.get("discount_code") or "") != code and str(entity_id) != link_id:
-            continue
-        click_day = occurred.date() if hasattr(occurred, "date") else occurred
-        if start <= click_day <= order_date:
-            return True
-    return False
+    return winning_click(link, order_date) is not None
 
 
 def _link_clicks() -> list:
     if db.configured():
         with db.session_scope() as session:
             rows = session.scalars(select(Event).where(Event.event_name == "link_clicked")).all()
-            return [(row.entity_id, row.occurred_at, dict(row.properties or {})) for row in rows]
+            return [
+                {"id": row.id, "entity_id": row.entity_id, "occurred_at": row.occurred_at, "properties": dict(row.properties or {})}
+                for row in rows
+            ]
     return [
-        (row.entity_id, row.occurred_at, dict(row.properties or {}))
+        {
+            "id": getattr(row, "id", ""),
+            "entity_id": row.entity_id,
+            "occurred_at": row.occurred_at,
+            "properties": dict(row.properties or {}),
+        }
         for row in db.memory_events
         if getattr(row, "event_name", None) == "link_clicked"
     ]
@@ -660,13 +919,22 @@ def _fresh_code(session) -> str:
     raise HTTPException(status_code=503, detail="Could not allocate a tracking code")
 
 
+def _cell_is_link(value: str) -> bool:
+    text = value.strip()
+    return "://" in text or text.startswith("/r/") or "plantr=" in text.lower()
+
+
 def _code_from_cell(value: str) -> str:
     text = value.strip()
     if not text:
         return ""
-    if "://" in text or text.startswith("/r/"):
-        path = urlparse(text).path if "://" in text else text
-        segment = path.rstrip("/").split("/")[-1]
+    if _cell_is_link(text) or text.startswith("/"):
+        params = _query_params(text)
+        plantr = (params.get("plantr") or "").strip()
+        if plantr:
+            return plantr
+        parsed = urlparse(text if "://" in text else "https://x" + (text if text.startswith("/") else "/" + text))
+        segment = parsed.path.rstrip("/").split("/")[-1]
         return segment.strip()
     return text
 
@@ -691,15 +959,19 @@ def _parse_csv(csv_text: str) -> list[dict]:
     return rows
 
 
-def _link_dict(row: Any) -> dict:
+def _link_dict(row: Any, platform_codes: Optional[list] = None) -> dict:
+    code = row.discount_code
     return {
         "id": row.id,
         "shop_id": row.shop_id,
         "product_id": row.product_id,
         "creator_id": row.creator_id,
         "shortlist_item_id": row.shortlist_item_id,
-        "discount_code": row.discount_code,
-        "tracking_path": f"/r/{row.discount_code}",
+        "discount_code": code,
+        "tracking_path": f"/r/{code}",
+        "direct_url": direct_url(row.link_url, code) if code else None,
+        "platform_links": platform_variants(code, row.link_url) if code else [],
+        "platform_codes": list(platform_codes or []),
         "link_url": row.link_url,
         "platform": row.platform,
         "status": row.status,
@@ -724,4 +996,6 @@ def _order_dict(row: Any) -> dict:
         "ingest_source": row.ingest_source,
         "created_at": row.created_at,
         "attributed": bool(getattr(row, "attributed", True)),
+        "source_platform": getattr(row, "source_platform", None) or "unknown",
+        "channel_kind": getattr(row, "channel_kind", None),
     }

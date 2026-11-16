@@ -21,6 +21,7 @@ SELLER_TIERS = {
         "amount_year_cents": 29000,
         "lookup_month": "seller_starter_month",
         "lookup_year": "seller_starter_year",
+        # products is logged as product_limit. It is not a hard block.
         "limits": {"campaigns": 1, "products": 5, "matches_per_month": 3},
         "reaches": ("member",),
         "features": ("open_catalogue",),

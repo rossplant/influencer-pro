@@ -9,9 +9,13 @@ period counters are columns on the event, not JSON: products_count,
 product_limit, matches_count_period, match_limit, enrichments_count_period,
 briefs_count_period, billing_period_start, and limit_hit.
 
-Starter allows 5 products, 1 campaign, and 3 match runs per UTC calendar month.
-Growth allows 50 products, 5 campaigns, and 25 matches. Scale allows 100 matches
-and does not cap campaigns or products. Prices are AUD ex GST: Starter 29 or 290 a year, Growth 79 or 790
+Starter allows 1 campaign and 3 match runs per UTC calendar month.
+Growth allows 5 campaigns and 25 matches. Scale allows 100 matches and does not
+cap campaigns. Product counts are still logged (`products_count`, `product_limit`).
+The old Starter and Growth product caps are not a hard block. Above
+CATALOGUE_FEE_THRESHOLD (default 10) the seller sees a warning and the API writes
+`catalogue_fee_threshold`. Nothing is blocked and nothing is charged.
+Prices are AUD ex GST: Starter 29 or 290 a year, Growth 79 or 790
 a year, Scale 229 or 2290 a year. Annual MRR is the annual price / 12.
 Unsubscribed, free, trial, trialing, and invited contribute 0.
 
@@ -20,6 +24,7 @@ Hand-run operator actions use the same event names with actor='operator'.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -27,8 +32,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import object_session
 
 import billing_config
+import catalogue
 import db
 from models import Brief, Campaign, Creator, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
+
+logger = logging.getLogger("plantr.catalogue")
 
 ACTORS = frozenset({"system", "operator", "api"})
 
@@ -153,8 +161,13 @@ def record_admin(name: str, **props: Any) -> Any:
         return event
 
 
-def record_link_click(link: Any) -> Any:
-    """Append a click for a tracking code. This does not change plan counters."""
+def record_link_click(link: Any, *, source_platform: str = "unknown", channel_kind: str = "link") -> Any:
+    """Append a click for a tracking code. This does not change plan counters.
+
+    source_platform is tiktok, instagram, youtube, facebook, other, or unknown.
+    channel_kind is link, or ad for a Spark Ads click. The code itself is not a secret;
+    nothing else from the request URL is stored.
+    """
     from types import SimpleNamespace
 
     def value(name: str):
@@ -162,6 +175,12 @@ def record_link_click(link: Any) -> Any:
             return link.get(name)
         return getattr(link, name, None)
 
+    if source_platform not in {"tiktok", "instagram", "youtube", "facebook", "other", "unknown"}:
+        source_platform = "unknown"
+    if channel_kind not in {"link", "ad"}:
+        channel_kind = "link"
+    if channel_kind == "ad":
+        source_platform = "tiktok"
     payload = {
         "id": _new_id(),
         "occurred_at": utcnow(),
@@ -175,6 +194,8 @@ def record_link_click(link: Any) -> Any:
             "discount_code": value("discount_code"),
             "creator_id": value("creator_id"),
             "product_id": value("product_id"),
+            "source_platform": source_platform,
+            "channel_kind": channel_kind,
         },
     }
     if not db.configured():
@@ -255,14 +276,19 @@ def emit(name: str, entity: Any, actor: str, **props: Any) -> Any:
 
 
 def guard_plan_limit(shop: Any, kind: str, session=None) -> None:
-    """Emit usage_limit_hit when `shop` is already at the plan cap.
+    """Emit usage_limit_hit when `shop` is already at a campaign or match cap.
 
-    `products` compares the shop's product-row count with the catalogue cap.
     `matches_per_month` compares match_run events in the current UTC month.
-    Pilot shops emit the event and are allowed through. Other shops are blocked.
-    The usage_limit_hit row is committed before the exception so a later
-    rollback of the blocked request does not drop it.
+    `campaigns` compares campaign rows. Pilot shops emit the event and are
+    allowed through. Other shops are blocked. The usage_limit_hit row is
+    committed before the exception so a later rollback does not drop it.
+
+    `products` is not a hard cap. Catalogue size is logged on shop events, and
+    note_catalogue_threshold records the soft fee warning. Scale keeps an
+    unlimited product limit and its match cap.
     """
+    if kind == "products":
+        return
     caps = PLAN_CAPS.get(getattr(shop, "plan_tier", None) or "starter", PLAN_CAPS["starter"])
     cap = caps.get(kind)
     if cap is None:
@@ -284,8 +310,35 @@ def guard_plan_limit(shop: Any, kind: str, session=None) -> None:
         raise PlanLimitReached(kind, observed, cap)
 
 
+def note_catalogue_threshold(shop: Any, before: int, after: int) -> bool:
+    """Log once when a shop's catalogue grows past the fee threshold.
+
+    Does not block the product and does not charge. Returns True when this
+    growth is the crossing.
+    """
+    threshold = catalogue.catalogue_fee_threshold()
+    if shop is None or not (before <= threshold < after):
+        return False
+    logger.info(
+        "catalogue_fee_threshold shop_id=%s before=%s after=%s threshold=%s",
+        getattr(shop, "id", None),
+        before,
+        after,
+        threshold,
+    )
+    emit(
+        "catalogue_fee_threshold",
+        shop,
+        "api",
+        threshold=threshold,
+        products_before=before,
+        products_after=after,
+    )
+    return True
+
+
 def catalogue_count(shop: Any, session=None) -> int:
-    """Number of product rows for the shop. This is the Starter/Growth product cap."""
+    """Number of product rows for the shop. Logged on shop events. Not a hard block."""
     if session is None:
         return sum(1 for product in db.memory_products.values() if product.shop_id == shop.id)
     return int(

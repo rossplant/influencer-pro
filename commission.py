@@ -12,7 +12,9 @@ Every action is written to commission_audit_log (append-only).
 from __future__ import annotations
 
 import calendar
+import csv
 import hashlib
+import io
 import os
 import re
 import uuid
@@ -395,6 +397,8 @@ def _statement_dict(session, st: CommissionStatement, *, viewer: str, include_li
                 "order": (order.raw_payload or {}).get("name") or order.external_order_id if order else None,
                 "order_date": order.attribution_date if order else None,
                 "method": order.attribution_method if order else None,
+                "source_platform": (getattr(order, "source_platform", None) or "unknown") if order else "unknown",
+                "channel_kind": getattr(order, "channel_kind", None) if order else None,
                 "net_sales": float(line.net_sales),
                 "commission_rate": float(line.commission_rate) if line.commission_rate is not None else None,
                 "commission": float(line.commission),
@@ -430,6 +434,124 @@ def statement_detail(statement_id: str, *, viewer: str, shop_id: Optional[str] =
         session.flush()
         st = _owned(session, statement_id, shop_id=shop_id, creator_id=creator_id)
         return _statement_dict(session, st, viewer=viewer, include_lines=True)
+
+
+def statement_csv(statement_id: str, *, shop_id: str) -> str:
+    """Order lines plus sales and amounts by source platform. The split does not change the amount owed."""
+    detail = statement_detail(statement_id, viewer="seller", shop_id=shop_id)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["note", "Reporting only. Splitting by source platform does not change the amount owed."])
+    writer.writerow(
+        ["section", "creator", "period", "currency", "source_platform", "channel_kind", "order", "order_date", "kind", "orders", "net_sales", "commission_rate", "commission"]
+    )
+    grouped: dict[str, dict] = defaultdict(lambda: {"orders": 0, "net_sales": Decimal("0.00"), "commission": Decimal("0.00")})
+    for line in detail.get("lines") or []:
+        platform = line.get("source_platform") or "unknown"
+        writer.writerow([
+            "line", detail.get("creator_handle") or detail["creator_id"], detail["period"], detail["currency"],
+            platform, line.get("channel_kind") or "", line.get("order") or "", line.get("order_date") or "", line["kind"], "",
+            line["net_sales"], "" if line["commission_rate"] is None else line["commission_rate"], line["commission"],
+        ])
+        bucket = grouped[platform]
+        bucket["orders"] += 1
+        bucket["net_sales"] += _money(line["net_sales"])
+        bucket["commission"] += _money(line["commission"])
+    for platform in sorted(grouped):
+        bucket = grouped[platform]
+        writer.writerow([
+            "summary", detail.get("creator_handle") or detail["creator_id"], detail["period"], detail["currency"],
+            platform, "", "", "", "", bucket["orders"], float(bucket["net_sales"]), "", float(bucket["commission"]),
+        ])
+    writer.writerow([
+        "total", detail.get("creator_handle") or detail["creator_id"], detail["period"], detail["currency"],
+        "", "", "", "", "", detail["orders_count"], detail["net_sales"], "", detail["amount_owed"],
+    ])
+    return buffer.getvalue()
+
+
+def source_report(shop_id: str, period: str) -> dict:
+    """Sales and estimated amounts by creator and source platform for one month.
+
+    Reads the same settled, attributed orders a statement would. It does not write a statement
+    or change amounts owed. Platform-paid collabs contribute sales with an amount of 0 when excluded.
+    """
+    require_db()
+    start, end, _last = period_bounds(period)
+    with db.session_scope() as session:
+        orders = session.scalars(
+            select(AttributedOrder).where(
+                AttributedOrder.shop_id == shop_id,
+                AttributedOrder.attributed.is_(True),
+                AttributedOrder.creator_id.is_not(None),
+                AttributedOrder.settled.is_(True),
+            )
+        ).all()
+        grouped: dict[tuple, dict] = {}
+        for order in orders:
+            occurred = order.occurred_at if order.occurred_at.tzinfo else order.occurred_at.replace(tzinfo=timezone.utc)
+            if not (start <= occurred < end):
+                continue
+            net = _money(order.net_gmv)
+            if net == 0:
+                continue
+            platform = order.source_platform or "unknown"
+            currency = (order.currency or "AUD").upper()
+            key = (order.creator_id, platform, currency)
+            bucket = grouped.get(key)
+            if bucket is None:
+                creator = session.get(Creator, order.creator_id)
+                bucket = {
+                    "creator_id": order.creator_id,
+                    "creator_handle": getattr(creator, "handle", None),
+                    "source_platform": platform,
+                    "currency": currency,
+                    "orders": 0,
+                    "net_sales": Decimal("0.00"),
+                    "amount": Decimal("0.00"),
+                }
+                grouped[key] = bucket
+            amount, excluded = _estimated_commission(session, order, net)
+            bucket["orders"] += 1
+            bucket["net_sales"] += net
+            bucket["amount"] += amount
+            if excluded:
+                bucket["excluded_from_owed"] = True
+        rows = []
+        for bucket in grouped.values():
+            rows.append({
+                **bucket,
+                "net_sales": float(bucket["net_sales"]),
+                "amount": float(bucket["amount"]),
+            })
+        rows.sort(key=lambda row: (row.get("creator_handle") or "", row["source_platform"], row["currency"]))
+    return {
+        "period": period,
+        "shop_id": shop_id,
+        "note": "Reporting only. Splitting by source platform does not change the amount owed.",
+        "rows": rows,
+        "totals": {
+            "orders": sum(row["orders"] for row in rows),
+            "net_sales": round(sum(row["net_sales"] for row in rows), 2),
+            "amount": round(sum(row["amount"] for row in rows), 2),
+        },
+    }
+
+
+def _estimated_commission(session, order: AttributedOrder, net: Decimal) -> tuple[Decimal, bool]:
+    agreement = _agreement_for(session, order.shop_id, order.creator_id, order.product_id)
+    if agreement is not None and agreement.paid_via in PLATFORM_PAID and exclude_platform_paid():
+        return Decimal("0.00"), True
+    rate = None
+    if agreement is not None:
+        rate = _money(agreement.commission_rate)
+    elif order.product_id:
+        product = session.get(Product, order.product_id)
+        if product is not None and product.commission_rate is not None:
+            rate = _money(product.commission_rate)
+    if rate is None:
+        return Decimal("0.00"), False
+    return (net * rate / Decimal(100)).quantize(CENT, rounding=ROUND_HALF_UP), False
 
 
 def _owned(session, statement_id: str, *, shop_id=None, creator_id=None) -> CommissionStatement:
@@ -1093,6 +1215,9 @@ def _agreement_dict(session, ag: CollabAgreement, *, viewer: str) -> dict:
             out["abn_warning"] = warning
         if ag.paid_via == "shopify_collabs":
             out["double_payment_warning"] = SHOPIFY_COLLABS_WARNING
+        import spark_ads
+
+        out["spark_ads_helper"] = spark_ads.HELPER
     return out
 
 

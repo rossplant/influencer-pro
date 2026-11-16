@@ -22,12 +22,13 @@ from sqlalchemy.exc import IntegrityError
 import attribution
 import auth
 import billing_config
+import catalogue
 import db
 import events
 import scoring
 import services
 import stripe_billing
-from events import PlanLimitReached
+import taxonomy
 from models import Brief, Creator, PortalAccount, Product, Shop, Shortlist, ShortlistItem, utcnow
 
 MIN_PASSWORD = 12
@@ -170,84 +171,108 @@ def seller_products(shop_id: str) -> list[dict]:
     return [_product_row(row) for row in db.memory_products.values() if row.shop_id == shop_id]
 
 
-def save_product(shop_id: str, *, product_id: str, title: str, category: str, price: str, url: str, description: str, commission: str = "") -> str:
+def save_product(
+    shop_id: str,
+    *,
+    product_id: str,
+    title: str,
+    category: str,
+    price: str,
+    url: str,
+    description: str,
+    commission: str = "",
+    why_chosen: str = "",
+    value_to_creators: str = "",
+    image_url: str = "",
+    source: str = "manual",
+    as_draft: bool = False,
+) -> str:
     title = (title or "").strip()
     if not title:
-        raise HTTPException(status_code=422, detail="title is required")
+        raise HTTPException(status_code=422, detail="Title is required")
+    if len(title) > 500:
+        raise HTTPException(status_code=422, detail="Title is too long")
     category = (category or "").strip().lower()
     if category:
         services.validate_category_lists([category])
-    amount = None
-    if str(price or "").strip():
-        try:
-            amount = float(price)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="price must be a number") from None
-    destination = (url or "").strip()
-    if destination and attribution.safe_destination(destination) is None:
-        raise HTTPException(status_code=422, detail="URL must be an http(s) address")
-    rate = None
-    if str(commission or "").strip():
-        try:
-            rate = float(commission)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="commission must be a number") from None
+    amount = catalogue.parse_price(price)
+    destination = catalogue.http_url(url)
+    if (url or "").strip() and destination is None:
+        raise HTTPException(status_code=422, detail="URL must be an http or https address")
+    image = catalogue.http_url(image_url)
+    if (image_url or "").strip() and image is None:
+        raise HTTPException(status_code=422, detail="Image URL must be an http or https address")
+    why = (why_chosen or "").strip()
+    value = (value_to_creators or "").strip()
+    if as_draft:
+        rate = catalogue.parse_commission(commission, required=False)
+    else:
+        rate = catalogue.require_curation(why, value, commission)
+    if source not in {"manual", "csv", "api", "shopify"}:
+        source = "manual"
+
+    def _write(product, shop, *, creating: bool, session, before: Optional[int]) -> str:
+        product.title = title
+        product.category = category or None
+        product.price = amount
+        product.description_short = (description or "").strip() or None
+        product.url = destination
+        product.why_chosen = why or None
+        product.value_to_creators = value or None
+        product.image_url = image
+        attributes = dict(getattr(product, "attributes", None) or {})
+        if destination:
+            attributes["url"] = destination
+        elif "url" in attributes:
+            attributes.pop("url", None)
+        product.attributes = attributes
+        if creating:
+            product.source = source
+        elif not getattr(product, "source", None):
+            product.source = "manual"
+        if rate is not None or not as_draft:
+            product.commission_rate = rate
+        product.updated_at = utcnow()
+        if creating and shop is not None and before is not None:
+            events.note_catalogue_threshold(shop, before, before + 1)
+        return product.id
+
     if db.configured():
         with db.session_scope() as session:
             product = session.get(Product, product_id) if product_id else None
-            if product is None:
-                shop = session.get(Shop, shop_id)
-                if shop is not None:
-                    try:
-                        events.guard_plan_limit(shop, "products", session)
-                    except PlanLimitReached as exc:
-                        raise HTTPException(status_code=402, detail=str(exc)) from exc
+            creating = product is None
+            shop = session.get(Shop, shop_id)
+            before = events.catalogue_count(shop, session) if creating and shop is not None else None
+            if creating:
                 product = Product(
                     id=str(uuid.uuid4()),
                     shop_id=shop_id,
                     title=title,
-                    description_short=(description or "").strip() or None,
+                    description_short=None,
                     description_long=None,
-                    category=category or None,
+                    category=None,
                     images=[],
-                    price=amount,
+                    price=None,
                     currency="AUD",
                     tags=[],
-                    attributes={"url": destination} if destination else {},
+                    attributes={},
                     claims=[],
-                    source="manual",
+                    source=source,
                     created_at=utcnow(),
                 )
                 session.add(product)
-            else:
-                if product.shop_id != shop_id:
-                    raise HTTPException(status_code=404, detail="Product not found")
-                product.title = title
-                product.category = category or None
-                product.price = amount
-                product.description_short = (description or "").strip() or None
-                attributes = dict(product.attributes or {})
-                if destination:
-                    attributes["url"] = destination
-                elif "url" in attributes:
-                    attributes.pop("url")
-                product.attributes = attributes
-                product.source = product.source or "manual"
-            if rate is not None:
-                product.commission_rate = rate
+            elif product.shop_id != shop_id:
+                raise HTTPException(status_code=404, detail="Product not found")
             session.flush()
-            return product.id
+            return _write(product, shop, creating=creating, session=session, before=before)
     if product_id and product_id in db.memory_products:
         product = db.memory_products[product_id]
         if product.shop_id != shop_id:
             raise HTTPException(status_code=404, detail="Product not found")
+        creating = False
+        before = None
     else:
-        shop = db.memory_shops.get(shop_id)
-        if shop is not None:
-            try:
-                events.guard_plan_limit(shop, "products", None)
-            except PlanLimitReached as exc:
-                raise HTTPException(status_code=402, detail=str(exc)) from exc
+        before = events.catalogue_count(db.memory_shops.get(shop_id), None) if db.memory_shops.get(shop_id) else None
         product = SimpleNamespace(
             id=str(uuid.uuid4()),
             shop_id=shop_id,
@@ -263,25 +288,32 @@ def save_product(shop_id: str, *, product_id: str, title: str, category: str, pr
             attributes={},
             claims=[],
             commission_rate=None,
-            source="manual",
+            source=source,
+            url=None,
+            why_chosen=None,
+            value_to_creators=None,
+            image_url=None,
             created_at=utcnow(),
+            updated_at=None,
         )
         db.memory_products[product.id] = product
-    product.title = title
-    product.category = category or None
-    product.price = amount
-    product.description_short = (description or "").strip() or None
-    attributes = dict(getattr(product, "attributes", None) or {})
-    if destination:
-        attributes["url"] = destination
-    product.attributes = attributes
-    product.source = getattr(product, "source", None) or "manual"
-    if rate is not None:
-        product.commission_rate = rate
-    return product.id
+        creating = True
+    shop = db.memory_shops.get(shop_id)
+    return _write(product, shop, creating=creating, session=None, before=before)
 
 
 def run_match(shop_id: str, product_id: str) -> dict:
+    stored = _owned_product(shop_id, product_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if not catalogue.product_is_complete(stored):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Complete this product before it can be matched or used in a brief. "
+                "Add why you chose it, the value for creators, and a commission."
+            ),
+        )
     loaded = services.load_match_inputs(
         product=None,
         product_id=product_id,
@@ -332,6 +364,8 @@ def accepted_for_shop(shop_id: str) -> list[dict]:
         link = _link_for(item["creator_id"], item["product_id"])
         item["discount_code"] = link.get("discount_code") if link else None
         item["tracking_path"] = link.get("tracking_path") if link else None
+        item["direct_url"] = link.get("direct_url") if link else None
+        item["platform_links"] = link.get("platform_links") if link else None
         rows.append(item)
     return rows
 
@@ -398,6 +432,8 @@ def creator_offers(creator_id: str) -> list[dict]:
         link = _link_for(item.get("creator_id"), item.get("product_id"))
         item["discount_code"] = link.get("discount_code") if link else None
         item["tracking_path"] = link.get("tracking_path") if link else None
+        item["direct_url"] = link.get("direct_url") if link else None
+        item["platform_links"] = link.get("platform_links") if link else None
         offers.append(item)
     return offers
 
@@ -480,40 +516,246 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
     return HTMLResponse(_layout(profile.get("handle") or "Creator", content, "/creator/logout", session["csrf"]))
 
 
-def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
-    if page == "profile":
-        return f"<h1>{html.escape(shop['name'])}</h1><pre>{html.escape(json.dumps({k: shop[k] for k in ('id','name','country','market','currency','primary_category','plan_tier','is_pilot','is_underserved')}, default=str, indent=2))}</pre>"
-    if page == "products":
-        rows = "".join(
-            f"<li>{html.escape(row['title'])} · {html.escape(row.get('category') or '')} · {row.get('price') if row.get('price') is not None else ''} · {html.escape(row.get('url') or '')}</li>"
-            for row in data.get("products") or []
+def _profile_form(shop: dict, csrf: str, error: str) -> str:
+    current = shop.get("primary_category") or ""
+    options = ["<option value=''>Choose a category</option>"]
+    for slug, label in taxonomy.TOP_LEVEL_CATEGORIES:
+        selected = " selected" if slug == current else ""
+        options.append(f"<option value='{html.escape(slug)}'{selected}>{html.escape(label)}</option>")
+    banner = f"<p class='banner'>{html.escape(error)}</p>" if error else ""
+    return f"""
+    <h1>{html.escape(shop['name'])}</h1>
+    <p>The account name above is the name from your invite. The business name is the trading name, and you can change it here.</p>
+    {banner}
+    <form method="post" action="/seller/profile">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <label>Business name <input name="business_name" value="{html.escape(shop.get('business_name') or '')}" autocomplete="organization"></label>
+      <label>ABN (optional) <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}"></label>
+      <label>Primary category <select name="primary_category">{''.join(options)}</select></label>
+      <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
+      <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
+      <button type="submit">Save profile</button>
+    </form>
+    """
+
+
+def _products_page(shop: dict, csrf: str, data: dict) -> str:
+    products = data.get("products") or []
+    count = len(products)
+    noun = "product" if count == 1 else "products"
+    rows = []
+    for row in products:
+        prompt = ""
+        if row.get("needs_completion"):
+            prompt = (
+                f" <a href='/seller/products?edit={html.escape(row['id'])}'>{html.escape(catalogue.COMPLETE_PROMPT)}</a>"
+            )
+        rows.append(
+            "<li>"
+            f"{html.escape(row['title'])} · {html.escape(row.get('category') or '')} · "
+            f"{'' if row.get('price') is None else row.get('price')} · {html.escape(row.get('url') or '')}"
+            f" <a href='/seller/products?edit={html.escape(row['id'])}'>Edit</a>"
+            f"{prompt}"
+            "</li>"
         )
-        edit = data.get("edit") or {}
-        form = ""
-        if not data.get("locked"):
-            form = f"""
+    warning = catalogue.fee_warning(count)
+    warning_html = f"<p class='banner' id='catalogue-fee'>{html.escape(warning)}</p>" if warning else ""
+    first = ""
+    if count == 0:
+        first = f"<p class='curation' id='first-product'>{html.escape(catalogue.FIRST_PRODUCT_COPY)}</p>"
+    edit = data.get("edit") or {}
+    form = ""
+    if not data.get("locked"):
+        commission = edit.get("commission_rate")
+        commission_value = "" if commission is None else str(commission)
+        form = f"""
         <h2>{'Edit' if edit else 'Add'} product</h2>
         <form method="post" action="/seller/products">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <input type="hidden" name="product_id" value="{html.escape(edit.get('id') or '')}">
           <label>Title <input name="title" value="{html.escape(edit.get('title') or '')}" required></label>
           <label>Category <input name="category" value="{html.escape(edit.get('category') or '')}"></label>
-          <label>Price <input name="price" value="{html.escape(str(edit.get('price') or ''))}"></label>
+          <label>Price <input name="price" value="{html.escape('' if edit.get('price') is None else str(edit.get('price')))}"></label>
           <label>URL <input name="url" type="url" value="{html.escape(edit.get('url') or '')}"></label>
-          <label>Commission percent <input name="commission" value="{html.escape(str(edit.get('commission_rate') or ''))}"></label>
+          <label>Image URL (optional) <input name="image_url" type="url" value="{html.escape(edit.get('image_url') or '')}"></label>
+          <label>Why you chose it <textarea name="why_chosen" required>{html.escape(edit.get('why_chosen') or '')}</textarea></label>
+          <label>Value for creators <textarea name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea></label>
+          <label>Commission percent <input name="commission" value="{html.escape(commission_value)}" required></label>
           <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
           <button type="submit">Save product</button>
         </form>
+        <h2>Add from a CSV</h2>
+        <p>Upload a spreadsheet, tick the rows you want, and leave the rest. Nothing is ticked to start with. Drafts are not used for matching until you add why you chose them, the value for creators, and a commission.</p>
+        <p><a href="/seller/products/csv-template">Download the template</a></p>
+        <form method="post" action="/seller/products/import" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Products CSV <input type="file" name="file" accept=".csv,text/csv" required></label>
+          <button type="submit">Preview CSV</button>
+        </form>
         """
-        return f"""
-        <h1>Products</h1>
-        <ul>{rows or '<li>No products yet.</li>'}</ul>
-        {form}
-        """
+    return f"""
+    <h1>Products</h1>
+    <p class="curation">{html.escape(catalogue.PRODUCTS_COPY)}</p>
+    <p id="product-count">{count} {noun}</p>
+    {warning_html}
+    {first}
+    <ul>{''.join(rows) or '<li>No products yet.</li>'}</ul>
+    {form}
+    """
+
+
+def _csv_preview(csrf: str, rows: list[dict]) -> str:
+    body = []
+    for index, row in enumerate(rows):
+        if row.get("ok"):
+            tick = f"<input type='checkbox' name='pick' value='{index}'>"
+        else:
+            tick = ""
+        hidden = ""
+        if row.get("ok"):
+            hidden = (
+                f'<input type="hidden" name="title_{index}" value="{html.escape(row.get("title") or "")}">'
+                f'<input type="hidden" name="url_{index}" value="{html.escape(row.get("url") or "")}">'
+                f'<input type="hidden" name="price_{index}" value="{html.escape(row.get("price_text") or "")}">'
+                f'<input type="hidden" name="category_{index}" value="{html.escape(row.get("category") or "")}">'
+                f'<input type="hidden" name="image_url_{index}" value="{html.escape(row.get("image_url") or "")}">'
+                f'<input type="hidden" name="commission_{index}" value="{html.escape(row.get("commission_text") or "")}">'
+            )
+        body.append(
+            "<tr>"
+            f"<td>{tick}{hidden}</td>"
+            f"<td>{html.escape(row.get('title') or '')}</td>"
+            f"<td>{html.escape(row.get('url') or '')}</td>"
+            f"<td>{html.escape(row.get('price_text') or '')}</td>"
+            f"<td>{html.escape(row.get('category') or '')}</td>"
+            f"<td>{html.escape(row.get('error') or '')}</td>"
+            "</tr>"
+        )
+    return f"""
+    <h1>Choose products</h1>
+    <p>Tick the rows you want to add. Nothing is ticked to start with. You can save them as drafts, or add why you chose each one before they can be matched.</p>
+    <form method="post" action="/seller/products/import/drafts">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <input type="hidden" name="row_count" value="{len(rows)}">
+      <table>
+        <thead><tr><th>Add</th><th>Title</th><th>URL</th><th>Price</th><th>Category</th><th>Notes</th></tr></thead>
+        <tbody>{''.join(body)}</tbody>
+      </table>
+      <button type="submit">Save ticked rows as drafts</button>
+      <button type="submit" formaction="/seller/products/import/details">Add why and value for ticked rows</button>
+    </form>
+    """
+
+
+def _csv_details(csrf: str, rows: list[dict], error: str) -> str:
+    banner = f"<p class='banner'>{html.escape(error)}</p>" if error else ""
+    blocks = []
+    for index, row in enumerate(rows):
+        blocks.append(
+            f"""
+            <fieldset>
+              <legend>{html.escape(row.get('title') or 'Product')}</legend>
+              <input type="hidden" name="title_{index}" value="{html.escape(row.get('title') or '')}">
+              <input type="hidden" name="url_{index}" value="{html.escape(row.get('url') or '')}">
+              <input type="hidden" name="price_{index}" value="{html.escape(row.get('price_text') or '')}">
+              <input type="hidden" name="category_{index}" value="{html.escape(row.get('category') or '')}">
+              <input type="hidden" name="image_url_{index}" value="{html.escape(row.get('image_url') or '')}">
+              <label>Why you chose it <textarea name="why_chosen_{index}" required>{html.escape(row.get('why_chosen') or '')}</textarea></label>
+              <label>Value for creators <textarea name="value_to_creators_{index}" required>{html.escape(row.get('value_to_creators') or '')}</textarea></label>
+              <label>Commission percent <input name="commission_{index}" value="{html.escape(row.get('commission_text') or '')}" required></label>
+            </fieldset>
+            """
+        )
+    return f"""
+    <h1>Finish each product</h1>
+    <p>These products are not used for matching until each one has a reason, the value for creators, and a commission.</p>
+    {banner}
+    <form method="post" action="/seller/products/import/save">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <input type="hidden" name="finish" value="1">
+      <input type="hidden" name="row_count" value="{len(rows)}">
+      {''.join(blocks)}
+      <button type="submit">Save products</button>
+    </form>
+    """
+
+
+def _picked_rows(form, *, all_rows: bool = False) -> list[dict]:
+    try:
+        count = int(str(form.get("row_count") or "0"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="The preview could not be read") from exc
+    if count < 0 or count > catalogue.MAX_CSV_ROWS:
+        raise HTTPException(status_code=422, detail="A CSV can list at most 500 products")
+    if all_rows:
+        indexes = {str(index) for index in range(count)}
+    else:
+        indexes = {str(value) for value in form.getlist("pick")}
+    if not indexes:
+        raise HTTPException(status_code=422, detail="Tick at least one product")
+    rows = []
+    for index in range(count):
+        if str(index) not in indexes:
+            continue
+        raw = {
+            "title": form.get(f"title_{index}"),
+            "url": form.get(f"url_{index}"),
+            "price": form.get(f"price_{index}"),
+            "category": form.get(f"category_{index}"),
+            "image_url": form.get(f"image_url_{index}"),
+            "commission": form.get(f"commission_{index}"),
+        }
+        parsed = catalogue.normalise_import_row(raw)
+        if not parsed["ok"]:
+            raise HTTPException(status_code=422, detail=parsed["error"] or "That row cannot be imported")
+        parsed["why_chosen"] = str(form.get(f"why_chosen_{index}") or "")
+        parsed["value_to_creators"] = str(form.get(f"value_to_creators_{index}") or "")
+        rows.append(parsed)
+    if not rows:
+        raise HTTPException(status_code=422, detail="Tick at least one product")
+    return rows
+
+
+def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) -> int:
+    if not as_draft:
+        for row in rows:
+            catalogue.require_curation(row.get("why_chosen"), row.get("value_to_creators"), row.get("commission_text"))
+    for row in rows:
+        commission = row.get("commission_text") or ""
+        why = row.get("why_chosen") or ""
+        value = row.get("value_to_creators") or ""
+        save_product(
+            shop_id,
+            product_id="",
+            title=row.get("title") or "",
+            category=row.get("category") or "",
+            price=row.get("price_text") or "",
+            url=row.get("url") or "",
+            description="",
+            commission=commission,
+            why_chosen=why,
+            value_to_creators=value,
+            image_url=row.get("image_url") or "",
+            source="csv",
+            as_draft=as_draft,
+        )
+    return len(rows)
+
+
+def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "profile":
+        return _profile_form(shop, csrf, data.get("profile_error") or "")
+    if page == "products":
+        return _products_page(shop, csrf, data)
+    if page == "csv_preview":
+        return _csv_preview(csrf, data.get("rows") or [])
+    if page == "csv_details":
+        return _csv_details(csrf, data.get("rows") or [], data.get("import_error") or "")
     if page == "find":
+        ready = [row for row in data.get("products") or [] if row.get("ready")]
         options = "".join(
             f"<option value=\"{html.escape(row['id'])}\">{html.escape(row['title'])}</option>"
-            for row in data.get("products") or []
+            for row in ready
         )
         cards = []
         for match in data.get("matches") or []:
@@ -530,7 +772,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
                 """
             cards.append(f"<article><h3>{handle}</h3><p>Score {html.escape(str(match.get('score')))}</p><ul>{reasons}</ul><pre>{estimates}</pre>{actions}</article>")
         match_form = ""
-        if not data.get("locked"):
+        if not data.get("locked") and ready:
             match_form = f"""
         <form method="post" action="/seller/find">
           <input type="hidden" name="csrf_token" value="{csrf}">
@@ -538,8 +780,12 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
           <button type="submit">Run match</button>
         </form>
         """
+        waiting = ""
+        if not ready:
+            waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for creators, and a commission.</p>"
         return f"""
         <h1>Find creators</h1>
+        {waiting}
         {match_form}
         {''.join(cards) or '<p>Run a match to see ranked creators.</p>'}
         """
@@ -549,7 +795,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             "<li>"
             f"{html.escape(str(item.get('handle') or item.get('creator_id')))} · "
             f"{html.escape(str(item.get('product_title') or ''))}"
-            f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
+            f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url, item.get('platform_links'), item.get('direct_url'))}"
             f"{_abn_note(item)}"
             "</li>"
         )
@@ -612,13 +858,13 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
-                f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url)}</article>"
+                f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url, offer.get('platform_links'), offer.get('direct_url'))}</article>"
             )
         return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
     items = "".join(
         "<li>"
         f"{html.escape(str(row.get('link_url') or ''))}"
-        f"{_tracking_block(row.get('discount_code'), row.get('tracking_path'), base_url)}"
+        f"{_tracking_block(row.get('discount_code'), row.get('tracking_path'), base_url, row.get('platform_links'), row.get('direct_url'))}"
         "</li>"
         for row in data.get("links") or []
     )
@@ -716,18 +962,45 @@ def _abn_note(item: dict) -> str:
     return f'<p class="note">{html.escape(commission.ABN_WARNING)}</p>'
 
 
-def _tracking_block(code: Optional[str], path: Optional[str], base_url: str) -> str:
+def _tracking_block(
+    code: Optional[str],
+    path: Optional[str],
+    base_url: str,
+    platform_links: Optional[list] = None,
+    direct_url: Optional[str] = None,
+) -> str:
     if not code or not path:
         return "<p class='tracking'>No tracking code yet.</p>"
     full = f"{base_url.rstrip('/')}{path}"
     safe_code = html.escape(str(code))
     safe_url = html.escape(full)
+    extra = ""
+    if direct_url:
+        safe_direct = html.escape(str(direct_url))
+        extra += (
+            f"<p>Direct <a href='{safe_direct}'>{safe_direct}</a> "
+            f"<button type='button' class='copy' data-copy='{safe_direct}'>Copy link</button></p>"
+        )
+    for variant in platform_links or []:
+        label = html.escape(str(variant.get("label") or variant.get("source_platform") or ""))
+        variant_url = html.escape(f"{base_url.rstrip('/')}{variant.get('tracking_path') or ''}")
+        extra += (
+            f"<p>{label} <a href='{variant_url}'>{variant_url}</a> "
+            f"<button type='button' class='copy' data-copy='{variant_url}'>Copy link</button></p>"
+        )
+        if variant.get("direct_url"):
+            safe_variant = html.escape(str(variant["direct_url"]))
+            extra += (
+                f"<p>{label} direct <a href='{safe_variant}'>{safe_variant}</a> "
+                f"<button type='button' class='copy' data-copy='{safe_variant}'>Copy link</button></p>"
+            )
     return (
         "<div class='tracking'>"
         f"<p><span class='code'>{safe_code}</span> "
         f"<button type='button' class='copy' data-copy='{safe_code}'>Copy code</button></p>"
         f"<p><a href='{safe_url}'>{safe_url}</a> "
         f"<button type='button' class='copy' data-copy='{safe_url}'>Copy link</button></p>"
+        f"{extra}"
         "</div>"
     )
 
@@ -736,8 +1009,8 @@ def _layout(title: str, body: str, logout: Optional[str], csrf: Optional[str]) -
     logout_form = ""
     if logout and csrf:
         logout_form = (
-            f"<form method='post' action='{html.escape(logout)}'>"
-            f"<input type='hidden' name='csrf_token' value='{html.escape(csrf)}'>"
+            f'<form method="post" action="{html.escape(logout)}">'
+            f'<input type="hidden" name="csrf_token" value="{html.escape(csrf)}">'
             "<button type='submit'>Sign out</button></form>"
         )
     return f"""<!DOCTYPE html>
@@ -775,17 +1048,43 @@ document.querySelectorAll("button.copy").forEach((button) => {{
 
 
 def _product_row(row) -> dict:
-    attributes = getattr(row, "attributes", None) or {}
     price = getattr(row, "price", None)
+    rate = getattr(row, "commission_rate", None)
     return {
         "id": row.id,
         "title": row.title,
         "category": getattr(row, "category", None),
         "price": float(price) if price is not None else None,
-        "url": attributes.get("url") if isinstance(attributes, dict) else None,
+        "url": catalogue.product_public_url(row),
+        "image_url": getattr(row, "image_url", None) or "",
+        "why_chosen": getattr(row, "why_chosen", None) or "",
+        "value_to_creators": getattr(row, "value_to_creators", None) or "",
         "description": getattr(row, "description_short", None) or "",
+        "commission_rate": float(rate) if rate is not None else None,
         "source": getattr(row, "source", None),
+        "ready": catalogue.product_is_complete(row),
+        "needs_completion": catalogue.needs_completion_prompt(row),
     }
+
+
+def _owned_product(shop_id: str, product_id: str):
+    if not product_id:
+        return None
+    if db.configured():
+        with db.session_scope() as session:
+            product = session.get(Product, product_id)
+            if product is None or product.shop_id != shop_id:
+                return None
+            return SimpleNamespace(
+                shop_id=product.shop_id,
+                why_chosen=product.why_chosen,
+                value_to_creators=product.value_to_creators,
+                commission_rate=product.commission_rate,
+            )
+    product = db.memory_products.get(product_id)
+    if product is None or product.shop_id != shop_id:
+        return None
+    return product
 
 
 def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] = None) -> list[dict]:

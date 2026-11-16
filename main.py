@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 import admin_data
@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.18.0"
+APP_VERSION = "0.19.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -124,6 +124,10 @@ class ProductIn(BaseModel):
     attributes: Dict[str, Any] = Field(default_factory=dict)
     claims: List[ClaimIn] = Field(default_factory=list)
     commission_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    why_chosen: Optional[str] = None
+    value_to_creators: Optional[str] = None
+    image_url: Optional[str] = None
+    url: Optional[str] = None
 
 
 class EnrichResponse(BaseModel):
@@ -815,12 +819,13 @@ def get_creator_product_links(
 
 
 @app.get("/r/{code}")
-def redirect_tracking_code(code: str, _: None = Depends(rate_limit_public)):
+def redirect_tracking_code(code: str, request: Request, _: None = Depends(rate_limit_public)):
     link = attribution.resolve_redirect(code)
     destination = attribution.safe_destination((link or {}).get("link_url"))
     if link is None or destination is None:
         raise HTTPException(status_code=404, detail="Tracking code not found")
-    events.record_link_click(link)
+    source_platform, channel_kind = attribution.channel_from_query(request.query_params.get("s"), request.query_params.get("c"))
+    events.record_link_click(link, source_platform=source_platform, channel_kind=channel_kind)
     import shopify_sync
 
     if shopify_sync.shop_connected(link.get("shop_id")):
@@ -940,11 +945,46 @@ def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_seller(portal.seller_context(request), "profile", base_url=billing_config.public_base_url(request))
 
 
+@app.post("/seller/profile")
+async def seller_save_profile(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    try:
+        services.update_shop_profile(
+            session["subject_id"],
+            business_name=str(form.get("business_name") or ""),
+            abn=str(form.get("abn") or ""),
+            primary_category=str(form.get("primary_category") or ""),
+            store_url=str(form.get("store_url") or ""),
+            shopify_domain=str(form.get("shopify_domain") or ""),
+        )
+    except HTTPException as exc:
+        if exc.status_code not in {409, 422}:
+            raise
+        page = portal.render_seller(
+            session,
+            "profile",
+            base_url=billing_config.public_base_url(request),
+            profile_error=str(exc.detail),
+        )
+        page.status_code = exc.status_code
+        return page
+    return RedirectResponse("/seller/profile", status_code=303)
+
+
 @app.get("/seller/products")
-def seller_products(request: Request, _: None = Depends(rate_limit_portal)):
+def seller_products(request: Request, edit: str = "", _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "products", base_url=billing_config.public_base_url(request), products=products)
+    editing = next((row for row in products if row["id"] == edit), None) if edit else None
+    return portal.render_seller(
+        session,
+        "products",
+        base_url=billing_config.public_base_url(request),
+        products=products,
+        edit=editing,
+    )
 
 
 @app.post("/seller/products")
@@ -964,7 +1004,104 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
         url=str(form.get("url") or ""),
         description=str(form.get("description") or ""),
         commission=str(form.get("commission") or ""),
+        why_chosen=str(form.get("why_chosen") or ""),
+        value_to_creators=str(form.get("value_to_creators") or ""),
+        image_url=str(form.get("image_url") or ""),
     )
+    return RedirectResponse("/seller/products", status_code=303)
+
+
+@app.get("/seller/products/csv-template")
+def seller_csv_template(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
+    import catalogue
+
+    return Response(
+        content=catalogue.TEMPLATE_CSV,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=plantr-products.csv"},
+    )
+
+
+@app.post("/seller/products/import")
+async def seller_import_csv(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
+    upload = form.get("file")
+    if not hasattr(upload, "read"):
+        raise HTTPException(status_code=422, detail="Choose a CSV file")
+    payload = await upload.read()
+    import catalogue
+
+    rows = catalogue.parse_product_csv(payload)
+    return portal.render_seller(
+        session,
+        "csv_preview",
+        base_url=billing_config.public_base_url(request),
+        rows=rows,
+    )
+
+
+@app.post("/seller/products/import/drafts")
+async def seller_import_drafts(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
+    rows = portal._picked_rows(form)
+    portal.save_imported_products(session["subject_id"], rows, as_draft=True)
+    return RedirectResponse("/seller/products", status_code=303)
+
+
+@app.post("/seller/products/import/details")
+async def seller_import_details(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
+    rows = portal._picked_rows(form)
+    return portal.render_seller(
+        session,
+        "csv_details",
+        base_url=billing_config.public_base_url(request),
+        rows=rows,
+    )
+
+
+@app.post("/seller/products/import/save")
+async def seller_import_save(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
+    rows = portal._picked_rows(form, all_rows=True)
+    try:
+        portal.save_imported_products(session["subject_id"], rows, as_draft=False)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        page = portal.render_seller(
+            session,
+            "csv_details",
+            base_url=billing_config.public_base_url(request),
+            rows=rows,
+            import_error=str(exc.detail),
+        )
+        page.status_code = 422
+        return page
     return RedirectResponse("/seller/products", status_code=303)
 
 
@@ -1255,6 +1392,10 @@ def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request
             attributes=product.attributes,
             claims=[claim.model_dump() for claim in product.claims],
             commission_rate=product.commission_rate,
+            why_chosen=product.why_chosen,
+            value_to_creators=product.value_to_creators,
+            image_url=product.image_url,
+            url=product.url,
             fields_set=set(product.model_fields_set),
             source=source,
             talking_points=grok.get("talking_points", []),
@@ -1269,7 +1410,8 @@ def enrich(product: ProductIn, request: Request, _: None = Depends(guard_request
     }
     if saved:
         body["product_id"] = saved["product_id"]
-        body["brief_id"] = saved["brief_id"]
+        if saved.get("brief_id"):
+            body["brief_id"] = saved["brief_id"]
     return body
 
 
