@@ -41,5 +41,9 @@ A profile is complete when it has a handle, at least one `active_categories` slu
 | `link_clicked` | `GET /r/{code}` | No plan counter. Properties contain the code, creator, and product. |
 | `admin_login_succeeded` | `POST /admin/login` when the password matches | No shop counters. Properties contain the email, never the password. |
 | `admin_login_failed` | `POST /admin/login` when the password is wrong or the attempt is rate-limited | No shop counters. Properties contain the email and a reason, never the password. |
+| `sales_report_submitted` | A manual seller uploads a month's CSV or says there were no sales | No usage counter. Properties contain the month, kind, row count, and net total. A replacement while the report is still received sets `replaced`. |
+| `sales_report_accepted` | An admin accepts a sales report and, for a CSV, the orders are imported | No usage counter. Properties contain the month and how many orders were created or already stored. |
+| `sales_report_rejected` | An admin rejects a sales report | No usage counter. Properties contain the month and the reason. |
+| `manual_seller_approved` | An admin approves a seller who does not sell on Shopify | No usage counter. Properties contain who approved, the count before, and the cap. |
 
 `request_id` on an event is the id of the HTTP request that emitted it, when there is one. It matches the JSON log line and the `api_requests` row. Direct `emit()` calls outside a request leave it null.

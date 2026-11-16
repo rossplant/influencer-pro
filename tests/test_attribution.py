@@ -159,8 +159,10 @@ def test_csv_import_is_idempotent_and_reports_row_errors(monkeypatch):
     assert len(db.memory_attributed_orders) == 2
     orders = client.get("/admin/api/orders", headers=headers)
     assert orders.status_code == 200
-    assert orders.json()["total"] == 0
-    assert orders.json()["gmv"]["net_gmv"] == 0
+    assert orders.json()["total"] == 2
+    assert orders.json()["gmv"]["orders"] == 2
+    assert orders.json()["gmv"]["gmv_gross"] == 57.5
+    assert orders.json()["gmv"]["net_gmv"] == 57.5
     assert float(first.gmv_gross) == 45.5
 
 
@@ -252,14 +254,15 @@ def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch)
     )
     assert missed.json()["created"] == 1
     outside = next(row for row in db.memory_attributed_orders if row.external_order_id == "88")
-    assert outside.attributed is False
+    assert outside.attributed is True
     assert float(outside.gmv_gross) == 8
-    assert not any(
+    assert float(outside.net_gmv) == 8
+    assert any(
         row.event_name == "attributed_sale" and row.properties.get("order_id") == "88" for row in db.memory_events
     )
     report = client.get("/admin/api/orders", headers=headers)
     assert report.status_code == 200
-    assert report.json()["gmv"]["orders"] == 1
-    assert report.json()["gmv"]["gmv_gross"] == 20
-    assert report.json()["gmv"]["net_gmv"] == 13
-    assert all(item["external_order_id"] != "88" for item in report.json()["items"])
+    assert report.json()["gmv"]["orders"] == 2
+    assert report.json()["gmv"]["gmv_gross"] == 28
+    assert report.json()["gmv"]["net_gmv"] == 21
+    assert any(item["external_order_id"] == "88" for item in report.json()["items"])

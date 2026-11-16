@@ -47,6 +47,8 @@ def _isolated(monkeypatch):
     monkeypatch.setenv("OPERATOR_LEGAL_NAME", "Test Operator Pty Ltd")
     monkeypatch.delenv("ENV", raising=False)
     monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.delenv("MANUAL_REPORTING_LIVE", raising=False)
+    monkeypatch.delenv("NON_SHOPIFY_CAP", raising=False)
     monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     monkeypatch.delenv("ADMIN_SETUP_TOKEN", raising=False)

@@ -85,6 +85,12 @@ class Category(Base):
 
 class Shop(Base):
     __tablename__ = "shops"
+    __table_args__ = (
+        CheckConstraint(
+            "sales_reporting IS NULL OR sales_reporting IN ('manual', 'shopify_sync')",
+            name="ck_shops_sales_reporting",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -116,6 +122,13 @@ class Shop(Base):
     business_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     abn: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
     store_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # None until the seller answers. True/False is the profile Yes/No.
+    sells_on_shopify: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # manual | shopify_sync. Null until the seller answers, or until a domain is backfilled.
+    sales_reporting: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    manual_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    manual_approved_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    manual_approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     briefs_generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -1035,3 +1048,31 @@ class CollabSparkAd(Base):
     consented_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+
+
+class SalesReport(Base):
+    """One seller's sales file, or a no-sales declaration, for one Sydney month.
+
+    status is received until an admin accepts or rejects it. A new file replaces
+    a received row. An accepted or rejected month cannot be sent again.
+    """
+
+    __tablename__ = "sales_reports"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "period", name="uq_sales_reports_shop_period"),
+        CheckConstraint("kind IN ('csv', 'no_sales')", name="ck_sales_reports_kind"),
+        CheckConstraint("status IN ('received', 'accepted', 'rejected')", name="ck_sales_reports_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received", server_default="received")
+    csv_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    net_total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

@@ -340,7 +340,9 @@ def register(app) -> None:
     @app.get("/creator/api/links")
     def creator_links_api(request: Request, _: None = portal_limit):
         session = _creator(request)
-        return {"links": attribution.list_links(shop_id=None, creator_id=session["subject_id"])}
+        import manual_reporting
+
+        return {"links": manual_reporting.filter_for_creators(attribution.list_links(shop_id=None, creator_id=session["subject_id"]))}
 
     @app.get("/creator/api/collabs")
     def creator_collabs(request: Request, _: None = portal_limit):

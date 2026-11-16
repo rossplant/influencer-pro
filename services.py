@@ -87,6 +87,11 @@ def create_shop(
         business_name=_clean(business_name),
         abn=clean_abn,
         store_url=clean_store,
+        sells_on_shopify=True if (shopify_domain or None) else None,
+        sales_reporting="shopify_sync" if (shopify_domain or None) else None,
+        manual_approved=False,
+        manual_approved_by=None,
+        manual_approved_at=None,
         products_enriched=0,
         matches_run=0,
         briefs_generated=0,
@@ -133,10 +138,16 @@ def update_shop_profile(
     primary_category: Optional[str],
     store_url: Optional[str],
     shopify_domain: Optional[str],
+    sells_on_shopify: Optional[str] = None,
 ) -> dict:
-    """Edit the seller profile. `name` stays the account name from join."""
+    """Edit the seller profile. `name` stays the account name from join.
+
+    sells_on_shopify is the required Yes/No. Yes needs a *.myshopify.com domain.
+    No clears the domain and marks sales reporting as manual.
+    """
     import catalogue
     import legal
+    import manual_reporting
 
     category = _clean(primary_category)
     if category:
@@ -149,19 +160,30 @@ def update_shop_profile(
     site = _clean(store_url)
     if site and catalogue.http_url(site) is None:
         raise HTTPException(status_code=422, detail="Store URL must be an http or https address")
-    domain = catalogue.shopify_host(shopify_domain)
+    choice = (sells_on_shopify or "").strip().lower()
+    if choice not in {"yes", "no"}:
+        raise HTTPException(status_code=422, detail="Choose yes or no for Do you sell on Shopify?")
+    domain = manual_reporting.normalise_shopify_domain(shopify_domain) if choice == "yes" else None
     trading = _clean(business_name)
     if trading and len(trading) > 255:
         raise HTTPException(status_code=422, detail="Business name is too long")
 
     def _apply(shop) -> None:
         if domain and _domain_taken(shop, domain):
-            raise HTTPException(status_code=409, detail="A shop with this Shopify domain already exists")
+            raise HTTPException(status_code=409, detail="This shop is already linked")
         shop.business_name = trading
         shop.abn = clean_abn
         shop.primary_category = category
         shop.store_url = site
+        shop.sells_on_shopify = choice == "yes"
         shop.shopify_domain = domain
+        if choice == "yes":
+            shop.sales_reporting = "shopify_sync"
+        elif getattr(shop, "sales_reporting", None) != "manual":
+            shop.sales_reporting = "manual"
+            shop.manual_approved = False
+            shop.manual_approved_by = None
+            shop.manual_approved_at = None
 
     if db.configured():
         with db.session_scope() as session:
@@ -209,6 +231,11 @@ def shop_dict(shop: Any) -> dict:
         "business_name": getattr(shop, "business_name", None),
         "abn": getattr(shop, "abn", None),
         "store_url": getattr(shop, "store_url", None),
+        "sells_on_shopify": getattr(shop, "sells_on_shopify", None),
+        "sales_reporting": getattr(shop, "sales_reporting", None),
+        "manual_approved": bool(getattr(shop, "manual_approved", False)),
+        "manual_approved_by": getattr(shop, "manual_approved_by", None),
+        "manual_approved_at": getattr(shop, "manual_approved_at", None),
         "mrr": events.mrr(shop.plan_tier, status=shop.plan_status),
         "products_enriched": int(shop.products_enriched or 0),
         "matches_run": int(shop.matches_run or 0),
@@ -422,6 +449,9 @@ def save_enrichment(
     if db.configured():
         with db.session_scope() as session:
             shop, product = _resolve_db(session, shop_id, product_id)
+            import manual_reporting
+
+            manual_reporting.require_trading(shop)
             creating = product is None
             before = events.catalogue_count(shop, session) if creating else 0
             product = _apply_product(
@@ -473,6 +503,9 @@ def save_enrichment(
             return {"product_id": product.id, "brief_id": brief.id}
 
     shop, product = _resolve_memory(shop_id, product_id)
+    import manual_reporting
+
+    manual_reporting.require_trading(shop)
     creating = product is None
     before = events.catalogue_count(shop, None) if creating else 0
     product = _apply_product_memory(
@@ -617,12 +650,15 @@ def _decision_payload(item) -> dict:
 
 def mark_brief_sent(brief_id: str, actor: str) -> dict:
     """Record that a brief was actually sent. Operators pass actor='operator'."""
+    import manual_reporting
+
     if actor not in events.ACTORS:
         raise HTTPException(status_code=422, detail="actor must be 'system', 'operator', or 'api'")
     if not db.configured():
         brief = next((row for row in db.memory_briefs if row.id == brief_id), None)
         if brief is None:
             raise HTTPException(status_code=404, detail="Brief not found")
+        manual_reporting.require_trading(db.memory_shops.get(getattr(brief, "shop_id", None)))
         events.emit("brief_sent", brief, actor)
         return {"id": brief.id, "shop_id": brief.shop_id, "sent_at": brief.sent_at, "actor": actor}
     with db.session_scope() as session:
@@ -631,6 +667,7 @@ def mark_brief_sent(brief_id: str, actor: str) -> dict:
             raise HTTPException(status_code=404, detail="Brief not found")
         if brief.shop is None and brief.shop_id:
             brief.shop = session.get(Shop, brief.shop_id)
+        manual_reporting.require_trading(brief.shop or session.get(Shop, brief.shop_id))
         events.emit("brief_sent", brief, actor)
         return {"id": brief.id, "shop_id": brief.shop_id, "sent_at": brief.sent_at, "actor": actor}
 
@@ -688,6 +725,18 @@ def load_match_inputs(
     }
 
 
+def _hold_unapproved_shop(shop_id: Optional[str]) -> None:
+    import manual_reporting
+
+    if not shop_id:
+        return
+    if db.configured():
+        with db.session_scope() as session:
+            manual_reporting.require_trading(session.get(Shop, shop_id))
+        return
+    manual_reporting.require_trading(db.memory_shops.get(shop_id))
+
+
 def persist_rules_match(
     *,
     shop_id: Optional[str],
@@ -702,6 +751,7 @@ def persist_rules_match(
     """
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
+    _hold_unapproved_shop(shop_id)
     try:
         if db.configured():
             return _persist_rules_db(shop_id, product_id, matches, excluded or [], optimise_for)

@@ -71,6 +71,7 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
     assert 'name="primary_category"' in page.text
     assert 'name="store_url"' in page.text
     assert 'name="shopify_domain"' in page.text
+    assert "Do you sell on Shopify?" in page.text
     bad = client.post(
         "/seller/profile",
         data={
@@ -79,6 +80,7 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
             "abn": "51 824 753 557",
             "primary_category": "home",
             "store_url": "https://plants.example",
+            "sells_on_shopify": "yes",
             "shopify_domain": "catalogue.myshopify.com",
         },
         headers=cookie,
@@ -94,7 +96,8 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
             "abn": VALID_ABN,
             "primary_category": "beauty",
             "store_url": "https://plants.example",
-            "shopify_domain": "catalogue.myshopify.com",
+            "sells_on_shopify": "yes",
+            "shopify_domain": "HTTPS://Catalogue.myshopify.com/",
         },
         headers=cookie,
         follow_redirects=False,
@@ -107,6 +110,8 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
     assert row.primary_category == "beauty"
     assert row.store_url == "https://plants.example"
     assert row.shopify_domain == "catalogue.myshopify.com"
+    assert row.sells_on_shopify is True
+    assert row.sales_reporting == "shopify_sync"
     shown = client.get("/seller/profile", headers=cookie).text
     assert "Catalogue Plants" in shown
     assert "51824753556" in shown
@@ -118,11 +123,13 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
             "abn": "",
             "primary_category": "beauty",
             "store_url": "https://plants.example",
+            "sells_on_shopify": "yes",
             "shopify_domain": "taken.myshopify.com",
         },
         headers=cookie,
     )
     assert clash.status_code == 409
+    assert "This shop is already linked" in clash.text
     cleared = client.post(
         "/seller/profile",
         data={
@@ -131,6 +138,7 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
             "abn": "",
             "primary_category": "home",
             "store_url": "",
+            "sells_on_shopify": "no",
             "shopify_domain": "",
         },
         headers=cookie,
@@ -140,6 +148,9 @@ def test_profile_edit_validates_abn_and_keeps_the_account_name(monkeypatch):
     assert row.abn is None
     assert row.store_url is None
     assert row.shopify_domain is None
+    assert row.sells_on_shopify is False
+    assert row.sales_reporting == "manual"
+    assert row.manual_approved is False
     assert row.primary_category == "home"
 
 

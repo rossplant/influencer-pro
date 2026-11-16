@@ -61,14 +61,25 @@ HEADER_ALIASES = {
     "attribution_date": "date",
     "order_date": "date",
     "code": "code",
-    "link": "code",
     "discount_code": "code",
-    "tracking_link": "code",
     "referral_code": "code",
+    "link": "link",
+    "tracking_link": "link",
     "gross": "gross",
     "gross_amount": "gross",
+    "gross_amount_aud": "gross",
     "gmv_gross": "gross",
     "amount": "gross",
+    "net": "net",
+    "net_amount": "net",
+    "net_amount_aud": "net",
+    "shipping": "shipping",
+    "shipping_aud": "shipping",
+    "gst": "gst",
+    "gst_aud": "gst",
+    "quantity": "quantity",
+    "sku": "sku",
+    "product_sku_or_name": "sku",
     "currency": "currency",
     "shop": "shop",
     "shop_id": "shop",
@@ -414,7 +425,7 @@ def resolve_redirect(code: str):
     )
 
 
-def import_orders(csv_text: str, *, dry_run: bool) -> dict:
+def import_orders(csv_text: str, *, dry_run: bool, ingest_source: str = "csv") -> dict:
     rows = _parse_csv(csv_text)
     if not rows:
         raise HTTPException(status_code=422, detail="CSV has no data rows")
@@ -422,7 +433,7 @@ def import_orders(csv_text: str, *, dry_run: bool) -> dict:
     created = existing = errors = 0
     seen: set[tuple[str, str]] = set()
     for index, raw in enumerate(rows, start=1):
-        outcome = _import_row(raw, dry_run=dry_run, seen=seen)
+        outcome = _import_row(raw, dry_run=dry_run, seen=seen, ingest_source=ingest_source)
         results.append({"row": index, **outcome})
         if outcome["status"] == "created":
             created += 1
@@ -577,9 +588,10 @@ def _accepted_pairs() -> list[tuple]:
     return pairs
 
 
-def _import_row(raw: dict, *, dry_run: bool, seen: set[tuple[str, str]]) -> dict:
+def _import_row(raw: dict, *, dry_run: bool, seen: set[tuple[str, str]], ingest_source: str = "csv") -> dict:
     try:
         parsed = _validated_row(raw)
+        parsed["ingest_source"] = ingest_source or "csv"
     except HTTPException as exc:
         return {"status": "error", "error": str(exc.detail)}
     key = (parsed["shop_id"], parsed["order_id"])
@@ -600,8 +612,12 @@ def _validated_row(raw: dict) -> dict:
     order_id = str(raw.get("order_id") or "").strip()
     if not order_id:
         raise HTTPException(status_code=422, detail="order id is required")
-    code = _code_from_cell(str(raw.get("code") or ""))
-    if not code:
+    code_cell = str(raw.get("code") or "").strip()
+    link_cell = str(raw.get("link") or "").strip()
+    if code_cell and _cell_is_link(code_cell) and not link_cell:
+        link_cell = code_cell
+        code_cell = ""
+    if not code_cell and not link_cell:
         raise HTTPException(status_code=422, detail="code or link is required")
     try:
         gross = float(str(raw.get("gross") or "").strip())
@@ -609,6 +625,16 @@ def _validated_row(raw: dict) -> dict:
         raise HTTPException(status_code=422, detail="gross amount must be a number") from None
     if gross < 0:
         raise HTTPException(status_code=422, detail="gross amount must not be negative")
+    shipping = _optional_amount(raw.get("shipping"), "shipping")
+    gst = _optional_amount(raw.get("gst"), "GST")
+    net_text = str(raw.get("net") or "").strip()
+    if net_text:
+        net = _optional_amount(net_text, "net")
+        base = net
+    else:
+        base = round(gross - shipping - gst, 2)
+    if base < 0:
+        raise HTTPException(status_code=422, detail="net amount must not be negative")
     currency = _currency_code(str(raw.get("currency") or ""))
     if not currency:
         raise HTTPException(status_code=422, detail="currency is required")
@@ -619,6 +645,87 @@ def _validated_row(raw: dict) -> dict:
     shop = _find_shop(str(raw.get("shop") or "").strip())
     if shop is None:
         raise HTTPException(status_code=422, detail="shop was not found")
+    window = raw.get("click_window_days")
+    if window not in (None, "", "7", 7):
+        raise HTTPException(status_code=422, detail="click window must be 7 days")
+    code_link = code_platform = None
+    if code_cell:
+        code_link, code_platform = _resolve_import_code(shop, code_cell)
+    url_link = None
+    if link_cell:
+        url_link, _platform = _resolve_import_code(shop, link_cell)
+    if code_link is not None and url_link is not None:
+        if code_link["creator_id"] == url_link["creator_id"]:
+            link = code_link
+            method = "link+code"
+        else:
+            # A code and a click for different Creatrs: the code is the one credit.
+            link = code_link
+            method = "code"
+        attributed = True
+    elif code_link is not None:
+        link = code_link
+        method = "code"
+        # A unique discount code credits the sale without a click in the last 7 days.
+        attributed = True
+    else:
+        link = url_link
+        method = "link"
+        attributed = _clicked_within_window(link, attribution_date)
+    direct = None
+    if method == "link" and winning_click(link, attribution_date) is None:
+        params = _query_params(link_cell)
+        if params.get("plantr") or params.get("s") or params.get("c"):
+            direct = {"s": params.get("s"), "c": params.get("c")}
+    reporting = classify_sale(
+        method=method,
+        link=link,
+        order_date=attribution_date,
+        code_platform=code_platform if method in {"code", "link+code"} else None,
+        direct=direct,
+    )
+    kept = {key: value for key, value in raw.items() if key != "password"}
+    kept["reported_gross"] = round(gross, 2)
+    kept["commission_base"] = base
+    return {
+        "order_id": order_id[:128],
+        "date": attribution_date,
+        "gross": round(gross, 2),
+        "net_base": base,
+        "shipping": shipping,
+        "gst": gst,
+        "currency": currency,
+        "shop_id": shop["id"],
+        "country": shop.get("country"),
+        "market": shop.get("market"),
+        "link": link,
+        "click_window_days": 7,
+        "click_window_source": method,
+        "attributed": attributed,
+        "source_platform": reporting["source_platform"],
+        "channel_kind": reporting["channel_kind"],
+        "attribution_note": reporting["platform_note"],
+        "raw": kept,
+    }
+
+
+def _optional_amount(value, label: str) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        amount = float(text)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{label} must be a number") from None
+    if amount < 0:
+        raise HTTPException(status_code=422, detail=f"{label} must not be negative")
+    return round(amount, 2)
+
+
+def _resolve_import_code(shop: dict, cell: str):
+    code = _code_from_cell(cell)
+    if not code:
+        raise HTTPException(status_code=422, detail="code or link is required")
     link = _find_link_by_code(code)
     code_platform = None
     if link is None and db.configured():
@@ -627,44 +734,26 @@ def _validated_row(raw: dict) -> dict:
             if found is not None:
                 link = _link_dict(found)
     if link is None:
+        wanted = code.upper()
+        if db.configured():
+            with db.session_scope() as session:
+                row = session.scalar(
+                    select(CreatorProductLink).where(func.upper(CreatorProductLink.discount_code) == wanted)
+                )
+                if row is not None:
+                    link = _link_dict(row)
+        else:
+            row = next(
+                (item for item in db.memory_creator_product_links if (item.discount_code or "").upper() == wanted),
+                None,
+            )
+            if row is not None:
+                link = _link_dict(row)
+    if link is None:
         raise HTTPException(status_code=422, detail=f"Unknown code '{code}'")
     if link["shop_id"] != shop["id"]:
         raise HTTPException(status_code=422, detail="code belongs to a different shop")
-    window = raw.get("click_window_days")
-    if window not in (None, "", "7", 7):
-        raise HTTPException(status_code=422, detail="click window must be 7 days")
-    source_cell = str(raw.get("code") or raw.get("link") or "")
-    click_source = "link" if _cell_is_link(source_cell) else "code"
-    attributed = _clicked_within_window(link, attribution_date)
-    direct = None
-    if click_source == "link" and winning_click(link, attribution_date) is None:
-        params = _query_params(source_cell)
-        if params.get("plantr") or params.get("s") or params.get("c"):
-            direct = {"s": params.get("s"), "c": params.get("c")}
-    reporting = classify_sale(
-        method="code" if click_source == "code" else "link",
-        link=link,
-        order_date=attribution_date,
-        code_platform=code_platform if click_source == "code" else None,
-        direct=direct,
-    )
-    return {
-        "order_id": order_id[:128],
-        "date": attribution_date,
-        "gross": round(gross, 2),
-        "currency": currency,
-        "shop_id": shop["id"],
-        "country": shop.get("country"),
-        "market": shop.get("market"),
-        "link": link,
-        "click_window_days": 7,
-        "click_window_source": click_source,
-        "attributed": attributed,
-        "source_platform": reporting["source_platform"],
-        "channel_kind": reporting["channel_kind"],
-        "attribution_note": reporting["platform_note"],
-        "raw": {key: value for key, value in raw.items() if key != "password"},
-    }
+    return link, code_platform
 
 
 def _write_order(parsed: dict) -> dict:
@@ -679,10 +768,12 @@ def _write_order(parsed: dict) -> dict:
         country=parsed["country"],
         market=parsed["market"],
         external_order_id=parsed["order_id"],
-        gmv_gross=parsed["gross"],
+        gmv_gross=parsed["net_base"],
         refunded_amount=0,
         cancelled_amount=0,
-        net_gmv=round(parsed["gross"] - 0 - 0, 2),
+        net_gmv=parsed["net_base"],
+        shipping_excluded=parsed.get("shipping") or 0,
+        tax_excluded=parsed.get("gst") or 0,
         currency=parsed["currency"],
         creator_id=link.get("creator_id"),
         product_id=link.get("product_id"),
@@ -693,7 +784,7 @@ def _write_order(parsed: dict) -> dict:
         click_window_source=parsed["click_window_source"],
         settlement_status="imported",
         fee_revenue=0,
-        ingest_source="csv",
+        ingest_source=parsed.get("ingest_source") or "csv",
         raw_payload=parsed["raw"],
         attributed=parsed["attributed"],
         attribution_method=parsed["click_window_source"],
@@ -740,7 +831,7 @@ def _emit_sale(shop, parsed, link) -> None:
         actor="operator",
         source="csv_import",
         order_id=parsed["order_id"],
-        gross=parsed["gross"],
+        gross=parsed["net_base"],
         currency=parsed["currency"],
         creator_id=link.get("creator_id"),
         shop_id=parsed["shop_id"],

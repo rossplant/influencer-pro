@@ -25,6 +25,7 @@ import billing_config
 import catalogue
 import db
 import events
+import manual_reporting
 import scoring
 import services
 import stripe_billing
@@ -187,6 +188,7 @@ def save_product(
     source: str = "manual",
     as_draft: bool = False,
 ) -> str:
+    manual_reporting.require_trading(shop_profile(shop_id))
     title = (title or "").strip()
     if not title:
         raise HTTPException(status_code=422, detail="Title is required")
@@ -303,6 +305,7 @@ def save_product(
 
 
 def run_match(shop_id: str, product_id: str) -> dict:
+    manual_reporting.require_trading(shop_profile(shop_id))
     stored = _owned_product(shop_id, product_id)
     if stored is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -417,7 +420,9 @@ def update_creator_categories(creator_id: str, active: list[str], desired: list[
 
 def creator_offers(creator_id: str) -> list[dict]:
     offers = []
-    items = _offer_items(creator_id, pending=True) + _accepted_items(creator_id=creator_id)
+    items = manual_reporting.filter_for_creators(
+        _offer_items(creator_id, pending=True) + _accepted_items(creator_id=creator_id)
+    )
     for item in items:
         brief = _brief_for(item)
         points = []
@@ -430,6 +435,8 @@ def creator_offers(creator_id: str) -> list[dict]:
         item["talking_points"] = points
         item["brief"] = brief.get("content") if brief else None
         link = _link_for(item.get("creator_id"), item.get("product_id"))
+        flags = manual_reporting.shop_flags(item.get("shop_id"))
+        item["manual_reporting"] = manual_reporting.is_manual(flags)
         item["discount_code"] = link.get("discount_code") if link else None
         item["tracking_path"] = link.get("tracking_path") if link else None
         item["direct_url"] = link.get("direct_url") if link else None
@@ -439,7 +446,7 @@ def creator_offers(creator_id: str) -> list[dict]:
 
 
 def creator_links(creator_id: str) -> list[dict]:
-    return attribution.list_links(shop_id=None, creator_id=creator_id)
+    return manual_reporting.filter_for_creators(attribution.list_links(shop_id=None, creator_id=creator_id))
 
 
 def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
@@ -467,14 +474,18 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
         banner = "<p class='banner'>Viewing as this shop.</p>"
     if data["locked"] and page != "profile":
         banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
-    nav = """
+    sales_link = ""
+    if shop.get("sales_reporting") == "manual":
+        sales_link = '<a href="/seller/sales">Sales report</a>'
+    nav = f"""
     <nav>
       <a href="/seller/profile">Profile</a>
       <a href="/seller/products">Products</a>
-      <a href="/seller/find">Find creators</a>
+      <a href="/seller/find">Find Creatrs</a>
       <a href="/seller/accepted">Accepted</a>
       <a href="/seller/campaigns">Campaigns</a>
       <a href="/seller/billing">Billing</a>
+      {sales_link}
     </nav>
     """
     content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
@@ -523,19 +534,53 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
         selected = " selected" if slug == current else ""
         options.append(f"<option value='{html.escape(slug)}'{selected}>{html.escape(label)}</option>")
     banner = f"<p class='banner'>{html.escape(error)}</p>" if error else ""
+    prompt = ""
+    if shop.get("sales_reporting") not in {"manual", "shopify_sync"}:
+        prompt = "<p class='banner' id='shopify-prompt'>Please answer this. It decides how sales are reported to Creatrs.</p>"
+    yes = shop.get("sells_on_shopify") is True or shop.get("sales_reporting") == "shopify_sync"
+    no = shop.get("sells_on_shopify") is False or shop.get("sales_reporting") == "manual"
+    yes_checked = " checked" if yes else ""
+    no_checked = " checked" if no and not yes else ""
+    domain_hidden = "" if yes else " hidden"
+    domain_value = html.escape(shop.get("shopify_domain") or "")
     return f"""
     <h1>{html.escape(shop['name'])}</h1>
     <p>The account name above is the name from your invite. The business name is the trading name, and you can change it here.</p>
     {banner}
+    {prompt}
     <form method="post" action="/seller/profile">
       <input type="hidden" name="csrf_token" value="{csrf}">
       <label>Business name <input name="business_name" value="{html.escape(shop.get('business_name') or '')}" autocomplete="organization"></label>
       <label>ABN (optional) <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}"></label>
       <label>Primary category <select name="primary_category">{''.join(options)}</select></label>
       <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
-      <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
+      <fieldset>
+        <legend>Do you sell on Shopify?</legend>
+        <label><input type="radio" name="sells_on_shopify" value="yes" required{yes_checked}> Yes</label>
+        <label><input type="radio" name="sells_on_shopify" value="no"{no_checked}> No</label>
+      </fieldset>
+      <div id="shopify-domain-field"{domain_hidden}>
+        <label>Shopify domain <input id="shopify-domain" name="shopify_domain" value="{domain_value}" placeholder="the-store.myshopify.com" pattern="[a-z0-9][a-z0-9-]*\\.myshopify\\.com"></label>
+        <p>Use the address that ends in .myshopify.com. https:// and a trailing slash are fine.</p>
+      </div>
       <button type="submit">Save profile</button>
     </form>
+    <script>
+    (function () {{
+      var field = document.getElementById("shopify-domain-field");
+      var input = document.getElementById("shopify-domain");
+      function sync() {{
+        var yes = document.querySelector('input[name="sells_on_shopify"][value="yes"]');
+        var on = !!(yes && yes.checked);
+        if (field) field.hidden = !on;
+        if (input) input.required = on;
+      }}
+      document.querySelectorAll('input[name="sells_on_shopify"]').forEach(function (radio) {{
+        radio.addEventListener("change", sync);
+      }});
+      sync();
+    }})();
+    </script>
     """
 
 
@@ -565,7 +610,9 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
         first = f"<p class='curation' id='first-product'>{html.escape(catalogue.FIRST_PRODUCT_COPY)}</p>"
     edit = data.get("edit") or {}
     form = ""
-    if not data.get("locked"):
+    if manual_reporting.needs_approval(shop):
+        form = f"<p class='banner' id='manual-hold'>{html.escape(manual_reporting.TRADING_HOLD)}</p>"
+    elif not data.get("locked"):
         commission = edit.get("commission_rate")
         commission_value = "" if commission is None else str(commission)
         form = f"""
@@ -717,6 +764,7 @@ def _picked_rows(form, *, all_rows: bool = False) -> list[dict]:
 
 
 def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) -> int:
+    manual_reporting.require_trading(shop_profile(shop_id))
     if not as_draft:
         for row in rows:
             catalogue.require_curation(row.get("why_chosen"), row.get("value_to_creators"), row.get("commission_text"))
@@ -740,6 +788,58 @@ def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) ->
             as_draft=as_draft,
         )
     return len(rows)
+
+
+def _sales_page(shop: dict, csrf: str, data: dict) -> str:
+    if shop.get("sales_reporting") == "shopify_sync":
+        return f"<h1>Sales report</h1><p>{html.escape(manual_reporting.SHOPIFY_UPLOAD_BLOCK)}</p>"
+    if shop.get("sales_reporting") != "manual":
+        return (
+            "<h1>Sales report</h1>"
+            "<p>Answer no to Do you sell on Shopify on your profile before sending a sales report.</p>"
+        )
+    view = data.get("report") or {}
+    errors = data.get("errors") or []
+    error_html = ""
+    if errors:
+        items = "".join(f"<li>{html.escape(str(item))}</li>" for item in errors)
+        error_html = f"<div class='banner' id='sales-errors'><p>This file was not saved.</p><ul>{items}</ul></div>"
+    status = ""
+    if view.get("status_label"):
+        reason = ""
+        if view.get("status") == "rejected" and view.get("reason"):
+            reason = f" {html.escape(str(view['reason']))}"
+        summary = f" {html.escape(str(view.get('summary') or ''))}" if view.get("summary") else ""
+        status = (
+            f"<p id='sales-status'><strong>{html.escape(view['status_label'])}.</strong>{summary}{reason}</p>"
+        )
+    else:
+        status = "<p id='sales-status'>No sales report for this month yet.</p>"
+    period = html.escape(str(view.get("period") or data.get("period") or ""))
+    month = html.escape(str(view.get("month_label") or ""))
+    return f"""
+    <h1>Sales report</h1>
+    <p>Upload one CSV for the month, using the template. CSV only, up to 1MB and 500 rows. A new file replaces the one we have while it is still Received.</p>
+    <p><a href="/seller/sales/template">Download the template</a></p>
+    {error_html}
+    <p>{month}</p>
+    {status}
+    <form method="get" action="/seller/sales">
+      <label>Reporting month <input type="month" name="period" value="{period}" required></label>
+      <button type="submit">Show month</button>
+    </form>
+    <form method="post" action="/seller/sales" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <input type="hidden" name="period" value="{period}">
+      <label>Sales CSV <input type="file" name="file" accept=".csv,text/csv" required></label>
+      <button type="submit">Upload sales</button>
+    </form>
+    <form method="post" action="/seller/sales/none">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <input type="hidden" name="period" value="{period}">
+      <button type="submit">No sales this month</button>
+    </form>
+    """
 
 
 def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
@@ -772,7 +872,9 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
                 """
             cards.append(f"<article><h3>{handle}</h3><p>Score {html.escape(str(match.get('score')))}</p><ul>{reasons}</ul><pre>{estimates}</pre>{actions}</article>")
         match_form = ""
-        if not data.get("locked") and ready:
+        if manual_reporting.needs_approval(shop):
+            match_form = f"<p class='banner' id='manual-hold'>{html.escape(manual_reporting.TRADING_HOLD)}</p>"
+        elif not data.get("locked") and ready:
             match_form = f"""
         <form method="post" action="/seller/find">
           <input type="hidden" name="csrf_token" value="{csrf}">
@@ -784,10 +886,10 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         if not ready:
             waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for creators, and a commission.</p>"
         return f"""
-        <h1>Find creators</h1>
+        <h1>Find Creatrs</h1>
         {waiting}
         {match_form}
-        {''.join(cards) or '<p>Run a match to see ranked creators.</p>'}
+        {''.join(cards) or '<p>Run a match to see ranked Creatrs.</p>'}
         """
     rows = []
     for item in data.get("accepted") or []:
@@ -817,7 +919,9 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         """
     if page == "billing":
         return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
-    return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
+    if page == "sales":
+        return _sales_page(shop, csrf, data)
+    return f"<h1>Accepted Creatrs</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
 
 
 def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
@@ -852,9 +956,13 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                     f"<input type='hidden' name='csrf_token' value='{csrf}'>"
                     "<button type='submit'>Accept offer</button></form>"
                 )
+            note = ""
+            if offer.get("manual_reporting"):
+                note = f"<p class='banner manual-note'>{html.escape(manual_reporting.MANUAL_LABEL)}</p>"
             blocks.append(
                 f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
+                f"{note}"
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
