@@ -355,16 +355,14 @@ def backfill_accepted_links() -> int:
 
 
 def product_destination(product_id: str) -> Optional[str]:
+    import catalogue
+
     if db.configured():
         with db.session_scope() as session:
             product = session.get(Product, product_id)
-            attributes = product.attributes if product is not None else None
     else:
         product = db.memory_products.get(product_id)
-        attributes = getattr(product, "attributes", None) if product is not None else None
-    if not isinstance(attributes, dict):
-        return None
-    return safe_destination(attributes.get("url") or attributes.get("product_url"))
+    return safe_destination(catalogue.product_public_url(product))
 
 
 def list_links(*, shop_id: Optional[str], creator_id: Optional[str]) -> list[dict]:

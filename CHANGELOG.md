@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.19.0
+
+Seller onboarding and a curated catalogue for the pilot. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.
+
+`shops.name` stays the account name entered on the invite. `shops.business_name` is the trading name. It is copied from the pilot application and can be edited. The shop also stores an optional ABN (same checksum as the apply form), an editable primary category, a public website (`store_url`), and the existing Shopify domain.
+
+### Curated catalogue
+
+- A product stores `url` (filled from `attributes.url`, which is still written), `why_chosen`, `value_to_creators`, and an optional `image_url`. There is no image upload.
+- The seller form requires why the product was chosen, the value for creators, and a commission. Older products missing why or value show "Complete this product".
+- Only a product with all three is offered on Find creators, and only then can a brief be stored for it.
+- Starter and Growth no longer block new products at 5 and 50. Those numbers are still written on usage events as `product_limit`. Scale is unchanged: no product cap, 100 matches a month. Campaign and match caps still block, and pilots are still allowed through.
+- `CATALOGUE_FEE_THRESHOLD` (default 10) is a warning only. Above it, the products page says extra products may attract a fee after the pilot. Nothing is blocked and nothing is charged. Crossing the threshold writes `catalogue_fee_threshold` once.
+
+### CSV pick-to-import
+
+- A subscribed seller can upload a products CSV (`title`, `url`, `price`, `category`, `image_url`, optional `commission`), up to 500 rows and 1MB, and download a template.
+- The preview has nothing ticked. Ticked rows can be saved as drafts (`source=csv`) or finished one by one. Drafts are not used for matching until they are complete.
+
 ## 0.18.0
 
 The app version stays 0.18.0, already set on the Shopify order sync branch. This entry is the source-platform and Spark Ads work. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.

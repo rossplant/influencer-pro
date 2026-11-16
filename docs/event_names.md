@@ -24,10 +24,11 @@ Shop events copy `plan_tier` and `plan_status` into `properties`. These counters
 | `profile_completed` | Emitted directly for the same milestone | `creators.profile_completed_at` the first time, and only when the profile is complete. |
 
 A profile is complete when it has a handle, at least one `active_categories` slug, at least one preferred promotion style, and at least one platform. Desired categories and performance metrics are optional, so they do not gate this timestamp.
-| `product_enriched` | `POST /enrich` when a shop or product id resolves and the catalogue cap allows it | `products_enriched` +1, `first_enrich_at` the first time. Re-enriching an existing product still counts as an enrichment and does not add a catalogue row. |
+| `product_enriched` | `POST /enrich` when a shop or product id resolves | `products_enriched` +1, `first_enrich_at` the first time. Re-enriching an existing product still counts as an enrichment and does not add a catalogue row. A brief is stored only when the product has why, value, and a commission. |
 | `match_run` | `POST /match` after a shortlist is stored | `matches_run` +1, `first_match_at` the first time, `last_match_at` every time. Starter cap is 5 per UTC month. |
 | `brief_sent` | `POST /briefs/{id}/sent`, including `actor="operator"` | `briefs_generated` +1, `first_brief_at` the first time, `last_campaign_at` every time, `briefs.sent_at` the first time. Enrichment does not emit this. |
-| `usage_limit_hit` | A shop is already at a plan cap | No usage counter. `limit_hit` is true. Pilots are allowed through. Other shops receive HTTP 402. |
+| `usage_limit_hit` | A shop is already at a campaign or match cap | No usage counter. `limit_hit` is true. Pilots are allowed through. Other shops receive HTTP 402. Product count is not a hard cap. |
+| `catalogue_fee_threshold` | A new product takes the catalogue from at or under `CATALOGUE_FEE_THRESHOLD` to above it | No usage counter and no charge. Logged once per crossing. |
 | `shopify_connected` | Emitted when a shop's Shopify connection is recorded | `shopify_connected_at` the first time. |
 | `attributed_sale` | Emitted when an attributed order is recorded | `first_attributed_sale_at` the first time. |
 | `payment_received` | Emitted when the first paid subscription is recorded | `first_paid_at` the first time. |

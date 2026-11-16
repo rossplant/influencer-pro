@@ -112,6 +112,10 @@ class Shop(Base):
     # Opt-in to marketing email. Separate from marketing_consent, which is the cookie and ad-platform choice.
     email_marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Trading name from the pilot application. `name` stays the account name entered at join.
+    business_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    abn: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
+    store_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     briefs_generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -212,6 +216,11 @@ class Product(Base):
     attributes: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
     claims: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
     commission_rate: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    # Public product URL. Kept in step with attributes.url so older readers still work.
+    url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    why_chosen: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    value_to_creators: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
