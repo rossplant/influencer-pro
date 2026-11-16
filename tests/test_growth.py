@@ -42,9 +42,14 @@ def test_landing_copy_is_approved_and_privacy_stays_draft(monkeypatch):
 
 def test_first_touch_is_not_overwritten(monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-    first = client.get("/founding-curators?utm_source=tiktok&utm_campaign=founding")
+    consent = {"Cookie": "plantr_consent=marketing"}
+    first = client.get("/founding-curators?utm_source=tiktok&utm_campaign=founding", headers=consent)
     assert first.status_code == 200
-    second = client.get("/founding-curators?utm_source=meta")
+    stored = first.cookies.get("plantr_attr")
+    second = client.get(
+        "/founding-curators?utm_source=meta",
+        headers={"Cookie": f"plantr_consent=marketing; plantr_attr={stored}"},
+    )
     cookie = second.cookies.get("plantr_attr") or first.cookies.get("plantr_attr")
     assert cookie
     assert "tiktok" in cookie
@@ -86,6 +91,7 @@ def test_approval_numbers_founding_curators_and_logs_internally(monkeypatch):
             "categories": "home",
             "contact": "@ada",
             "age_confirmed": "yes",
+            "paid_service_confirmed": "yes",
             "event_id": "form-1",
         },
     )
@@ -218,6 +224,7 @@ def test_waitlisted_application_still_emits_apply_submit(monkeypatch):
             "categories": "home",
             "contact": "@bea",
             "age_confirmed": "yes",
+            "paid_service_confirmed": "yes",
             "event_id": event_id,
         },
     )
@@ -247,7 +254,10 @@ def test_pixels_render_only_with_id_and_consent(monkeypatch):
 
 
 def test_platform_cookies_are_captured():
-    response = client.get("/pilot-sellers", headers={"Cookie": "_fbp=fb.1.2.3; _fbc=fb.1.9.clid; _ttp=ttp-1"})
+    response = client.get(
+        "/pilot-sellers",
+        headers={"Cookie": "plantr_consent=marketing; _fbp=fb.1.2.3; _fbc=fb.1.9.clid; _ttp=ttp-1"},
+    )
     cookie = response.cookies.get("plantr_attr")
     assert "fbp" in cookie
     assert "ttp-1" in cookie or "ttp" in cookie

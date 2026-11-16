@@ -22,18 +22,32 @@ def main() -> int:
     import stripe
 
     client = stripe.StripeClient(key)
+    products = {}
     for tier_name, spec in {**billing_config.SELLER_TIERS, **billing_config.CREATOR_TIERS}.items():
         if not spec.get("lookup_month"):
             continue
         product = _find_or_create_product(client, spec["label"], tier_name, spec["audience"])
+        products[(spec["audience"], tier_name)] = product
         _find_or_create_price(client, product, spec["lookup_month"], spec["amount_month_cents"], "month")
         _find_or_create_price(client, product, spec["lookup_year"], spec["amount_year_cents"], "year")
     for coupon_id, spec in billing_config.COUPONS.items():
-        _find_or_create_coupon(client, coupon_id, spec)
+        _find_or_create_coupon(client, coupon_id, spec, products)
+    for code in billing_config.RETIRED_PROMOTION_CODES:
+        _deactivate_promo(client, code)
     for code, spec in billing_config.PROMOTION_CODES.items():
         _find_or_create_promo(client, code, spec)
     print("Stripe sandbox catalog is ready.")
     return 0
+
+
+def _deactivate_promo(client, code):
+    """Turn off every active promotion code with this code. Returns how many were turned off."""
+    found = client.promotion_codes.list({"code": code, "active": True, "limit": 100})
+    count = 0
+    for row in _rows(found):
+        client.promotion_codes.update(_stripe_id(row), {"active": False})
+        count += 1
+    return count
 
 
 def _find_or_create_product(client, name, tier, audience):
@@ -66,7 +80,7 @@ def _find_or_create_price(client, product_id, lookup_key, cents, interval):
     return _stripe_id(created)
 
 
-def _find_or_create_coupon(client, coupon_id, spec):
+def _find_or_create_coupon(client, coupon_id, spec, products=None):
     try:
         existing = client.coupons.retrieve(coupon_id)
     except Exception:
@@ -90,15 +104,22 @@ def _find_or_create_coupon(client, coupon_id, spec):
         payload["percent_off"] = spec["percent_off"]
     if spec.get("duration_in_months"):
         payload["duration_in_months"] = spec["duration_in_months"]
+    if spec.get("applies_to"):
+        ids = [(products or {}).get(tuple(key)) for key in spec["applies_to"]]
+        if not all(ids):
+            raise SystemExit(f"Coupon {coupon_id} needs products {spec['applies_to']} to exist first.")
+        payload["applies_to"] = {"products": ids}
     client.coupons.create(payload)
     return coupon_id
 
 
 def _find_or_create_promo(client, code, spec):
-    found = client.promotion_codes.list({"code": code, "limit": 1})
-    data = _rows(found)
-    if data:
-        return _stripe_id(data[0])
+    """Reuse the active code when it points at the configured coupon. Otherwise retire it and make a new one."""
+    found = client.promotion_codes.list({"code": code, "active": True, "limit": 10})
+    for row in _rows(found):
+        if _promo_coupon(row) == spec["coupon"]:
+            return _stripe_id(row)
+        client.promotion_codes.update(_stripe_id(row), {"active": False})
     created = client.promotion_codes.create(
         {
             "code": code,
@@ -108,6 +129,18 @@ def _find_or_create_promo(client, code, spec):
         }
     )
     return _stripe_id(created)
+
+
+def _promo_coupon(row):
+    promotion = row.get("promotion") if isinstance(row, dict) else getattr(row, "promotion", None)
+    coupon = None
+    if promotion is not None:
+        coupon = promotion.get("coupon") if isinstance(promotion, dict) else getattr(promotion, "coupon", None)
+    if coupon is None:
+        coupon = row.get("coupon") if isinstance(row, dict) else getattr(row, "coupon", None)
+    if coupon is not None and not isinstance(coupon, str):
+        coupon = coupon.get("id") if isinstance(coupon, dict) else getattr(coupon, "id", None)
+    return coupon
 
 
 def _rows(result):

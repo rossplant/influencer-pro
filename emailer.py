@@ -1,6 +1,6 @@
-"""Email templates with a logging backend.
+"""Email templates. Every message is logged, then handed to mailer.py.
 
-No message is delivered. A provider has to be connected before launch.
+Until RESEND_API_KEY and EMAIL_FROM are set, nothing is delivered.
 """
 
 from __future__ import annotations
@@ -10,12 +10,13 @@ import uuid
 from typing import Optional
 
 import db
+import mailer
 from models import EmailMessage, utcnow
 
 logger = logging.getLogger("plantr.email")
 
 PROVIDER_REQUIRED = (
-    "Email is logged only. Connect an email provider before launch. Nothing is sent."
+    "Email is logged only. Set RESEND_API_KEY and EMAIL_FROM to send. Nothing is sent."
 )
 
 TEMPLATES = {
@@ -27,9 +28,35 @@ TEMPLATES = {
         "subject": "Your Plantr Collab application",
         "body": "Your application was approved. Use invite {code}. {url}",
     },
-    "pilot_ending_7_days": {
-        "subject": "Your Plantr Collab pilot ends in 7 days",
-        "body": "Your pilot window ends on {ends}. Add a payment method if you want to stay on the paid plan.",
+    "pilot_ending": {
+        "subject": "Your Plantr Collab pilot ends on {ends}",
+        "body": (
+            "Your free Plantr Collab pilot ends on {ends}. After that Plantr Collab is a paid service. "
+            "{offer}If you have not chosen a plan, you will not be charged. "
+            "If you have subscribed, your first charge is on {ends}; cancel before then in Billing and you will not be charged. "
+            "Prices exclude GST."
+        ),
+    },
+    "first_charge_7_days": {
+        "subject": "Your first Plantr Collab charge is on {charge_date}",
+        "body": (
+            "Your free period ends on {charge_date}. We will then charge {amount} ex GST for {plan}, "
+            "renewing automatically every {unit} until you cancel. Cancel before {charge_date} in Billing and you will not be charged."
+        ),
+    },
+    "annual_renewal_14_days": {
+        "subject": "Your Plantr Collab annual plan renews on {renews}",
+        "body": (
+            "Your {plan} annual plan renews on {renews} at {amount} ex GST for the year. "
+            "Cancel before {renews} in Billing if you do not want to renew."
+        ),
+    },
+    "discount_ending_14_days": {
+        "subject": "Your Plantr Collab discount ends on {ends}",
+        "body": (
+            "Your {code} discount on {plan} ends on {ends}. From then you will pay {amount} ex GST per {unit}, "
+            "renewing automatically until you cancel. You can change or cancel your plan in Billing."
+        ),
     },
     "converted": {
         "subject": "Your Plantr Collab plan is active",
@@ -40,7 +67,7 @@ TEMPLATES = {
 
 def send(template_key: str, to_email: str, **values) -> dict:
     spec = TEMPLATES[template_key]
-    subject = spec["subject"]
+    subject = spec["subject"].format(**values)
     body = spec["body"].format(**values)
     row = {
         "id": str(uuid.uuid4()),
@@ -55,8 +82,16 @@ def send(template_key: str, to_email: str, **values) -> dict:
             session.add(EmailMessage(**row))
     else:
         db.memory_emails.append(row)
-    logger.info("email logged template=%s to=%s provider=none", template_key, _mask(to_email))
-    return {"logged": True, "sent": False, "template": template_key, "notice": PROVIDER_REQUIRED}
+    sender = values.pop("_mailer", None) if "_mailer" in values else None
+    result = (sender or mailer.default()).send(
+        to=to_email, subject=subject, text=body, idempotency_key=f"{template_key}:{row['id']}"
+    )
+    sent = result.get("status") == mailer.SENT
+    logger.info("email template=%s to=%s status=%s", template_key, _mask(to_email), result.get("status"))
+    out = {"logged": True, "sent": sent, "status": result.get("status"), "provider_id": result.get("id"), "template": template_key}
+    if not sent:
+        out["notice"] = PROVIDER_REQUIRED if result.get("status") == mailer.NO_PROVIDER else "Email provider returned an error."
+    return out
 
 
 def _mask(email: str) -> str:

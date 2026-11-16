@@ -2,6 +2,7 @@
 
 Prices are AUD and shown ex GST. Stripe Tax is not enabled. Annual prices are
 ten months, which is two months free. Nothing here is a live Stripe key.
+The pilot runs 20 Nov 2026 to 20 Jan 2027.
 """
 
 from __future__ import annotations
@@ -89,30 +90,23 @@ CREATOR_TIERS = {
 # Shop plan names the API already accepts. "free" uses the Starter caps.
 SHOP_TIER_ALIASES = {"free": "starter"}
 
+# Coupon ids are Stripe ids. A coupon's amount, duration and applies_to cannot be
+# changed in Stripe, so a changed spec gets a new id and the old one is retired.
+# applies_to names the plan tiers whose Stripe product may take the coupon.
 COUPONS = {
-    # Kept so an existing FOUNDING50 code still resolves. New Foundrs use the A$10 amount_off coupon.
-    "founding_curator_50_12mo": {
-        "name": "Foundr 50% for 12 months",
-        "percent_off": 50,
-        "duration": "repeating",
-        "duration_in_months": 12,
-    },
-    "foundr_10aud_12mo": {
-        "name": "Foundr A$10 off for 12 months",
+    "foundr9_curatr_month_12mo": {
+        "name": "Foundr A$10 off Curatr for 12 months",
         "amount_off": 1000,
         "duration": "repeating",
         "duration_in_months": 12,
+        "applies_to": [("creator", "curator")],
     },
-    "seller_growth_50_3mo": {
-        "name": "Growth 50% for 3 months",
+    "pilotgrowth_growth_50_3mo": {
+        "name": "Pilot Growth 50% for 3 months",
         "percent_off": 50,
         "duration": "repeating",
         "duration_in_months": 3,
-    },
-    "curator_sale_waiver": {
-        "name": "Waiver after 5 sales",
-        "percent_off": 100,
-        "duration": "once",
+        "applies_to": [("seller", "growth")],
     },
     "elite_grant_3mo": {
         "name": "Trendsettr 100% for 3 months",
@@ -122,24 +116,34 @@ COUPONS = {
     },
 }
 
+# Old Stripe coupons and codes. The setup script deactivates these promotion codes.
+RETIRED_COUPONS = ("founding_curator_50_12mo", "foundr_10aud_12mo", "seller_growth_50_3mo", "curator_sale_waiver")
+RETIRED_PROMOTION_CODES = ("FOUNDING50",)
+
+# Codes are applied by the app for eligible accounts. They are not typed at Stripe
+# Checkout. Each code is limited to one plan tier and one interval.
 PROMOTION_CODES = {
-    "FOUNDING50": {
-        "coupon": "founding_curator_50_12mo",
-        "campaign": "founding_curators",
-        "channel": "promo",
-        "max_redemptions": 50,
-    },
     "FOUNDR9": {
-        "coupon": "foundr_10aud_12mo",
+        "coupon": "foundr9_curatr_month_12mo",
         "campaign": "founding_curators",
         "channel": "promo",
         "max_redemptions": 50,
+        "role": "creator",
+        "tier": "curator",
+        "interval": "month",
+        "months": 12,
+        "discounted_month_cents": 900,
     },
     "PILOTGROWTH": {
-        "coupon": "seller_growth_50_3mo",
+        "coupon": "pilotgrowth_growth_50_3mo",
         "campaign": "seller_pilot",
         "channel": "promo",
         "max_redemptions": 10,
+        "role": "seller",
+        "tier": "growth",
+        "interval": "month",
+        "months": 3,
+        "discounted_month_cents": 3950,
     },
 }
 
@@ -150,7 +154,8 @@ PILOT_COHORTS = {
         "seat_cap": 10,
         "pilot_tier": "growth",
         "free_tier": "starter",
-        "post_coupon": "seller_growth_50_3mo",
+        "post_coupon": "pilotgrowth_growth_50_3mo",
+        "post_code": "PILOTGROWTH",
         "seat_env": "PILOT_SELLER_SEATS",
     },
     "founding_curators": {
@@ -159,12 +164,15 @@ PILOT_COHORTS = {
         "seat_cap": 50,
         "pilot_tier": "curator",
         "free_tier": "member",
-        "post_coupon": "foundr_10aud_12mo",
+        "post_coupon": "foundr9_curatr_month_12mo",
+        "post_code": "FOUNDR9",
         "seat_env": "PILOT_CURATOR_SEATS",
     },
 }
 
 WAIVER_SALES = 5
+# The 5-sale waiver is for Curatr only.
+WAIVER_TIERS = ("curator",)
 SURVEY_WEEK = 5
 CONVERSION_TARGET_DEFAULT = 0.30
 
@@ -224,30 +232,90 @@ def event_name(key: str) -> str:
     return override or EVENT_NAMES[key]
 
 
-def pilot_months() -> int:
-    """Length of the free pilot. A leftover PILOT_WEEKS value is not used."""
-    raw = os.getenv("PILOT_MONTHS", "2").strip() or "2"
+PILOT_TIMEZONE = "Australia/Sydney"
+# The pilot is free from 20 Nov 2026 until midday Sydney time on 20 Jan 2027.
+# Midday keeps every monthly invoice and card charge on the 20th in Sydney in
+# both AEDT and AEST, and matches "first charge on 20 January 2027".
+PILOT_START_DEFAULT = "2026-11-20T00:00:00+11:00"
+PILOT_END_DEFAULT = "2027-01-20T12:00:00+11:00"
+# The pilot-ending email goes out by 6 Jan 2027. The job sends it from this time.
+PILOT_REMINDER_DEFAULT = "2027-01-05T10:00:00+11:00"
+PILOT_LABEL = "20 November 2026 to 20 January 2027"
+PILOT_END_LABEL = "20 January 2027"
+
+
+def _env_moment(name: str, default: str):
+    from datetime import datetime, timezone
+
+    raw = os.getenv(name, "").strip() or default
     try:
-        months = int(raw)
+        moment = datetime.fromisoformat(raw)
     except ValueError:
-        months = 2
-    return max(1, months)
+        moment = datetime.fromisoformat(default)
+    if moment.tzinfo is None:
+        from zoneinfo import ZoneInfo
+
+        moment = moment.replace(tzinfo=ZoneInfo(PILOT_TIMEZONE))
+    return moment.astimezone(timezone.utc)
+
+
+def pilot_months() -> int:
+    """Whole months in the pilot (2). The dates come from pilot_start and pilot_end."""
+    return 2
 
 
 def pilot_start():
-    """Paid launch is this date plus pilot_months(). Default is 20 Nov 2026."""
-    from datetime import datetime, timezone
-
-    raw = os.getenv("PILOT_START", "2026-11-20").strip() or "2026-11-20"
-    try:
-        day = datetime.strptime(raw, "%Y-%m-%d")
-    except ValueError:
-        day = datetime(2026, 11, 20)
-    return day.replace(tzinfo=timezone.utc)
+    """20 Nov 2026, Sydney time. PILOT_START may override it with an ISO date."""
+    return _env_moment("PILOT_START", PILOT_START_DEFAULT)
 
 
 def pilot_end():
-    return add_months(pilot_start(), pilot_months())
+    """The trial end and first charge: 20 Jan 2027 12:00 Sydney. PILOT_END may override it."""
+    return _env_moment("PILOT_END", PILOT_END_DEFAULT)
+
+
+def pilot_reminder_at():
+    return _env_moment("PILOT_REMINDER_AT", PILOT_REMINDER_DEFAULT)
+
+
+def sydney_date_label(moment) -> str:
+    from zoneinfo import ZoneInfo
+
+    local = moment.astimezone(ZoneInfo(PILOT_TIMEZONE))
+    return f"{local.day} {local.strftime('%B %Y')}"
+
+
+def operator_legal_name() -> str:
+    """The legal operator shown on public pages. Unset means pilot applications stay closed."""
+    return os.getenv("OPERATOR_LEGAL_NAME", "").strip()
+
+
+def promo_spec(code: str) -> dict:
+    return PROMOTION_CODES.get((code or "").strip().upper(), {})
+
+
+def promo_allows(code: str, *, role: str, tier: str, interval: str) -> bool:
+    spec = promo_spec(code)
+    if not spec:
+        return False
+    return spec.get("role") == role and spec.get("tier") == tier and spec.get("interval") == interval
+
+
+def pilot_offer_code(role: str, account: dict, tier: str, interval: str) -> str:
+    """The post-pilot code an account gets automatically for this plan, or ""."""
+    account = account or {}
+    slug = str(account.get("signup_campaign") or "")
+    if role == "seller" and not slug and account.get("is_pilot"):
+        slug = "seller_pilot"
+    if role == "creator" and not slug and account.get("founding_number") not in (None, ""):
+        slug = "founding_curators"
+    cohort = PILOT_COHORTS.get(slug)
+    if cohort is None or cohort["role"] != role:
+        return ""
+    code = cohort.get("post_code") or ""
+    if not code or not promo_allows(code, role=role, tier=tier, interval=interval):
+        return ""
+    return code
 
 
 def add_months(moment, months: int):
@@ -354,7 +422,16 @@ def public_base_url(request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def price_label(cents: int) -> str:
+def amount_label(cents: int) -> str:
     dollars = cents / 100.0
-    text = f"{dollars:.0f}" if cents % 100 == 0 else f"{dollars:.2f}"
-    return f"A${text} ex GST"
+    text = f"{dollars:,.0f}" if cents % 100 == 0 else f"{dollars:,.2f}"
+    return f"A${text}"
+
+
+def price_label(cents: int) -> str:
+    return f"{amount_label(cents)} ex GST"
+
+
+def tier_spec(audience: str, tier: str) -> dict:
+    table = SELLER_TIERS if audience == "seller" else CREATOR_TIERS
+    return table.get((tier or "").strip().lower()) or {}

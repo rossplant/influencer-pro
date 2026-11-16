@@ -1,6 +1,7 @@
 """First-touch and last-touch attribution.
 
-The first visit is stored for 90 days and is never overwritten.
+The first visit is stored for 90 days and is never overwritten. The cookie is
+written only after the visitor allows marketing cookies.
 Last-touch updates on later visits. Click ids are kept with the touch.
 """
 
@@ -34,6 +35,14 @@ def observe(scope: dict) -> dict:
     if incoming or not stored:
         cookie = _cookie(touch, secure=scope.get("scheme") == "https")
     return {"touch": touch, "cookie": cookie}
+
+
+def consented_cookie(observed: dict, *, secure: bool) -> Optional[str]:
+    """The attribution cookie for a visitor who has just allowed marketing cookies."""
+    touch = (observed or {}).get("touch") or {}
+    if not touch.get("first") and not touch.get("last"):
+        return None
+    return _cookie(touch, secure=secure)
 
 
 def first_of(touch: Optional[dict]) -> dict:

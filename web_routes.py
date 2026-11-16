@@ -39,11 +39,26 @@ def register(app) -> None:
 
     @app.get("/join/{code}")
     def join_page(code: str, request: Request):
+        import legal
+
         opened = pilots.open_invite(code)
+        if not billing_config.operator_legal_name():
+            return HTMLResponse(_shell(f"<h1>You're invited.</h1><p>{legal.OPENING_SOON}</p>"))
         token = auth.issue_form_token("join")
-        age = ""
         if opened["role"] == "creator":
-            age = "<label><input name='age_confirmed' type='checkbox' value='yes' required> I am 18 or older</label>"
+            age = legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
+            boxes = legal.checkbox("terms_accepted", legal.CREATOR_JOIN_TERMS, required=True) + legal.checkbox(
+                "pilot_terms_accepted", legal.CREATOR_JOIN_PILOT, required=True
+            )
+            panel = legal.CREATOR_PANEL
+        else:
+            age = legal.checkbox("age_confirmed", legal.SELLER_AUTHORITY, required=True)
+            boxes = legal.checkbox("terms_accepted", legal.SELLER_JOIN_TERMS, required=True) + legal.checkbox(
+                "pilot_terms_accepted", legal.SELLER_JOIN_PILOT, required=True
+            )
+            panel = legal.SELLER_PANEL
+        boxes += legal.checkbox("email_consent", legal.EMAIL_CONSENT, required=False)
+        operator = billing_config.operator_legal_name()
         number = ""
         if opened.get("founding_number"):
             number = f"<p>Foundr #{opened['founding_number']}</p>"
@@ -58,8 +73,11 @@ def register(app) -> None:
           <label>Password <input name="password" type="password" minlength="12" required></label>
           <label>Categories <input name="categories"></label>
           {age}
+          <p>{panel}</p>
+          {boxes}
           <button type="submit">Continue</button>
         </form>
+        <p>Plantr Collab is operated by {operator}. <a href="/privacy">Privacy</a></p>
         """
         return HTMLResponse(_shell(body))
 
@@ -68,6 +86,10 @@ def register(app) -> None:
         form = await request.form()
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "join"):
             raise HTTPException(status_code=403, detail="CSRF check failed")
+        if not billing_config.operator_legal_name():
+            import legal
+
+            raise HTTPException(status_code=503, detail=legal.OPENING_SOON)
         result = pilots.join_with_invite(
             code,
             name=str(form.get("name") or ""),
@@ -77,6 +99,11 @@ def register(app) -> None:
             age_confirmed=str(form.get("age_confirmed") or "") == "yes",
             touch_state=request.scope.get("plantr_touch"),
             consent=tracking.consent_from_scope(request.scope),
+            terms_accepted=str(form.get("terms_accepted") or "") == "yes",
+            pilot_terms_accepted=str(form.get("pilot_terms_accepted") or "") == "yes",
+            email_consent=str(form.get("email_consent") or "") == "yes",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
         target = "/seller" if result["role"] == "seller" else "/creator"
         return RedirectResponse(target, status_code=303)
@@ -110,6 +137,15 @@ def register(app) -> None:
             samesite="lax",
             path="/",
         )
+        if allowed:
+            # The attribution cookie is written only now, with the UTMs from the page the visitor accepted on.
+            query = str(body.get("query") or "")[:2000].encode()
+            observed = touch.observe({**request.scope, "query_string": query})
+            cookie = touch.consented_cookie(observed, secure=request.url.scheme == "https")
+            if cookie:
+                response.headers.append("set-cookie", cookie)
+        else:
+            response.delete_cookie(touch.COOKIE, path="/")
         return response
 
     @app.post("/track/apply-start")
@@ -224,6 +260,22 @@ def register(app) -> None:
             raise HTTPException(status_code=401, detail="Admin session required")
         return stripe_billing.apply_sale_waiver(creator_id)
 
+    @app.post("/admin/api/reminders/run")
+    def run_reminders(request: Request):
+        if not auth.session_email(request):
+            raise HTTPException(status_code=401, detail="Admin session required")
+        import reminders
+
+        return reminders.run()
+
+    @app.get("/admin/api/reminders")
+    def list_reminders(request: Request):
+        if not auth.session_email(request):
+            raise HTTPException(status_code=401, detail="Admin session required")
+        import reminders
+
+        return {"reminders": reminders.preview()}
+
     @app.post("/admin/api/creators/{creator_id}/grant-elite")
     def grant_elite(creator_id: str, request: Request):
         if not auth.session_email(request):
@@ -254,7 +306,8 @@ class TouchMiddleware:
             return
         observed = touch.observe(scope)
         scope["plantr_touch"] = observed
-        cookie = observed.get("cookie")
+        # No attribution cookie until the visitor allows marketing cookies.
+        cookie = observed.get("cookie") if tracking.consent_from_scope(scope) else None
 
         async def send_wrapper(message):
             if cookie and message["type"] == "http.response.start":
@@ -310,6 +363,11 @@ async def _apply(request: Request, slug: str):
     form = await request.form()
     if not auth.form_token_ok(str(form.get("csrf_token") or ""), "apply"):
         raise HTTPException(status_code=403, detail="CSRF check failed")
+    kind = "creator" if slug == "founding_curators" else "seller"
+    if not billing_config.operator_legal_name():
+        import legal
+
+        return HTMLResponse(site_copy.landing_html(kind, thanks=legal.OPENING_SOON), status_code=503)
     result = pilots.apply(
         slug,
         name=str(form.get("name") or ""),
@@ -323,8 +381,12 @@ async def _apply(request: Request, slug: str):
         event_id=str(form.get("event_id") or ""),
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+        paid_service_confirmed=str(form.get("paid_service_confirmed") or "") == "yes",
+        authority_confirmed=str(form.get("authority_confirmed") or "") == "yes",
+        email_consent=str(form.get("email_consent") or "") == "yes",
+        business_name=str(form.get("business_name") or ""),
+        abn=str(form.get("abn") or ""),
     )
-    kind = "creator" if slug == "founding_curators" else "seller"
     message = "We have your application. It is reviewed by our team. This is not an open sign-up."
     if result["status"] == "waitlisted":
         message = "This cohort is full. You are on the waitlist."
@@ -348,18 +410,32 @@ async def _checkout(request: Request, role: str):
     path = "/seller/billing" if role == "seller" else "/creator/billing"
     context = stripe_billing.account_context(role, session["subject_id"])
     base = billing_config.public_base_url(request)
+    tier = str(form.get("tier") or "")
+    interval = str(form.get("interval") or "month")
+    if str(form.get("authorise_recurring") or "") != "yes":
+        raise HTTPException(status_code=422, detail="Please tick the box to authorise recurring payments")
+    trial_end = stripe_billing.pilot_trial_end(role, session["subject_id"])
     try:
         url = stripe_billing.checkout(
             role=role,
             subject_id=session["subject_id"],
-            tier=str(form.get("tier") or ""),
-            interval=str(form.get("interval") or "month"),
+            tier=tier,
+            interval=interval,
             success_url=f"{base}{path}",
             cancel_url=f"{base}{path}",
             promo_code=str(form.get("promo_code") or ""),
             invite_code=context["signup_code"],
             campaign=context["signup_campaign"],
-            trial_end=stripe_billing.pilot_trial_end(role, session["subject_id"]),
+            trial_end=trial_end,
+        )
+        stripe_billing.record_checkout_acceptance(
+            role,
+            session["subject_id"],
+            tier=tier,
+            interval=interval,
+            trial_end=trial_end,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
     except HTTPException as exc:
         if exc.status_code != 409:

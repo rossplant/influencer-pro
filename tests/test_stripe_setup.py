@@ -30,17 +30,18 @@ class _MorePages:
 
 def test_coupon_display_names_fit_stripe_and_ids_stay_put():
     assert set(billing_config.COUPONS) == {
-        "founding_curator_50_12mo",
-        "foundr_10aud_12mo",
-        "seller_growth_50_3mo",
-        "curator_sale_waiver",
+        "foundr9_curatr_month_12mo",
+        "pilotgrowth_growth_50_3mo",
         "elite_grant_3mo",
     }
     for coupon_id, spec in billing_config.COUPONS.items():
         assert len(spec["name"]) <= 40, coupon_id
-    assert set(billing_config.PROMOTION_CODES) == {"FOUNDING50", "FOUNDR9", "PILOTGROWTH"}
-    assert billing_config.COUPONS["foundr_10aud_12mo"]["amount_off"] == 1000
-    assert len(billing_config.COUPONS["foundr_10aud_12mo"]["name"]) <= 40
+    assert set(billing_config.PROMOTION_CODES) == {"FOUNDR9", "PILOTGROWTH"}
+    assert "FOUNDING50" in billing_config.RETIRED_PROMOTION_CODES
+    foundr9 = billing_config.COUPONS["foundr9_curatr_month_12mo"]
+    assert foundr9["amount_off"] == 1000 and foundr9["duration"] == "repeating" and foundr9["duration_in_months"] == 12
+    assert foundr9["applies_to"] == [("creator", "curator")]
+    assert billing_config.COUPONS["pilotgrowth_growth_50_3mo"]["applies_to"] == [("seller", "growth")]
 
 
 def test_empty_stripe_list_is_not_paged_or_get():
@@ -65,9 +66,11 @@ def test_amount_off_coupon_is_created_without_a_percent():
     class Client:
         coupons = Coupons
 
-    spec = billing_config.COUPONS["foundr_10aud_12mo"]
-    assert setup._find_or_create_coupon(Client(), "foundr_10aud_12mo", spec) == "foundr_10aud_12mo"
+    spec = billing_config.COUPONS["foundr9_curatr_month_12mo"]
+    products = {("creator", "curator"): "prod_curatr"}
+    assert setup._find_or_create_coupon(Client(), "foundr9_curatr_month_12mo", spec, products) == "foundr9_curatr_month_12mo"
     assert created["payload"]["amount_off"] == 1000
+    assert created["payload"]["applies_to"] == {"products": ["prod_curatr"]}
     assert created["payload"]["currency"] == "aud"
     assert created["payload"]["duration_in_months"] == 12
     assert "percent_off" not in created["payload"]
@@ -129,11 +132,12 @@ def test_existing_promo_code_is_reused():
                 EmptyClient.payload = payload
                 return SimpleNamespace(id="promo_new")
 
-    assert setup._find_or_create_promo(EmptyClient(), "FOUNDING50", billing_config.PROMOTION_CODES["FOUNDING50"]) == "promo_new"
-    assert EmptyClient.payload["code"] == "FOUNDING50"
+    assert setup._find_or_create_promo(EmptyClient(), "FOUNDR9", billing_config.PROMOTION_CODES["FOUNDR9"]) == "promo_new"
+    assert EmptyClient.payload["code"] == "FOUNDR9"
+    assert EmptyClient.payload["promotion"]["coupon"] == "foundr9_curatr_month_12mo"
 
     class Existing:
-        data = [SimpleNamespace(id="promo_existing")]
+        data = [SimpleNamespace(id="promo_existing", promotion=SimpleNamespace(coupon="pilotgrowth_growth_50_3mo"))]
         has_more = False
 
         def get(self, *_args, **_kwargs):
@@ -150,3 +154,32 @@ def test_existing_promo_code_is_reused():
                 raise AssertionError("an existing promotion code must not be created again")
 
     assert setup._find_or_create_promo(Reuse(), "PILOTGROWTH", billing_config.PROMOTION_CODES["PILOTGROWTH"]) == "promo_existing"
+
+
+def test_a_code_on_an_old_coupon_is_retired_and_recreated_and_founding50_is_deactivated():
+    updates = []
+
+    class Old:
+        data = [SimpleNamespace(id="promo_old", promotion=SimpleNamespace(coupon="foundr_10aud_12mo"))]
+        has_more = False
+
+    class Client:
+        class promotion_codes:
+            @staticmethod
+            def list(params):
+                assert params["active"] is True
+                return Old()
+
+            @staticmethod
+            def update(promo_id, payload):
+                updates.append((promo_id, payload))
+
+            @staticmethod
+            def create(payload):
+                return SimpleNamespace(id="promo_new")
+
+    assert setup._find_or_create_promo(Client(), "FOUNDR9", billing_config.PROMOTION_CODES["FOUNDR9"]) == "promo_new"
+    assert updates == [("promo_old", {"active": False})]
+    updates.clear()
+    assert setup._deactivate_promo(Client(), "FOUNDING50") == 1
+    assert updates == [("promo_old", {"active": False})]

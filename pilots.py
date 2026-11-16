@@ -30,7 +30,7 @@ from models import (
 
 
 def ensure_cohorts() -> None:
-    """Both cohorts use the same 2 month window. An existing row is moved onto it."""
+    """Both cohorts run 20 Nov 2026 to 20 Jan 2027. An existing row is moved onto it."""
     start = billing_config.pilot_start()
     end = billing_config.pilot_end()
     for slug, spec in billing_config.PILOT_COHORTS.items():
@@ -79,13 +79,35 @@ def apply(
     event_id: str,
     ip: Optional[str] = None,
     user_agent: Optional[str] = None,
+    paid_service_confirmed: bool = False,
+    authority_confirmed: bool = False,
+    email_consent: bool = False,
+    business_name: str = "",
+    abn: str = "",
 ) -> dict:
+    """consent is the cookie choice for ad platforms. email_consent is the separate email opt-in."""
+    import legal
+
+    if not billing_config.operator_legal_name():
+        raise HTTPException(status_code=503, detail=legal.OPENING_SOON)
     ensure_cohorts()
     spec = billing_config.PILOT_COHORTS.get(slug)
     if spec is None:
         raise HTTPException(status_code=404, detail="Unknown cohort")
     if spec["role"] == "creator" and not age_confirmed:
         raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+    if spec["role"] == "seller" and not authority_confirmed:
+        raise HTTPException(status_code=422, detail="Sellers must confirm they are 18 or older and authorised to act for the business")
+    if not paid_service_confirmed:
+        raise HTTPException(status_code=422, detail="Please confirm you understand Plantr Collab is a paid service after the pilot")
+    clean_abn = None
+    if spec["role"] == "seller":
+        try:
+            clean_abn = legal.clean_abn(abn)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        if not business_name.strip():
+            raise HTTPException(status_code=422, detail="Business name is required")
     cleaned = (email or "").strip().lower()
     if not name.strip() or "@" not in cleaned:
         raise HTTPException(status_code=422, detail="Name and email are required")
@@ -106,10 +128,37 @@ def apply(
         attribution={"first": touch.first_of(touch_state), "last": touch.last_of(touch_state)},
         age_confirmed=bool(age_confirmed),
         marketing_consent=bool(consent),
+        email_marketing_consent=bool(email_consent),
+        business_name=business_name.strip() or None,
+        abn=clean_abn,
+        authority_confirmed=bool(authority_confirmed),
         created_at=utcnow(),
         reviewed_at=None,
     )
     _save_application(row)
+    if spec["role"] == "seller":
+        texts = [legal.SELLER_PANEL, legal.SELLER_AUTHORITY, legal.SELLER_APPLY]
+    else:
+        texts = [legal.CREATOR_PANEL, legal.CREATOR_AGE, legal.CREATOR_APPLY]
+    if email_consent:
+        texts.append(legal.EMAIL_CONSENT)
+    legal.record(
+        subject_type="pilot_application",
+        subject_id=row.id,
+        context=f"apply:{slug}",
+        documents=legal.APPLY_DOCUMENTS,
+        texts=texts,
+        price_shown=texts[0],
+        confirmations={
+            "paid_service": True,
+            "age_18": bool(age_confirmed) or bool(authority_confirmed),
+            "authorised": bool(authority_confirmed),
+            "email_marketing": bool(email_consent),
+            "operator": billing_config.operator_legal_name(),
+        },
+        ip=ip,
+        user_agent=user_agent,
+    )
     tracked_id = event_id or f"apply:{row.id}"
     invite_code = touch.last_of(touch_state).get("invite_code") or touch.first_of(touch_state).get("invite_code")
     tracked = tracking.track(
@@ -252,10 +301,20 @@ def join_with_invite(
     age_confirmed: bool,
     touch_state: Optional[dict],
     consent: bool,
+    terms_accepted: bool = False,
+    pilot_terms_accepted: bool = False,
+    email_consent: bool = False,
+    ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
 ) -> dict:
+    """consent is the cookie choice for ad platforms. email_consent is the separate email opt-in."""
+    import legal
+
     opened = open_invite(code)
     if opened["role"] == "creator" and not age_confirmed:
         raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+    if not terms_accepted or not pilot_terms_accepted:
+        raise HTTPException(status_code=422, detail="Please tick both required boxes to continue")
     invite = _invite_by_code(code)
     cleaned = email.strip().lower()
     if opened["role"] == "seller":
@@ -276,7 +335,7 @@ def join_with_invite(
             password_confirm=password,
             shop_id=subject_id,
         )
-        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=False, marketing_consent=consent)
+        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=False, marketing_consent=consent, email_consent=email_consent)
     else:
         creator_id = str(uuid.uuid4())
         active = [part.strip().lower() for part in categories.split(",") if part.strip()] or ["other"]
@@ -301,8 +360,27 @@ def join_with_invite(
             creator_id=creator_id,
         )
         subject_id = creator_id
-        _stamp_account("creator", subject_id, touch_state, code, opened, age_confirmed=True, marketing_consent=consent)
+        _stamp_account("creator", subject_id, touch_state, code, opened, age_confirmed=True, marketing_consent=consent, email_consent=email_consent)
     _consume_invite(invite)
+    if opened["role"] == "seller":
+        texts = [legal.SELLER_JOIN_TERMS, legal.SELLER_JOIN_PILOT]
+        documents = legal.SELLER_JOIN_DOCUMENTS
+    else:
+        texts = [legal.CREATOR_JOIN_TERMS, legal.CREATOR_JOIN_PILOT]
+        documents = legal.CREATOR_JOIN_DOCUMENTS
+    if email_consent:
+        texts.append(legal.EMAIL_CONSENT)
+    legal.record(
+        subject_type="shop" if opened["role"] == "seller" else "creator",
+        subject_id=subject_id,
+        context=f"join:{opened['cohort']}",
+        documents=documents,
+        texts=texts,
+        price_shown=texts[1],
+        confirmations={"terms": True, "pilot_terms": True, "age_18": True, "email_marketing": bool(email_consent), "invite": code},
+        ip=ip,
+        user_agent=user_agent,
+    )
     membership = _membership_for_invite(_get(invite, "id"))
     if membership is not None:
         _set(membership, "stage", "signed_up")
@@ -476,7 +554,7 @@ def _gates() -> dict:
     return counts
 
 
-def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed: bool, marketing_consent: bool = False) -> None:
+def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed: bool, marketing_consent: bool = False, email_consent: bool = False) -> None:
     if db.configured():
         with db.session_scope() as session:
             row = session.get(Shop if role == "seller" else Creator, subject_id)
@@ -488,6 +566,7 @@ def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed
                 row.signup_campaign = opened["campaign"]
                 row.signup_channel = opened["channel"]
             row.marketing_consent = bool(marketing_consent)
+            row.email_marketing_consent = bool(email_consent)
             if role == "creator":
                 row.age_confirmed = age_confirmed
                 row.founding_number = opened["founding_number"]
@@ -507,6 +586,7 @@ def _stamp_account(role, subject_id, touch_state, code, opened, *, age_confirmed
         row.signup_campaign = opened["campaign"]
         row.signup_channel = opened["channel"]
     row.marketing_consent = bool(marketing_consent)
+    row.email_marketing_consent = bool(email_consent)
     if role == "creator":
         row.age_confirmed = age_confirmed
         row.founding_number = opened["founding_number"]
@@ -611,6 +691,10 @@ def _save_application(row) -> None:
                     attribution=row.attribution,
                     age_confirmed=row.age_confirmed,
                     marketing_consent=row.marketing_consent,
+                    email_marketing_consent=row.email_marketing_consent,
+                    business_name=row.business_name,
+                    abn=row.abn,
+                    authority_confirmed=row.authority_confirmed,
                     created_at=row.created_at,
                 )
             )

@@ -109,6 +109,8 @@ class Shop(Base):
     signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    # Opt-in to marketing email. Separate from marketing_consent, which is the cookie and ad-platform choice.
+    email_marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     primary_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     products_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     matches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -181,6 +183,8 @@ class Creator(Base):
     signup_campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     signup_channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    # Opt-in to marketing email. Separate from marketing_consent, which is the cookie and ad-platform choice.
+    email_marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -530,6 +534,7 @@ class BillingSubscription(Base):
     invite_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     campaign: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    discount_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -577,6 +582,10 @@ class PilotApplication(Base):
     attribution: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
     age_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    email_marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    business_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    abn: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
+    authority_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -681,3 +690,40 @@ class CreatorProductLink(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
+
+
+class TermsAcceptance(Base):
+    """What a person ticked, the exact text shown, and when. Append-only."""
+
+    __tablename__ = "terms_acceptances"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    context: Mapped[str] = mapped_column(String(64), nullable=False)
+    terms_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    documents: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    text_shown: Mapped[str] = mapped_column(Text, nullable=False)
+    price_shown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confirmations: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class ReminderSend(Base):
+    """Idempotent log for scheduled billing reminders. One row per reminder_key."""
+
+    __tablename__ = "reminder_sends"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    reminder_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
