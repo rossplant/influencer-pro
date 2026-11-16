@@ -90,6 +90,30 @@ def pilot_trial_end(role: str, subject_id: str) -> Optional[int]:
     return int(end.timestamp())
 
 
+SUBSCRIBE_PROMPT = (
+    "Subscribe to add products, create campaigns, run matches, or accept offers. "
+    "Pilot suppliers and Foundrs keep that access until 20 January 2027."
+)
+
+
+def commerce_open(role: str, subject_id: str) -> bool:
+    return commerce_open_for(role, _account(role, subject_id))
+
+
+def commerce_open_for(role: str, row: Optional[dict]) -> bool:
+    """A live subscription or the current pilot. Everyone else is unsubscribed."""
+    row = row or {}
+    status = str(row.get("subscription_status") or "").strip().lower()
+    if status in LIVE_SUBSCRIPTION_STATUSES:
+        return True
+    now = utcnow()
+    if now < billing_config.pilot_start() or now > billing_config.pilot_end():
+        return False
+    if role == "seller":
+        return bool(row.get("is_pilot")) or row.get("signup_campaign") == "seller_pilot"
+    return row.get("signup_campaign") == "founding_curators" or row.get("founding_number") not in (None, "")
+
+
 def subscription_in_force(role: str, subject_id: str) -> bool:
     """True when another Checkout would create a second subscription."""
     status = str((_account(role, subject_id) or {}).get("subscription_status") or "").strip().lower()
@@ -356,7 +380,7 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     tier = str(_attr(metadata, "tier") or "")
     if status in {"canceled", "incomplete_expired", "unpaid"}:
         tier = "starter" if role == "seller" else "member"
-        plan_status = "free" if role == "seller" else "invited"
+        plan_status = "unsubscribed"
     elif status == "trialing":
         plan_status = "trial"
     else:
@@ -657,11 +681,19 @@ def _status(role: str, default_tier: str, row: Optional[dict]) -> dict:
         "stripe_subscription_id": row.get("stripe_subscription_id"),
         "subscription_status": row.get("subscription_status"),
         "plan_tier": tier,
-        "plan_status": row.get("plan_status"),
+        "plan_status": _public_plan_status(row.get("plan_status")),
         "billing_interval": row.get("billing_interval"),
         "plans": plans(role),
         "publishable_key": publishable_key(),
+        "commerce_open": commerce_open_for(role, row),
     }
+
+
+def _public_plan_status(status: Optional[str]) -> str:
+    cleaned = (status or "unsubscribed").strip().lower()
+    if cleaned in {"free", "invited"}:
+        return "unsubscribed"
+    return cleaned or "unsubscribed"
 
 
 def _account(role: str, subject_id: str) -> Optional[dict]:
@@ -694,6 +726,8 @@ def _account_dict(row) -> dict:
         "attribution_last": getattr(row, "attribution_last", None) or {},
         "signup_code": getattr(row, "signup_code", None),
         "signup_campaign": getattr(row, "signup_campaign", None),
+        "is_pilot": bool(getattr(row, "is_pilot", False)),
+        "founding_number": getattr(row, "founding_number", None),
     }
 
 

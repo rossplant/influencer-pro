@@ -53,6 +53,7 @@ def ensure_cohorts() -> None:
                     row.name = fields["name"]
                     row.starts_at = start
                     row.ends_at = end
+                    row.post_coupon_key = fields["post_coupon_key"]
             continue
         existing = db.memory_cohorts.get(slug)
         if existing is None:
@@ -61,6 +62,7 @@ def ensure_cohorts() -> None:
             existing.name = fields["name"]
             existing.starts_at = start
             existing.ends_at = end
+            existing.post_coupon_key = fields["post_coupon_key"]
 
 
 def apply(

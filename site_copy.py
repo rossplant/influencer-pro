@@ -31,7 +31,8 @@ CREATOR_PAGE = {
         "Tailored offers and bundle ideas.",
         "Your own tracking links and codes. The supplier sets the commission and pays it only on tracked sales.",
         "A title, badge and profile. Your Foundr number is shown once you are approved.",
-        "Foundrs are free for the 2 month pilot, through 20 January 2027, then A$9.50 a month for 12 months.",
+        "Foundrs have no charge for the 2 month pilot, through 20 January 2027, then A$9 a month for 12 months.",
+        "Membr is A$15 a month or A$150 a year. Curatr is A$19 or A$190. Trendsettr is A$49 or A$490. Annual prices are two months off.",
         "The subscription fee for a month is waived when you drive 5 or more attributed sales that month.",
     ),
 }
@@ -49,7 +50,8 @@ SUPPLIER_PAGE = {
         "Every sale is tracked.",
         "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
         "Brief help for the creators you accept.",
-        "10 pilot places. The pilot is free for 2 months. Growth is then A$39.50 a month for 3 months, then A$79.",
+        "10 pilot places. Growth has no charge for the 2 month pilot, then A$39.50 a month for 3 months, then A$79.",
+        "Starter is A$29 a month or A$290 a year. Growth is A$79 or A$790. Scale is A$229 or A$2,290. Annual prices are two months off.",
     ),
 }
 

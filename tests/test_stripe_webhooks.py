@@ -246,7 +246,7 @@ def test_current_api_events_update_status_and_do_not_500(monkeypatch):
     )
     assert deleted.status_code == 200
     assert shop.plan_tier == "starter"
-    assert shop.plan_status == "free"
+    assert shop.plan_status == "unsubscribed"
 
     broken = _post(
         monkeypatch,

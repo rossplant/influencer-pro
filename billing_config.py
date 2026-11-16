@@ -16,10 +16,10 @@ SELLER_TIERS = {
     "starter": {
         "label": "Starter",
         "audience": "seller",
-        "amount_month_cents": 0,
-        "amount_year_cents": 0,
-        "lookup_month": None,
-        "lookup_year": None,
+        "amount_month_cents": 2900,
+        "amount_year_cents": 29000,
+        "lookup_month": "seller_starter_month",
+        "lookup_year": "seller_starter_year",
         "limits": {"campaigns": 1, "products": 5, "matches_per_month": 3},
         "reaches": ("member",),
         "features": ("open_catalogue",),
@@ -54,10 +54,10 @@ CREATOR_TIERS = {
     "member": {
         "label": "Membr",
         "audience": "creator",
-        "amount_month_cents": 0,
-        "amount_year_cents": 0,
-        "lookup_month": None,
-        "lookup_year": None,
+        "amount_month_cents": 1500,
+        "amount_year_cents": 15000,
+        "lookup_month": "creator_member_month",
+        "lookup_year": "creator_member_year",
         "limits": {"matches_per_month": 2, "curated_offers_per_month": 0},
         "features": ("tracking_links", "basic_sales"),
     },
@@ -90,9 +90,16 @@ CREATOR_TIERS = {
 SHOP_TIER_ALIASES = {"free": "starter"}
 
 COUPONS = {
+    # Kept so an existing FOUNDING50 code still resolves. New Foundrs use the A$10 amount_off coupon.
     "founding_curator_50_12mo": {
         "name": "Foundr 50% for 12 months",
         "percent_off": 50,
+        "duration": "repeating",
+        "duration_in_months": 12,
+    },
+    "foundr_10aud_12mo": {
+        "name": "Foundr A$10 off for 12 months",
+        "amount_off": 1000,
         "duration": "repeating",
         "duration_in_months": 12,
     },
@@ -108,7 +115,7 @@ COUPONS = {
         "duration": "once",
     },
     "elite_grant_3mo": {
-        "name": "Trendsettr free for 3 months",
+        "name": "Trendsettr 100% for 3 months",
         "percent_off": 100,
         "duration": "repeating",
         "duration_in_months": 3,
@@ -118,6 +125,12 @@ COUPONS = {
 PROMOTION_CODES = {
     "FOUNDING50": {
         "coupon": "founding_curator_50_12mo",
+        "campaign": "founding_curators",
+        "channel": "promo",
+        "max_redemptions": 50,
+    },
+    "FOUNDR9": {
+        "coupon": "foundr_10aud_12mo",
         "campaign": "founding_curators",
         "channel": "promo",
         "max_redemptions": 50,
@@ -146,7 +159,7 @@ PILOT_COHORTS = {
         "seat_cap": 50,
         "pilot_tier": "curator",
         "free_tier": "member",
-        "post_coupon": "founding_curator_50_12mo",
+        "post_coupon": "foundr_10aud_12mo",
         "seat_env": "PILOT_CURATOR_SEATS",
     },
 }
@@ -342,8 +355,6 @@ def public_base_url(request) -> str:
 
 
 def price_label(cents: int) -> str:
-    if cents <= 0:
-        return "Included with your invite"
     dollars = cents / 100.0
     text = f"{dollars:.0f}" if cents % 100 == 0 else f"{dollars:.2f}"
     return f"A${text} ex GST"

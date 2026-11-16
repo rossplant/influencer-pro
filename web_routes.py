@@ -154,6 +154,8 @@ def register(app) -> None:
         session = portal.require_seller(request)
         form = await request.form()
         portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+        if not stripe_billing.commerce_open("seller", session["subject_id"]):
+            return RedirectResponse("/seller/billing?subscribe=1", status_code=303)
         services.create_campaign(session["subject_id"], str(form.get("name") or ""))
         return RedirectResponse("/seller/campaigns", status_code=303)
 
@@ -184,6 +186,8 @@ def register(app) -> None:
         session = portal.require_creator(request)
         form = await request.form()
         portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+        if not stripe_billing.commerce_open("creator", session["subject_id"]):
+            return RedirectResponse("/creator/billing?subscribe=1", status_code=303)
         if not _offer_for_creator(item_id, session["subject_id"]):
             raise HTTPException(status_code=404, detail="Offer not found")
         services.decide_shortlist_item(item_id, "match_accepted")

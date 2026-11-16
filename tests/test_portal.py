@@ -134,6 +134,7 @@ def test_seller_and_creator_apps(monkeypatch):
     )
     assert signed_in.status_code == 303
     seller_cookie = _cookie(signed_in, "plantr_seller")
+    db.memory_shops[shop["id"]].subscription_status = "active"
 
     products = client.get("/seller/products", headers=seller_cookie)
     assert products.status_code == 200

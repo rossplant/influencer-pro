@@ -81,10 +81,13 @@ def _find_or_create_coupon(client, coupon_id, spec):
     payload = {
         "id": coupon_id,
         "name": spec["name"],
-        "percent_off": spec["percent_off"],
         "duration": spec["duration"],
         "currency": billing_config.CURRENCY,
     }
+    if spec.get("amount_off"):
+        payload["amount_off"] = spec["amount_off"]
+    else:
+        payload["percent_off"] = spec["percent_off"]
     if spec.get("duration_in_months"):
         payload["duration_in_months"] = spec["duration_in_months"]
     client.coupons.create(payload)

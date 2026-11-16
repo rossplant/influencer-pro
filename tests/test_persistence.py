@@ -56,7 +56,9 @@ def test_database_url_normalisation():
 
 
 def test_mrr_rules():
-    assert events.mrr("starter") == 0
+    assert events.mrr("starter") == 29
+    assert events.mrr("starter", status="unsubscribed") == 0
+    assert events.mrr("starter", interval="year") == pytest.approx(290 / 12)
     assert events.mrr("free") == 0
     assert events.mrr("growth", status="trial") == 0
     assert events.mrr("growth", status="trialing") == 0
@@ -278,7 +280,7 @@ def test_shop_pilot_defaults_to_starter_with_zero_mrr(tmp_path, monkeypatch):
     assert pilot.status_code == 200
     body = pilot.json()
     assert body["plan_tier"] == "starter"
-    assert body["plan_status"] == "free"
+    assert body["plan_status"] == "unsubscribed"
     assert body["is_pilot"] is True
     assert body["mrr"] == 0
     assert client.get(f"/shops/{body['id']}").json()["name"] == "Pilot Brand"
@@ -348,7 +350,7 @@ def test_match_records_placeholder_shortlist(tmp_path, monkeypatch):
         ).one()
         assert event.actor == "api"
         assert event.properties["plan_tier"] == "starter"
-        assert event.properties["plan_status"] == "free"
+        assert event.properties["plan_status"] == "unsubscribed"
         assert "matches_run" not in event.properties
         assert event.matches_count_period == 1
         assert event.match_limit == 3

@@ -27,10 +27,13 @@ def test_landing_copy_is_approved_and_privacy_stays_draft(monkeypatch):
     assert "Curatr for 48 hours" in creators.text
     assert "Trendsettr for 7 days" in creators.text
     assert "Curated suppliers" in creators.text
-    assert "A$9.50 a month for 12 months" in creators.text
+    assert "A$9 a month for 12 months" in creators.text
+    assert "A$15 a month" in creators.text
+    assert "A$9.50" not in creators.text
     assert "Founding Curator" not in creators.text
     assert "/founding-curators/apply" in creators.text
     assert "A$39.50 a month for 3 months, then A$79" in sellers.text
+    assert "A$29 a month" in sellers.text
     assert "Draft for legal review" in privacy.text
     for banned in ("passive income", "guaranteed", "go viral", "unlimited reach", "make $"):
         assert banned not in creators.text.lower()
