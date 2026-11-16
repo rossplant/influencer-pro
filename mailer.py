@@ -1,0 +1,74 @@
+"""Mail sending interface with a Resend adapter.
+
+RESEND_API_KEY, EMAIL_FROM and (optionally) EMAIL_REPLY_TO turn sending on.
+When the key or From address is missing the adapter sends nothing, logs a
+warning, and returns status "no_provider" so callers can retry later.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import urllib.error
+import urllib.request
+from typing import Optional, Protocol
+
+logger = logging.getLogger("plantr.mailer")
+
+RESEND_URL = "https://api.resend.com/emails"
+NO_PROVIDER = "no_provider"
+SENT = "sent"
+FAILED = "failed"
+
+_warned = False
+
+
+class Mailer(Protocol):
+    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict: ...
+
+
+class ResendMailer:
+    def __init__(self, api_key: str = "", sender: str = "", reply_to: str = ""):
+        self.api_key = api_key
+        self.sender = sender
+        self.reply_to = reply_to
+
+    @classmethod
+    def from_env(cls) -> "ResendMailer":
+        return cls(
+            api_key=os.getenv("RESEND_API_KEY", "").strip(),
+            sender=os.getenv("EMAIL_FROM", "").strip(),
+            reply_to=os.getenv("EMAIL_REPLY_TO", "").strip(),
+        )
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.api_key and self.sender)
+
+    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict:
+        global _warned
+        if not self.ready:
+            if not _warned:
+                missing = "RESEND_API_KEY" if not self.api_key else "EMAIL_FROM"
+                logger.warning("%s is not set. Email is logged only and NOTHING IS SENT.", missing)
+                _warned = True
+            return {"status": NO_PROVIDER, "id": None}
+        payload = {"from": self.sender, "to": [to], "subject": subject, "text": text}
+        if self.reply_to:
+            payload["reply_to"] = self.reply_to
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key[:256]
+        request = urllib.request.Request(RESEND_URL, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = json.loads(response.read().decode() or "{}")
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            logger.warning("Resend send failed: %s", type(exc).__name__)
+            return {"status": FAILED, "id": None}
+        return {"status": SENT, "id": body.get("id")}
+
+
+def default() -> Mailer:
+    return ResendMailer.from_env()

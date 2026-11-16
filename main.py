@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.16.1"
+APP_VERSION = "0.17.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -567,7 +567,16 @@ async def _closed_receive():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_storage()
-    yield
+    import asyncio
+
+    import reminders
+
+    task = asyncio.create_task(reminders.loop()) if reminders.loop_enabled() else None
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
 
 
 _cors_origins, _cors_credentials = cors_policy()

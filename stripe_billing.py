@@ -92,7 +92,7 @@ def pilot_trial_end(role: str, subject_id: str) -> Optional[int]:
 
 SUBSCRIBE_PROMPT = (
     "Subscribe to add products, create campaigns, run matches, or accept offers. "
-    "Pilot suppliers and Foundrs keep that access until 20 January 2027."
+    "Pilot suppliers and Foundrs keep that access during the pilot, 20 November 2026 to 20 January 2027."
 )
 
 
@@ -122,12 +122,12 @@ def subscription_in_force(role: str, subject_id: str) -> bool:
 
 def shop_status(shop_id: str) -> dict:
     row = _account("seller", shop_id)
-    return _status("seller", "starter", row)
+    return _status("seller", "starter", None if row is None else {**row, "_subject_id": shop_id})
 
 
 def creator_status(creator_id: str) -> dict:
     row = _account("creator", creator_id)
-    return _status("creator", "member", row)
+    return _status("creator", "member", None if row is None else {**row, "_subject_id": creator_id})
 
 
 def plans(audience: str) -> list:
@@ -162,6 +162,14 @@ def checkout(
     campaign: str = "",
     channel: str = "",
 ) -> str:
+    """Create a Checkout Session.
+
+    Eligible pilot suppliers and Foundrs get PILOTGROWTH or FOUNDR9 without typing
+    it. During the pilot the code is attached by a subscription schedule after
+    the free period ends, so none of its months are used up by the trial. After
+    the pilot it is attached at Checkout. Customers cannot type codes on the
+    Stripe page, because Stripe cannot limit a code to one interval.
+    """
     if subscription_in_force(role, subject_id):
         raise HTTPException(status_code=409, detail=ALREADY_SUBSCRIBED)
     email = _portal_email(role, subject_id)
@@ -170,24 +178,39 @@ def checkout(
     lookup = billing_config.lookup_key(role, tier, interval)
     if not lookup:
         raise HTTPException(status_code=422, detail="That plan does not have a Stripe price")
-    promotion_id = _resolve_promotion_code(promo_code, role) if promo_code.strip() else ""
+    account = _account(role, subject_id) or {}
+    offer = billing_config.pilot_offer_code(role, account, tier, interval)
+    typed = promo_code.strip().upper()
+    if typed and typed != offer:
+        if typed in billing_config.RETIRED_PROMOTION_CODES:
+            raise HTTPException(status_code=422, detail="That promotion code is no longer active.")
+        if typed in billing_config.PROMOTION_CODES:
+            if not billing_config.promo_allows(typed, role=role, tier=tier, interval=interval):
+                raise HTTPException(status_code=422, detail=_restriction_message(typed))
+            raise HTTPException(status_code=422, detail="That promotion code does not apply to this account.")
+    code = offer or typed
+    promotion_id = _resolve_promotion_code(code, role) if code else ""
     customer_id = ensure_customer(role, subject_id, email=email, name=email)
     price_id = _price_id(lookup)
-    known = billing_config.PROMOTION_CODES.get(promo_code.strip().upper(), {})
+    known = billing_config.promo_spec(code)
     metadata = {
         "role": role,
         "subject_id": subject_id,
         "tier": tier,
         "interval": interval,
-        "promo_code": promo_code.strip(),
+        "promo_code": code,
         "invite_code": invite_code,
         "campaign": campaign or known.get("campaign", ""),
         "channel": channel or known.get("channel", ""),
     }
-    subscription_data = {"metadata": metadata}
+    subscription_data = {"metadata": dict(metadata)}
     if trial_end:
         subscription_data["trial_end"] = trial_end
         subscription_data["trial_settings"] = {"end_behavior": {"missing_payment_method": "cancel"}}
+        if promotion_id:
+            # Attached at the end of the free period by ensure_pilot_schedule.
+            subscription_data["metadata"]["pilot_offer"] = code
+            subscription_data["metadata"]["pilot_promotion_code"] = promotion_id
     payload = {
         "mode": "subscription",
         "customer": customer_id,
@@ -197,16 +220,194 @@ def checkout(
         "line_items": [{"price": price_id, "quantity": 1}],
         "metadata": metadata,
         "subscription_data": subscription_data,
+        "custom_text": {"submit": {"message": checkout_disclosure(role, tier, interval, offer=code, trial_end=trial_end)[:1200]}},
     }
-    if promotion_id:
+    if promotion_id and not trial_end:
         payload["discounts"] = [{"promotion_code": promotion_id}]
-    else:
-        payload["allow_promotion_codes"] = True
     session = client().checkout.sessions.create(payload)
     url = _attr(session, "url")
     if not url:
         raise HTTPException(status_code=502, detail="Stripe did not return a Checkout URL")
     return str(url)
+
+
+def _restriction_message(code: str) -> str:
+    spec = billing_config.promo_spec(code)
+    label = billing_config.tier_label(spec.get("role", ""), spec.get("tier", ""))
+    period = "monthly" if spec.get("interval") == "month" else "annual"
+    return f"{code} applies only to {period} {label}."
+
+
+def checkout_disclosure(role: str, tier: str, interval: str, *, offer: str = "", trial_end: Optional[int] = None) -> str:
+    """Wording from 09_Signup_Acceptance_Wording section 10, filled in for this plan."""
+    from datetime import datetime, timezone
+
+    spec = billing_config.tier_spec(role, tier)
+    if not spec:
+        return ""
+    unit = "year" if interval == "year" else "month"
+    price_cents = spec["amount_year_cents"] if unit == "year" else spec["amount_month_cents"]
+    price = billing_config.amount_label(price_cents)
+    offer_spec = billing_config.promo_spec(offer) if offer else {}
+    if trial_end:
+        first = datetime.fromtimestamp(int(trial_end), tz=timezone.utc)
+        first_label = billing_config.sydney_date_label(first)
+        if offer_spec:
+            discounted = billing_config.amount_label(offer_spec["discounted_month_cents"])
+            months = int(offer_spec["months"])
+            full_from = billing_config.sydney_date_label(billing_config.add_months(first, months))
+            applied = f" Code {offer} applied." if offer == "FOUNDR9" else ""
+            return (
+                f"No charge today.{applied} Your first charge of {discounted} (ex GST) will be on {first_label}. "
+                f"You will pay {discounted} a month for {months} months, then {price} a month from {full_from}, "
+                f"renewing automatically until you cancel. Cancel before {first_label} and you will not be charged."
+            )
+        return (
+            f"No charge today. Your first charge of {price} (ex GST) will be on {first_label}. "
+            f"You will then pay {price} per {unit}, renewing automatically until you cancel. "
+            f"Cancel before {first_label} and you will not be charged."
+        )
+    standard = (
+        f"You are subscribing to {spec['label']} at {price} per {unit}, excluding GST. "
+        "No GST is charged while we are not registered for GST. If we register, we will give you 30 days' notice before adding GST. "
+        f"Your plan renews automatically and we will charge your payment method every {unit} until you cancel. "
+        "Cancel any time in Manage billing; cancellation takes effect at the end of your current period. "
+        "No refunds for change of mind on part periods, but your rights under the Australian Consumer Law are not affected."
+    )
+    if offer_spec:
+        discounted = billing_config.amount_label(offer_spec["discounted_month_cents"])
+        months = int(offer_spec["months"])
+        full_from = billing_config.sydney_date_label(billing_config.add_months(utcnow(), months))
+        standard += f" {discounted} per month for {months} months, then {price} per month from {full_from}."
+    return standard
+
+
+def disclosures(role: str, subject_id: str) -> dict:
+    """The statement shown next to Subscribe for every plan, plus the main one for this account."""
+    account = _account(role, subject_id) or {}
+    trial_end = pilot_trial_end(role, subject_id) if subject_id else None
+    table = billing_config.SELLER_TIERS if role == "seller" else billing_config.CREATOR_TIERS
+    rows = []
+    main = ""
+    for tier, spec in table.items():
+        for interval in ("month", "year"):
+            offer = billing_config.pilot_offer_code(role, account, tier, interval)
+            text = checkout_disclosure(role, tier, interval, offer=offer, trial_end=trial_end)
+            rows.append({"tier": tier, "interval": interval, "label": spec["label"], "text": text, "offer": offer})
+            if offer and not main:
+                main = text
+    if not main and trial_end:
+        from datetime import datetime, timezone
+
+        day = billing_config.sydney_date_label(datetime.fromtimestamp(int(trial_end), tz=timezone.utc))
+        main = f"No charge today. Your first charge will be on {day}. Cancel before {day} and you will not be charged."
+    return {"main": main, "plans": rows, "terms": "Seller Terms" if role == "seller" else "Creator and Foundr Terms"}
+
+
+def record_checkout_acceptance(role: str, subject_id: str, *, tier: str, interval: str, trial_end, ip=None, user_agent=None) -> None:
+    import legal
+
+    account = _account(role, subject_id) or {}
+    offer = billing_config.pilot_offer_code(role, account, tier, interval)
+    text = checkout_disclosure(role, tier, interval, offer=offer, trial_end=trial_end)
+    terms = "Seller Terms" if role == "seller" else "Creator and Foundr Terms"
+    authorise = legal.CHECKOUT_AUTHORISE.format(terms=terms)
+    legal.record(
+        subject_type="shop" if role == "seller" else "creator",
+        subject_id=subject_id,
+        context=f"checkout:{tier}:{interval}",
+        documents={"seller_terms" if role == "seller" else "creator_and_foundr_terms": legal.TERMS_VERSION},
+        texts=[text, authorise],
+        price_shown=text,
+        confirmations={"authorise_recurring": True, "offer": offer, "trial_end": trial_end},
+        ip=ip,
+        user_agent=user_agent,
+    )
+
+
+def ensure_pilot_schedule(subscription: Any) -> dict:
+    """Attach the post-pilot code from the end of the free period.
+
+    Phases: the free period as it is, then the plan with PILOTGROWTH or FOUNDR9
+    for its 3 or 12 monthly invoices, then the plan at full price. The schedule
+    is released after the last phase. Safe to call again.
+    """
+    metadata = _attr(subscription, "metadata") or {}
+    code = str(_attr(metadata, "pilot_offer") or "")
+    subscription_id = str(_attr(subscription, "id") or "")
+    if not code or not subscription_id:
+        return {"scheduled": False, "reason": "no pilot offer"}
+    spec = billing_config.promo_spec(code)
+    if not spec:
+        return {"scheduled": False, "reason": "unknown code"}
+    status = str(_attr(subscription, "status") or "")
+    trial_end = _attr(subscription, "trial_end")
+    if status != "trialing" or not trial_end:
+        return {"scheduled": False, "reason": "not in the free period"}
+    existing = _attr(subscription, "schedule")
+    if existing:
+        return {"scheduled": True, "schedule": str(_attr(existing, "id") or existing), "existing": True}
+    promotion_id = str(_attr(metadata, "pilot_promotion_code") or "") or _resolve_promotion_code(code, spec["role"])
+    stripe_client = client()
+    schedule = stripe_client.subscription_schedules.create({"from_subscription": subscription_id})
+    schedule_id = _id_of(schedule)
+    phases = _list_data(_attr(schedule, "phases")) or list(_attr(schedule, "phases") or [])
+    current = phases[0] if phases else {}
+    items = []
+    for item in _list_data(_attr(current, "items")) or list(_attr(current, "items") or []):
+        price = _attr(item, "price")
+        items.append({"price": str(_attr(price, "id") or price), "quantity": int(_attr(item, "quantity") or 1)})
+    if not items:
+        price_id = _price_id(billing_config.lookup_key(spec["role"], spec["tier"], spec["interval"]))
+        items = [{"price": price_id, "quantity": 1}]
+    phase_meta = {str(k): str(v) for k, v in dict(metadata).items()}
+    stripe_client.subscription_schedules.update(
+        schedule_id,
+        {
+            "end_behavior": "release",
+            "proration_behavior": "none",
+            "phases": [
+                {
+                    "items": items,
+                    "start_date": int(_attr(current, "start_date") or _attr(subscription, "start_date") or utcnow().timestamp()),
+                    "end_date": int(trial_end),
+                    "trial_end": int(trial_end),
+                    "metadata": phase_meta,
+                },
+                {
+                    "items": items,
+                    "duration": {"interval": "month", "interval_count": int(spec["months"])},
+                    "discounts": [{"promotion_code": promotion_id}],
+                    "metadata": phase_meta,
+                },
+                {"items": items, "metadata": phase_meta},
+            ],
+        },
+    )
+    from datetime import datetime, timezone
+
+    trial_moment = datetime.fromtimestamp(int(trial_end), tz=timezone.utc)
+    discount_end = billing_config.add_months(trial_moment, int(spec["months"]))
+    found = _find_by_customer(_customer_id(subscription))
+    role = str(_attr(metadata, "role") or (found[0] if found else ""))
+    subject_id = str(_attr(metadata, "subject_id") or (found[1] if found else ""))
+    if role and subject_id:
+        _upsert_billing_row(
+            role,
+            subject_id,
+            {
+                "stripe_customer_id": _customer_id(subscription) or None,
+                "stripe_subscription_id": subscription_id,
+                "subscription_status": status,
+                "plan_tier": str(_attr(metadata, "tier") or spec["tier"]),
+                "billing_interval": spec["interval"],
+                "trial_end": trial_moment,
+                "discount_end": discount_end,
+            },
+            {**dict(metadata), "promo_code": code},
+        )
+    logger.info("pilot schedule %s attached to %s with %s", schedule_id, subscription_id, code)
+    return {"scheduled": True, "schedule": schedule_id, "code": code, "discount_end": discount_end.isoformat()}
 
 
 def portal_session(*, role: str, subject_id: str, return_url: str) -> str:
@@ -295,6 +496,11 @@ def apply_event(event: dict) -> None:
         data_object = ((event.get("data") or {}).get("object") or {})
         if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
             _apply_subscription(data_object, deleted=event_type.endswith("deleted"))
+            if event_type != "customer.subscription.deleted" and configured():
+                try:
+                    ensure_pilot_schedule(data_object)
+                except Exception:
+                    logger.exception("pilot schedule could not be attached; the reminder job retries")
         elif event_type == "checkout.session.completed":
             _apply_checkout(data_object)
         elif event_type == "invoice.paid":
@@ -313,21 +519,48 @@ def apply_event(event: dict) -> None:
 
 
 def apply_sale_waiver(creator_id: str) -> dict:
-    """Manual trigger. A month with 5 or more attributed sales credits the next invoice."""
+    """Manual trigger. Curatr only. A month with 5 or more attributed sales waives the next invoice.
+
+    The waiver is a customer balance credit equal to the next invoice, so it
+    stacks with FOUNDR9 instead of replacing it. A Foundr's next A$9 invoice is
+    covered and the FOUNDR9 discount stays on the subscription.
+    """
+    account = _account("creator", creator_id) or {}
+    tier = str(account.get("plan_tier") or "").strip().lower()
+    status = str(account.get("subscription_status") or "").strip().lower()
+    if tier not in billing_config.WAIVER_TIERS:
+        raise HTTPException(status_code=422, detail="The 5-sale waiver applies to Curatr only")
+    if status not in {"active", "past_due"}:
+        raise HTTPException(status_code=422, detail="The waiver needs a paid Curatr subscription")
     sales = _sales_this_month(creator_id)
     if sales < billing_config.WAIVER_SALES:
         raise HTTPException(status_code=422, detail=f"Need {billing_config.WAIVER_SALES} attributed sales this month")
     if not configured():
         return {"applied": False, "reason": NOT_CONFIGURED, "sales": sales}
-    customer_id = (_account("creator", creator_id) or {}).get("stripe_customer_id")
-    if not customer_id:
-        raise HTTPException(status_code=422, detail="Creator has no Stripe customer")
-    coupon = billing_config.COUPONS["curator_sale_waiver"]
-    # The coupon id in Stripe matches the config key created by the setup script.
-    subscription_id = (_account("creator", creator_id) or {}).get("stripe_subscription_id")
-    if subscription_id:
-        client().subscriptions.update(subscription_id, {"discounts": [{"coupon": "curator_sale_waiver"}]})
-    return {"applied": True, "sales": sales, "coupon": "curator_sale_waiver", "percent_off": coupon["percent_off"]}
+    customer_id = account.get("stripe_customer_id")
+    subscription_id = account.get("stripe_subscription_id")
+    if not customer_id or not subscription_id:
+        raise HTTPException(status_code=422, detail="Creator has no Stripe subscription")
+    from datetime import datetime, timezone
+
+    month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+    stripe_client = client()
+    preview = stripe_client.invoices.create_preview({"customer": customer_id, "subscription": subscription_id})
+    due = _attr(preview, "amount_due")
+    amount = int(due if due is not None else (_attr(preview, "total") or 0))
+    if amount <= 0:
+        return {"applied": False, "reason": "next invoice is already A$0", "sales": sales}
+    stripe_client.customers.balance_transactions.create(
+        customer_id,
+        {
+            "amount": -amount,
+            "currency": billing_config.CURRENCY,
+            "description": f"Curatr 5-sale waiver for {month_key}",
+            "metadata": {"waiver": "curatr_5_sales", "month": month_key, "creator_id": creator_id},
+        },
+        {"idempotency_key": f"curatr-waiver-{creator_id}-{month_key}"},
+    )
+    return {"applied": True, "sales": sales, "credit_cents": amount, "month": month_key, "stacks_with_discount": True}
 
 
 def grant_elite(creator_id: str) -> dict:
@@ -397,7 +630,17 @@ def _apply_subscription(subscription: Any, *, deleted: bool) -> None:
     if tier:
         values["plan_tier"] = tier
     _save_account(role, subject_id, values)
-    _upsert_billing_row(role, subject_id, values, metadata)
+    trial_end = _epoch(_attr(subscription, "trial_end"))
+    billing_values = {**values, "trial_end": trial_end}
+    code = str(_attr(metadata, "promo_code") or "")
+    spec = billing_config.promo_spec(code)
+    if spec and not deleted:
+        # A pilot schedule starts the discount at the end of the free period.
+        # A direct Checkout discount starts with the subscription.
+        begins = trial_end if _attr(metadata, "pilot_offer") and trial_end else _epoch(_attr(subscription, "start_date"))
+        if begins is not None:
+            billing_values["discount_end"] = billing_config.add_months(begins, int(spec["months"]))
+    _upsert_billing_row(role, subject_id, billing_values, metadata)
 
 
 def set_marketing_consent(role: str, subject_id: str, allowed: bool) -> None:
@@ -416,7 +659,7 @@ def account_context(role: str, subject_id: str) -> dict:
 
 
 def _resolve_promotion_code(code: str, role: str) -> str:
-    """Turn a customer-facing code such as FOUNDING50 into the promo_ id Stripe Checkout requires."""
+    """Turn a code such as FOUNDR9 into the promo_ id Stripe requires."""
     cleaned = code.strip()
     try:
         listed = client().promotion_codes.list({"code": cleaned, "active": True, "limit": 1})
@@ -447,7 +690,9 @@ def _promo_rows(result) -> list:
 
 
 def _promo_role(code: str, promo) -> str:
-    spec = billing_config.PROMOTION_CODES.get(code.strip().upper())
+    spec = billing_config.promo_spec(code)
+    if spec.get("role"):
+        return spec["role"]
     campaign = ""
     if spec:
         campaign = spec.get("campaign") or ""
@@ -480,9 +725,9 @@ def _apply_trial_ending(subscription: Any) -> None:
     if not email:
         logger.info("trial ending for customer=%s with no portal email", customer_id)
         return
-    import emailer
-
-    emailer.send("pilot_ending_7_days", email, ends="the trial end date")
+    # Reminders are scheduled by reminders.py. trial_will_end only fires about
+    # 3 days ahead, which is later than the terms promise.
+    logger.info("trial_will_end for customer=%s; reminders.py already scheduled the notices", customer_id)
 
 
 def _apply_invoice_paid(invoice: Any) -> None:
@@ -686,6 +931,7 @@ def _status(role: str, default_tier: str, row: Optional[dict]) -> dict:
         "plans": plans(role),
         "publishable_key": publishable_key(),
         "commerce_open": commerce_open_for(role, row),
+        "disclosures": disclosures(role, row.get("_subject_id") or ""),
     }
 
 
@@ -780,8 +1026,20 @@ def _upsert_billing_row(role, subject_id, values, metadata) -> None:
             row.channel = str(_attr(metadata, "channel") or "") or row.channel
             if values.get("current_period_end") is not None:
                 row.current_period_end = values["current_period_end"]
+            if values.get("billing_interval"):
+                row.interval = values["billing_interval"]
+            if values.get("trial_end") is not None:
+                row.trial_end = values["trial_end"]
+            if values.get("discount_end") is not None:
+                row.discount_end = values["discount_end"]
         return
-    db.memory_billing.append({"role": role, "subject_id": subject_id, **values})
+    merged = {"role": role, "subject_id": subject_id, **{k: v for k, v in values.items() if v is not None}}
+    merged["promo_code"] = str(_attr(metadata, "promo_code") or "") or None
+    for stored in db.memory_billing:
+        if subscription_id and stored.get("stripe_subscription_id") == subscription_id:
+            stored.update({k: v for k, v in merged.items() if v is not None})
+            return
+    db.memory_billing.append(merged)
 
 
 def _find_by_customer(customer_id: str):

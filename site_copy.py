@@ -22,7 +22,7 @@ CREATOR_PAGE = {
     "role": "creator",
     "cohort": "founding_curators",
     "headline": "Earn from products your audience will actually buy.",
-    "subhead": "You've been selected. Earn commission on every sale you drive.",
+    "subhead": "You're invited to apply. Earn commission on the tracked sales you drive.",
     "cta": "Request your invite",
     "points": (
         "Invite-only. Foundrs are numbered and the cohort is capped.",
@@ -31,9 +31,9 @@ CREATOR_PAGE = {
         "Tailored offers and bundle ideas.",
         "Your own tracking links and codes. The supplier sets the commission and pays it only on tracked sales.",
         "A title, badge and profile. Your Foundr number is shown once you are approved.",
-        "Foundrs have no charge for the 2 month pilot, through 20 January 2027, then A$9 a month for 12 months.",
-        "Membr is A$15 a month or A$150 a year. Curatr is A$19 or A$190. Trendsettr is A$49 or A$490. Annual prices are two months off.",
-        "The subscription fee for a month is waived when you drive 5 or more attributed sales that month.",
+        "Foundrs have no charge for the pilot, from 20 November 2026 until 20 January 2027, then Curatr is A$9 a month ex GST for 12 months, then A$19 a month ex GST.",
+        "Membr is A$15 a month ex GST or A$150 a year ex GST. Curatr is A$19 ex GST or A$190 ex GST. Trendsettr is A$49 ex GST or A$490 ex GST. Annual prices are two months off.",
+        "Curatr only: your next monthly Curatr fee is waived when you drive 5 or more attributed sales in a month. It does not apply to Membr or Trendsettr.",
     ),
 }
 
@@ -47,11 +47,11 @@ SUPPLIER_PAGE = {
     "points": (
         "We select suppliers that are underserved on TikTok, Instagram and YouTube.",
         "Curated creator shortlists, reviewed by our team.",
-        "Every sale is tracked.",
+        "Sales through your creators' tracking links and codes are reported to you.",
         "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
         "Brief help for the creators you accept.",
-        "10 pilot places. Growth has no charge for the 2 month pilot, then A$39.50 a month for 3 months, then A$79.",
-        "Starter is A$29 a month or A$290 a year. Growth is A$79 or A$790. Scale is A$229 or A$2,290. Annual prices are two months off.",
+        "10 pilot places. Growth has no charge for the pilot, from 20 November 2026 until 20 January 2027, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
+        "Starter is A$29 a month ex GST or A$290 a year ex GST. Growth is A$79 ex GST or A$790 ex GST. Scale is A$229 ex GST or A$2,290 ex GST. Annual prices are two months off.",
     ),
 }
 
@@ -85,12 +85,42 @@ def landing_html(kind: str, *, token: str = "", thanks: str = "", event_id: str 
     if SHOW_TESTIMONIALS:
         testimonials = "<section><h2>Stories</h2></section>"
     thanks_block = f"<p class='thanks'>{html.escape(thanks)}</p>" if thanks else ""
-    age = ""
+    import billing_config
+    import legal
+
+    operator = billing_config.operator_legal_name()
     if spec["role"] == "creator":
-        age = (
-            "<label class='check'><input name='age_confirmed' type='checkbox' value='yes' required> "
-            "I am 18 or older</label>"
+        panel = legal.CREATOR_PANEL
+        role_fields = legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
+        paid = legal.checkbox("paid_service_confirmed", legal.CREATOR_APPLY, required=True)
+    else:
+        panel = legal.SELLER_PANEL
+        role_fields = (
+            "<label>Business name <input name='business_name' autocomplete='organization' required></label>"
+            "<label>ABN (optional, 11 digits) <input name='abn' inputmode='numeric' pattern='[0-9 ]{11,14}'></label>"
+            + legal.checkbox("authority_confirmed", legal.SELLER_AUTHORITY, required=True)
         )
+        paid = legal.checkbox("paid_service_confirmed", legal.SELLER_APPLY, required=True)
+    email_box = legal.checkbox("email_consent", legal.EMAIL_CONSENT, required=False)
+    if operator:
+        operator_line = f"<p class='operator'>Plantr Collab is operated by {html.escape(operator)}.</p>"
+        form = f"""<form method="post" action="{html.escape(spec['path'])}/apply" data-role="{html.escape(spec['role'])}">
+      <input type="hidden" name="csrf_token" value="{html.escape(token)}">
+      <input type="hidden" name="event_id" value="{html.escape(event_id)}">
+      <input type="hidden" name="role" value="{html.escape(spec['role'])}">
+      <label>Name <input name="name" autocomplete="name" required></label>
+      <label>Email <input name="email" type="email" autocomplete="email" required></label>
+      <label>Categories <input name="categories" placeholder="home, beauty"></label>
+      <label>Social handle or website <input name="contact" autocomplete="url"></label>
+      {role_fields}
+      <p class='panel'>{html.escape(panel)}</p>
+      {paid}
+      {email_box}
+      <button type="submit">{html.escape(spec['cta'])}</button>
+    </form>"""
+    else:
+        operator_line = ""
+        form = f"<p class='panel'>{html.escape(panel)}</p><p class='soon'>{html.escape(legal.OPENING_SOON)}</p>"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -118,17 +148,8 @@ def landing_html(kind: str, *, token: str = "", thanks: str = "", event_id: str 
     <ul>{points}</ul>
     {testimonials}
     {thanks_block}
-    <form method="post" action="{html.escape(spec['path'])}/apply" data-role="{html.escape(spec['role'])}">
-      <input type="hidden" name="csrf_token" value="{html.escape(token)}">
-      <input type="hidden" name="event_id" value="{html.escape(event_id)}">
-      <input type="hidden" name="role" value="{html.escape(spec['role'])}">
-      <label>Name <input name="name" autocomplete="name" required></label>
-      <label>Email <input name="email" type="email" autocomplete="email" required></label>
-      <label>Categories <input name="categories" placeholder="home, beauty"></label>
-      <label>Social handle or website <input name="contact" autocomplete="url"></label>
-      {age}
-      <button type="submit">{html.escape(spec['cta'])}</button>
-    </form>
+    {form}
+    {operator_line}
     <p><a href="/privacy">Privacy</a></p>
   </main>
   <script>
@@ -184,7 +205,7 @@ def consent_banner() -> str:
         "<script>"
         "function plantrConsent(allowed){"
         "document.cookie='plantr_consent='+(allowed?'marketing':'denied')+';path=/;max-age=7776000;samesite=lax';"
-        "fetch('/track/consent',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({consent:allowed})});"
+        "fetch('/track/consent',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({consent:allowed,query:location.search.slice(1)})});"
         "}"
         "document.getElementById('consent-yes').onclick=function(){plantrConsent(true)};"
         "document.getElementById('consent-no').onclick=function(){plantrConsent(false)};"

@@ -17,11 +17,10 @@ def test_creator_labels_and_pilot_prices_keep_internal_ids():
     assert billing_config.tier_label("creator", "elite") == "Trendsettr"
     assert billing_config.tier_label("seller", "growth") == "Growth"
     assert billing_config.lookup_key("creator", "elite", "year") == "creator_elite_year"
-    assert billing_config.COUPONS["founding_curator_50_12mo"]["duration_in_months"] == 12
-    assert billing_config.COUPONS["foundr_10aud_12mo"]["amount_off"] == 1000
-    assert billing_config.COUPONS["foundr_10aud_12mo"]["duration_in_months"] == 12
-    assert billing_config.COUPONS["seller_growth_50_3mo"]["duration_in_months"] == 3
-    assert billing_config.COUPONS["founding_curator_50_12mo"]["name"] == "Foundr 50% for 12 months"
+    assert "founding_curator_50_12mo" not in billing_config.COUPONS
+    assert billing_config.COUPONS["foundr9_curatr_month_12mo"]["amount_off"] == 1000
+    assert billing_config.COUPONS["foundr9_curatr_month_12mo"]["duration_in_months"] == 12
+    assert billing_config.COUPONS["pilotgrowth_growth_50_3mo"]["duration_in_months"] == 3
     assert billing_config.lookup_key("seller", "starter", "month") == "seller_starter_month"
     assert billing_config.lookup_key("creator", "member", "year") == "creator_member_year"
     assert billing_config.price_label(1500) == "A$15 ex GST"
@@ -47,11 +46,13 @@ def test_creator_labels_and_pilot_prices_keep_internal_ids():
     assert "Founding Curator" not in page
 
 
-def test_pilot_window_is_two_months_and_ignores_the_old_week_setting(monkeypatch):
+def test_pilot_window_is_20_nov_to_20_jan_sydney_and_ignores_the_old_week_setting(monkeypatch):
     monkeypatch.setenv("PILOT_WEEKS", "6")
     assert billing_config.pilot_months() == 2
-    assert billing_config.pilot_start() == datetime(2026, 11, 20, tzinfo=timezone.utc)
-    assert billing_config.pilot_end() == datetime(2027, 1, 20, tzinfo=timezone.utc)
+    # 20 Nov 2026 00:00 AEDT and 20 Jan 2027 12:00 AEDT.
+    assert billing_config.pilot_start() == datetime(2026, 11, 19, 13, 0, tzinfo=timezone.utc)
+    assert billing_config.pilot_end() == datetime(2027, 1, 20, 1, 0, tzinfo=timezone.utc)
+    assert billing_config.sydney_date_label(billing_config.pilot_end()) == "20 January 2027"
     now = datetime.now(timezone.utc)
     db.memory_cohorts["seller_pilot"] = SimpleNamespace(
         id="old-seller",
@@ -66,7 +67,7 @@ def test_pilot_window_is_two_months_and_ignores_the_old_week_setting(monkeypatch
         active=True,
     )
     pilots.ensure_cohorts()
-    assert db.memory_cohorts["seller_pilot"].ends_at == datetime(2027, 1, 20, tzinfo=timezone.utc)
+    assert db.memory_cohorts["seller_pilot"].ends_at == datetime(2027, 1, 20, 1, 0, tzinfo=timezone.utc)
     assert db.memory_cohorts["founding_curators"].name == "Foundrs"
     assert db.memory_cohorts["founding_curators"].ends_at == db.memory_cohorts["seller_pilot"].ends_at
 
@@ -97,12 +98,18 @@ def test_pilot_checkout_is_free_until_the_cohort_end(monkeypatch):
         interval="month",
         success_url="https://pay.example/creator/billing",
         cancel_url="https://pay.example/creator/billing",
-        promo_code="FOUNDING50",
         trial_end=stripe_billing.pilot_trial_end("creator", creator.id),
     )
     created = fake.checkout.sessions.created[0]
     assert created["subscription_data"]["trial_end"] == expected
-    assert created["discounts"] == [{"promotion_code": "promo_founding"}]
+    # FOUNDR9 is applied without typing it, and attached when the free period ends.
+    assert "discounts" not in created
+    assert "allow_promotion_codes" not in created
+    assert created["subscription_data"]["metadata"]["pilot_offer"] == "FOUNDR9"
+    assert created["subscription_data"]["metadata"]["pilot_promotion_code"] == "promo_foundr9"
+    message = created["custom_text"]["submit"]["message"]
+    assert message.startswith("No charge today. Code FOUNDR9 applied. Your first charge of A$9 (ex GST) will be on 20 January 2027.")
+    assert "then A$19 a month from 20 January 2028" in message
     assert stripe_billing.pilot_trial_end("creator", "missing") is None
 
 
@@ -157,6 +164,7 @@ def test_unsubscribed_accounts_see_a_subscribe_prompt(monkeypatch):
     monkeypatch.setenv("PILOT_START", "2026-11-01")
     assert stripe_billing.commerce_open("seller", shop["id"]) is True
     monkeypatch.setenv("PILOT_START", "2020-01-01")
+    monkeypatch.setenv("PILOT_END", "2020-03-01")
     assert stripe_billing.commerce_open("seller", shop["id"]) is False
     db.memory_shops[shop["id"]].is_pilot = False
     db.memory_shops[shop["id"]].subscription_status = "active"

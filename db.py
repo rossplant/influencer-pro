@@ -103,6 +103,8 @@ memory_billing: list = []
 memory_tracked_event_ids: set = set()
 memory_tracked_subjects: set = set()
 memory_tracking_retries: list = []
+memory_terms_acceptances: list = []
+memory_reminder_sends: dict = {}
 
 
 def configured() -> bool:
@@ -151,6 +153,8 @@ def reset_memory() -> None:
     memory_tracked_event_ids.clear()
     memory_tracked_subjects.clear()
     memory_tracking_retries.clear()
+    memory_terms_acceptances.clear()
+    memory_reminder_sends.clear()
 
 
 def close() -> None:

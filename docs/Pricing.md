@@ -58,14 +58,31 @@ Internal tier values stay `member`, `curator`, and `elite`. The names on screen 
 
 Every plan is paid. An account with no live subscription, and that is not in the current pilot, is unsubscribed. It can sign in and edit its profile, and it sees a subscribe prompt instead of creating products, campaigns, matches, or accepted offers.
 
-Foundrs are the invite-only cohort. They have no charge for the 2 month pilot (20 November 2026 through 20 January 2027), then A$9 a month for 12 months. That price is an A$10 amount-off Curatr coupon (`foundr_10aud_12mo`), with promo code FOUNDR9. FOUNDING50 still maps to the older 50% coupon. The route stays `/founding-curators`. Curatr still waives the next invoice after 5 attributed sales in a month.
+Foundrs are the invite-only cohort. They have no charge for the pilot (20 November 2026 to 20 January 2027), then Curatr at A$9 a month ex GST for 12 months, then A$19. That price is an A$10 amount-off coupon (`foundr9_curatr_month_12mo`, restricted in Stripe to the Curatr product) with promo code FOUNDR9. The app applies FOUNDR9 only to monthly Curatr; Membr, Trendsettr and annual plans are never discounted. FOUNDING50 is retired and deactivated. The route stays `/founding-curators`.
+
+The 5-sale waiver is Curatr only. A Curatr month with 5 or more attributed sales credits the customer balance with the next invoice amount, so the next invoice is A$0. It stacks with FOUNDR9: the FOUNDR9 discount stays on the subscription and the waiver covers the remaining A$9.
 
 ## Pilot
 
-Both cohorts run for 2 months, from 20 November 2026, with paid plans starting 20 January 2027.
+Both cohorts run from 20 November 2026 to 20 January 2027. The free period ends at 12:00 Sydney time on 20 January 2027, which is when the first invoice is raised and charged.
 
-- Suppliers: Growth has no charge for the 2 months, then 50% off Growth (A$39.50) for 3 months, then A$79.
-- Foundrs: no charge for the 2 months, then A$9 a month for 12 months.
+- Suppliers: Growth has no charge during the pilot, then A$39.50 a month ex GST (PILOTGROWTH, 50% off) for 3 months, then A$79.
+- Foundrs: no charge during the pilot, then Curatr at A$9 a month ex GST (FOUNDR9) for 12 months, then A$19.
+
+Codes are applied automatically for eligible accounts; nobody types them, and Stripe Checkout does not accept typed codes. A pilot subscriber who checks out during the pilot gets a Stripe subscription schedule: the free period, then 3 (or 12) monthly invoices with the code, then full price. This stops the code's months being used up during the free period. After the pilot ends, the code is attached directly at Checkout.
+
+Checkout shows the disclosure from `09_Signup_Acceptance_Wording` section 10 next to Subscribe and on the Stripe page, for example "No charge today. Your first charge of A$39.50 (ex GST) will be on 20 January 2027 ...".
+
+## Reminders
+
+`reminders.py` sends, through the Resend adapter in `mailer.py`:
+
+- the pilot-ending email to every signed-up pilot member from 5 January 2027 10:00 Sydney time (by 6 January 2027),
+- a first-charge email 7 days before the first charge after any free period,
+- an annual renewal email 14 days before renewal,
+- a discount-ending email 14 days before PILOTGROWTH, FOUNDR9 or another discount ends.
+
+`reminder_sends` is the idempotent send log. The job runs hourly inside the app (`REMINDERS_LOOP=off` turns it off) and can be run by hand with `POST /admin/api/reminders/run`. Until `RESEND_API_KEY` and `EMAIL_FROM` are set, nothing is sent, a warning is logged, and due reminders are retried on later runs until their date passes.
 
 ## How money flows
 1. The seller pays the Plantr Collab subscription. The performance fee waits until attribution works.

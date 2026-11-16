@@ -654,6 +654,23 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
             + manage
         )
     elif billing.get("configured"):
+        import legal
+
+        found = billing.get("disclosures") or {}
+        detail = "".join(
+            f"<li><strong>{html.escape(row['label'])} ({'annual' if row['interval'] == 'year' else 'monthly'})</strong>: {html.escape(row['text'])}</li>"
+            for row in found.get("plans") or []
+        )
+        main_text = found.get("main") or ""
+        disclosure_html = (
+            (f"<p class='disclosure'>{html.escape(main_text)}</p>" if main_text else "")
+            + f"<details><summary>What you will pay on each plan</summary><ul>{detail}</ul></details>"
+            + legal.checkbox(
+                "authorise_recurring",
+                legal.CHECKOUT_AUTHORISE.format(terms=found.get("terms") or "Terms"),
+                required=True,
+            )
+        )
         options = []
         for plan in billing.get("plans") or []:
             if str(plan.get("monthly") or "").startswith("Included"):
@@ -670,8 +687,8 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
           <label>Interval
             <select name="interval"><option value="month">month</option><option value="year">year</option></select>
           </label>
-          <label>Promotion code <input name="promo_code"></label>
-          <button type="submit">Continue to checkout</button>
+          {disclosure_html}
+          <button type="submit">Subscribe</button>
         </form>
         {manage}
         """
