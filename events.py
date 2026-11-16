@@ -153,8 +153,13 @@ def record_admin(name: str, **props: Any) -> Any:
         return event
 
 
-def record_link_click(link: Any) -> Any:
-    """Append a click for a tracking code. This does not change plan counters."""
+def record_link_click(link: Any, *, source_platform: str = "unknown", channel_kind: str = "link") -> Any:
+    """Append a click for a tracking code. This does not change plan counters.
+
+    source_platform is tiktok, instagram, youtube, facebook, other, or unknown.
+    channel_kind is link, or ad for a Spark Ads click. The code itself is not a secret;
+    nothing else from the request URL is stored.
+    """
     from types import SimpleNamespace
 
     def value(name: str):
@@ -162,6 +167,12 @@ def record_link_click(link: Any) -> Any:
             return link.get(name)
         return getattr(link, name, None)
 
+    if source_platform not in {"tiktok", "instagram", "youtube", "facebook", "other", "unknown"}:
+        source_platform = "unknown"
+    if channel_kind not in {"link", "ad"}:
+        channel_kind = "link"
+    if channel_kind == "ad":
+        source_platform = "tiktok"
     payload = {
         "id": _new_id(),
         "occurred_at": utcnow(),
@@ -175,6 +186,8 @@ def record_link_click(link: Any) -> Any:
             "discount_code": value("discount_code"),
             "creator_id": value("creator_id"),
             "product_id": value("product_id"),
+            "source_platform": source_platform,
+            "channel_kind": channel_kind,
         },
     }
     if not db.configured():

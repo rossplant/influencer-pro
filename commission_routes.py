@@ -10,13 +10,15 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import Depends, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
+import attribution
 import billing_config
 import commission
 import portal
 import shopify_sync
+import spark_ads
 
 
 class StoreWebhooksIn(BaseModel):
@@ -26,6 +28,19 @@ class StoreWebhooksIn(BaseModel):
 
 class StoreCodeIn(BaseModel):
     code: Optional[str] = None
+
+
+class PlatformCodeIn(BaseModel):
+    code: str
+    source_platform: str
+
+
+class SparkAdIn(BaseModel):
+    post_url: str
+    spark_code: str
+    authorised_until: str
+    usage_note: Optional[str] = None
+    consent: bool = False
 
 
 class MarkPaidIn(BaseModel):
@@ -148,6 +163,18 @@ def register(app) -> None:
         session = _seller(request, write=True)
         return shopify_sync.set_store_code(session["subject_id"], link_id, body.code, actor=session["email"])
 
+    @app.post("/seller/api/links/{link_id}/platform-codes")
+    def seller_platform_code(link_id: str, body: PlatformCodeIn, request: Request, _: None = portal_limit):
+        session = _seller(request, write=True)
+        return attribution.register_platform_code(
+            session["subject_id"], link_id, body.code, body.source_platform, actor=session["email"]
+        )
+
+    @app.delete("/seller/api/links/{link_id}/platform-codes/{code_id}")
+    def seller_delete_platform_code(link_id: str, code_id: str, request: Request, _: None = portal_limit):
+        session = _seller(request, write=True)
+        return attribution.delete_platform_code(session["subject_id"], link_id, code_id)
+
     # ------------------------------------------------------------ Shopify: public
     @app.get("/shopify/oauth/callback")
     def shopify_oauth_callback(request: Request, _: None = public_limit):
@@ -183,6 +210,21 @@ def register(app) -> None:
     def seller_statement(statement_id: str, request: Request, _: None = portal_limit):
         session = _seller(request)
         return commission.statement_detail(statement_id, viewer="seller", shop_id=session["subject_id"])
+
+    @app.get("/seller/api/commission/statements/{statement_id}/csv")
+    def seller_statement_csv(statement_id: str, request: Request, _: None = portal_limit):
+        session = _seller(request)
+        body = commission.statement_csv(statement_id, shop_id=session["subject_id"])
+        return Response(
+            content=body,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="statement-{statement_id}.csv"'},
+        )
+
+    @app.get("/seller/api/commission/source-report")
+    def seller_source_report(period: str, request: Request, _: None = portal_limit):
+        session = _seller(request)
+        return commission.source_report(session["subject_id"], period)
 
     @app.post("/seller/api/commission/statements/{statement_id}/mark-paid")
     def seller_mark_paid(statement_id: str, body: MarkPaidIn, request: Request, _: None = portal_limit):
@@ -235,6 +277,16 @@ def register(app) -> None:
         session = _seller(request)
         return commission.agreement_detail(agreement_id, viewer="seller", shop_id=session["subject_id"])
 
+    @app.get("/seller/api/collabs/{collab_id}/spark-ads")
+    def seller_spark_ads(collab_id: str, request: Request, _: None = portal_limit):
+        session = _seller(request)
+        return spark_ads.list_codes(collab_id=collab_id, viewer="seller", shop_id=session["subject_id"])
+
+    @app.get("/seller/api/collabs/{collab_id}/spark-ads/{spark_id}")
+    def seller_spark_ad(collab_id: str, spark_id: str, request: Request, _: None = portal_limit):
+        session = _seller(request)
+        return spark_ads.get_code(collab_id=collab_id, spark_id=spark_id, viewer="seller", shop_id=session["subject_id"])
+
     @app.post("/seller/api/collabs")
     def seller_offer(body: OfferIn, request: Request, _: None = portal_limit):
         session = _seller(request, write=True)
@@ -285,10 +337,38 @@ def register(app) -> None:
         session = _creator(request, write=True)
         return commission.respond_to_correction(session["subject_id"], correction_id, agree=False, reason=body.reason, actor=session["email"])
 
+    @app.get("/creator/api/links")
+    def creator_links_api(request: Request, _: None = portal_limit):
+        session = _creator(request)
+        return {"links": attribution.list_links(shop_id=None, creator_id=session["subject_id"])}
+
     @app.get("/creator/api/collabs")
     def creator_collabs(request: Request, _: None = portal_limit):
         session = _creator(request)
         return commission.list_agreements(creator_id=session["subject_id"], viewer="creator")
+
+    @app.get("/creator/api/collabs/{collab_id}/spark-ads")
+    def creator_spark_ads(collab_id: str, request: Request, _: None = portal_limit):
+        session = _creator(request)
+        return spark_ads.list_codes(collab_id=collab_id, viewer="creator", creator_id=session["subject_id"])
+
+    @app.post("/creator/api/collabs/{collab_id}/spark-ads")
+    def creator_add_spark_ad(collab_id: str, body: SparkAdIn, request: Request, _: None = portal_limit):
+        session = _creator(request, write=True)
+        return spark_ads.add_code(
+            session["subject_id"], collab_id, post_url=body.post_url, spark_code=body.spark_code,
+            authorised_until=body.authorised_until, usage_note=body.usage_note, consent=body.consent, actor=session["email"],
+        )
+
+    @app.get("/creator/api/collabs/{collab_id}/spark-ads/{spark_id}")
+    def creator_spark_ad(collab_id: str, spark_id: str, request: Request, _: None = portal_limit):
+        session = _creator(request)
+        return spark_ads.get_code(collab_id=collab_id, spark_id=spark_id, viewer="creator", creator_id=session["subject_id"])
+
+    @app.post("/creator/api/collabs/{collab_id}/spark-ads/{spark_id}/revoke")
+    def creator_revoke_spark_ad(collab_id: str, spark_id: str, request: Request, _: None = portal_limit):
+        session = _creator(request, write=True)
+        return spark_ads.revoke(session["subject_id"], collab_id, spark_id, actor=session["email"])
 
     @app.post("/creator/api/collabs/{agreement_id}/accept")
     def creator_accept(agreement_id: str, body: AcceptIn, request: Request, _: None = portal_limit):

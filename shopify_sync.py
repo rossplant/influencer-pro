@@ -393,6 +393,8 @@ def set_store_code(shop_id: str, link_id: str, code: Optional[str], *, actor: st
         if link is None or link.shop_id != shop_id:
             raise HTTPException(status_code=404, detail="Link not found")
         if clean is not None:
+            from models import CreatorPlatformCode
+
             clash = session.scalar(
                 select(CreatorProductLink.id).where(
                     CreatorProductLink.shop_id == shop_id,
@@ -400,6 +402,10 @@ def set_store_code(shop_id: str, link_id: str, code: Optional[str], *, actor: st
                     (func.upper(CreatorProductLink.store_discount_code) == clean) | (func.upper(CreatorProductLink.discount_code) == clean),
                 )
             )
+            if clash is None:
+                clash = session.scalar(
+                    select(CreatorPlatformCode.id).where(CreatorPlatformCode.shop_id == shop_id, CreatorPlatformCode.code == clean)
+                )
             if clash is not None:
                 raise HTTPException(status_code=409, detail="That code is already linked to another creator")
         link.store_discount_code = clean
@@ -553,18 +559,6 @@ def _ref_codes(order: dict) -> list[str]:
     return [c.strip().upper() for c in codes if c and c.strip()]
 
 
-def _link_for_code(session, shop_id: str, code: str) -> Optional[CreatorProductLink]:
-    code = code.strip().upper()
-    if not code:
-        return None
-    return session.scalar(
-        select(CreatorProductLink).where(
-            CreatorProductLink.shop_id == shop_id,
-            (func.upper(CreatorProductLink.discount_code) == code) | (func.upper(CreatorProductLink.store_discount_code) == code),
-        )
-    )
-
-
 def _parse_time(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -576,43 +570,80 @@ def _parse_time(value: Any) -> Optional[datetime]:
 
 
 def attribute(session, shop_id: str, order: dict, occurred: datetime) -> dict:
-    """Pick at most one creator. Code beats link when they point at different creators."""
+    """Pick at most one creator. Code beats link when they point at different creators.
+
+    A direct seller URL (?plantr=<code>&s=&c=) is itself the click for this order.
+    pc_ref links still need a click in the 7-day window. The raw landing URL is not stored.
+    source_platform and channel_kind are reporting only and do not change the amount owed.
+    """
     import attribution
 
-    ref_link = None
-    for code in _ref_codes(order):
-        ref_link = session.scalar(
-            select(CreatorProductLink).where(CreatorProductLink.shop_id == shop_id, func.upper(CreatorProductLink.discount_code) == code)
+    direct = attribution.parse_direct_signal(order)
+    direct_link = None
+    if direct is not None:
+        direct_link = session.scalar(
+            select(CreatorProductLink).where(
+                CreatorProductLink.shop_id == shop_id,
+                func.upper(CreatorProductLink.discount_code) == direct["code"],
+            )
         )
-        if ref_link is not None:
-            break
+        if direct_link is None:
+            direct = None
+    ref_link = None
+    if direct_link is None:
+        for code in _ref_codes(order):
+            ref_link = session.scalar(
+                select(CreatorProductLink).where(
+                    CreatorProductLink.shop_id == shop_id, func.upper(CreatorProductLink.discount_code) == code
+                )
+            )
+            if ref_link is not None:
+                break
+    link_signal = direct_link or ref_link
     code_link = None
+    code_platform = None
     for entry in order.get("discount_codes") or []:
-        code_link = _link_for_code(session, shop_id, str(entry.get("code") or ""))
+        code_link, code_platform = attribution.match_shop_code(session, shop_id, str(entry.get("code") or ""))
         if code_link is not None:
             break
-    if code_link is not None and ref_link is not None:
-        if code_link.creator_id == ref_link.creator_id:
-            return {"link": code_link, "method": "link+code", "attributed": True, "note": None}
-        return {
-            "link": code_link,
-            "method": "code",
-            "attributed": True,
-            "note": f"code beat link from creator {ref_link.creator_id}",
-            "superseded_creator_id": ref_link.creator_id,
-        }
-    if code_link is not None:
-        return {"link": code_link, "method": "code", "attributed": True, "note": None}
-    if ref_link is not None:
-        link_dict = {"id": ref_link.id, "discount_code": ref_link.discount_code}
-        clicked = attribution._clicked_within_window(link_dict, occurred.date())
-        return {
-            "link": ref_link,
-            "method": "link",
-            "attributed": clicked,
-            "note": None if clicked else f"no click in the {attribution_window_days()} days before the order",
-        }
-    return {"link": None, "method": None, "attributed": False, "note": None}
+    if code_link is not None and link_signal is not None:
+        if code_link.creator_id == link_signal.creator_id:
+            result = {"link": code_link, "method": "link+code", "attributed": True, "note": None}
+        else:
+            result = {
+                "link": code_link,
+                "method": "code",
+                "attributed": True,
+                "note": f"code beat link from creator {link_signal.creator_id}",
+                "superseded_creator_id": link_signal.creator_id,
+            }
+    elif code_link is not None:
+        result = {"link": code_link, "method": "code", "attributed": True, "note": None}
+    elif link_signal is not None:
+        if direct_link is not None:
+            clicked = True
+            note = None
+        else:
+            link_dict = {"id": link_signal.id, "discount_code": link_signal.discount_code}
+            clicked = attribution._clicked_within_window(link_dict, occurred.date())
+            note = None if clicked else f"no click in the {attribution_window_days()} days before the order"
+        result = {"link": link_signal, "method": "link", "attributed": clicked, "note": note}
+    else:
+        result = {"link": None, "method": None, "attributed": False, "note": None}
+    link = result["link"]
+    link_dict = {"id": link.id, "discount_code": link.discount_code} if link is not None else None
+    direct_for_report = direct if direct_link is not None and result["method"] in {"link", "link+code"} else None
+    reporting = attribution.classify_sale(
+        method=result["method"],
+        link=link_dict,
+        order_date=occurred.date(),
+        code_platform=code_platform if result["method"] in {"code", "link+code"} else None,
+        direct=direct_for_report,
+    )
+    result["source_platform"] = reporting["source_platform"]
+    result["channel_kind"] = reporting["channel_kind"]
+    result["note"] = attribution.join_note(result.get("note"), reporting.get("platform_note"))
+    return result
 
 
 def process_order(shop_id: str, order: dict) -> str:
@@ -674,6 +705,8 @@ def process_order(shop_id: str, order: dict) -> str:
                 attributed=picked["attributed"],
                 attribution_method=picked["method"],
                 attribution_note=(picked.get("note") or None),
+                source_platform=picked.get("source_platform") or "unknown",
+                channel_kind=picked.get("channel_kind"),
                 occurred_at=occurred,
                 created_at=utcnow(),
                 statement_reported_net=0,
@@ -780,7 +813,7 @@ query PlantrOrders($cursor: String, $query: String) {
       legacyResourceId name createdAt updatedAt cancelledAt currencyCode taxesIncluded
       displayFinancialStatus sourceName discountCodes
       customAttributes { key value }
-      customerJourneySummary { firstVisit { landingPage } }
+      customerJourneySummary { firstVisit { landingPage referrerUrl } }
       shippingLines(first: 10) { nodes { originalPriceSet { shopMoney { amount } } } }
       lineItems(first: 100) { nodes {
         quantity isGiftCard
@@ -815,6 +848,7 @@ def graphql_to_rest(node: dict) -> dict:
         "financial_status": str(node.get("displayFinancialStatus") or "").lower(),
         "source_name": node.get("sourceName"),
         "landing_site": journey.get("landingPage"),
+        "referring_site": journey.get("referrerUrl"),
         "discount_codes": [{"code": c} for c in node.get("discountCodes") or []],
         "note_attributes": [{"name": a.get("key"), "value": a.get("value")} for a in node.get("customAttributes") or []],
         "shipping_lines": [{"price": _amount(s, "originalPriceSet")} for s in ((node.get("shippingLines") or {}).get("nodes") or [])],
