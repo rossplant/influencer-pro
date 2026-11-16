@@ -423,6 +423,14 @@ class AttributedOrder(Base):
     __table_args__ = (
         UniqueConstraint("platform", "external_order_id", name="uq_orders_platform_external"),
         Index("ix_orders_shop_attribution_date", "shop_id", "attribution_date"),
+        CheckConstraint(
+            "source_platform IN ('tiktok', 'instagram', 'youtube', 'facebook', 'other', 'unknown')",
+            name="ck_attributed_orders_source_platform",
+        ),
+        CheckConstraint(
+            "channel_kind IS NULL OR channel_kind IN ('link', 'code', 'ad')",
+            name="ck_attributed_orders_channel_kind",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -464,6 +472,9 @@ class AttributedOrder(Base):
     shipping_excluded: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     statement_reported_net: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
     external_updated_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    # Where the sale was reported from. Reporting only: it does not change the amount owed.
+    source_platform: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+    channel_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
 
 class AdminUser(Base):
@@ -964,3 +975,54 @@ class CommissionCorrection(Base):
     decided_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
     decided_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     decision_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class CreatorPlatformCode(Base):
+    """An optional extra code for one creator, tagged to a source platform (for example MIA-TT).
+
+    The creator's Plantr code and untagged store code stay as they are. A sale that
+    matches one of these codes is still one credit; the tag is for reporting.
+    """
+
+    __tablename__ = "creator_platform_codes"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "code", name="uq_creator_platform_codes_shop_code"),
+        CheckConstraint(
+            "source_platform IN ('tiktok', 'instagram', 'youtube', 'facebook', 'other')",
+            name="ck_creator_platform_codes_source_platform",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey("creator_product_links.id"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CollabSparkAd(Base):
+    """A TikTok Spark code the creator chose to share for one collab.
+
+    spark_code is a Fernet ciphertext (SHOPIFY_TOKEN_KEY). It is never listed or logged.
+    ad_destination is the seller's own product URL, not a Plantr redirect.
+    """
+
+    __tablename__ = "collab_spark_ads"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'expired', 'revoked')", name="ck_collab_spark_ads_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    collab_id: Mapped[str] = mapped_column(ForeignKey("collab_agreements.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    post_url: Mapped[str] = mapped_column(Text, nullable=False)
+    spark_code: Mapped[str] = mapped_column(Text, nullable=False)
+    authorised_until: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    usage_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ad_destination: Mapped[str] = mapped_column(Text, nullable=False)
+    consented_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)

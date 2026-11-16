@@ -332,6 +332,8 @@ def accepted_for_shop(shop_id: str) -> list[dict]:
         link = _link_for(item["creator_id"], item["product_id"])
         item["discount_code"] = link.get("discount_code") if link else None
         item["tracking_path"] = link.get("tracking_path") if link else None
+        item["direct_url"] = link.get("direct_url") if link else None
+        item["platform_links"] = link.get("platform_links") if link else None
         rows.append(item)
     return rows
 
@@ -398,6 +400,8 @@ def creator_offers(creator_id: str) -> list[dict]:
         link = _link_for(item.get("creator_id"), item.get("product_id"))
         item["discount_code"] = link.get("discount_code") if link else None
         item["tracking_path"] = link.get("tracking_path") if link else None
+        item["direct_url"] = link.get("direct_url") if link else None
+        item["platform_links"] = link.get("platform_links") if link else None
         offers.append(item)
     return offers
 
@@ -549,7 +553,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             "<li>"
             f"{html.escape(str(item.get('handle') or item.get('creator_id')))} · "
             f"{html.escape(str(item.get('product_title') or ''))}"
-            f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
+            f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url, item.get('platform_links'), item.get('direct_url'))}"
             f"{_abn_note(item)}"
             "</li>"
         )
@@ -612,13 +616,13 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
-                f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url)}</article>"
+                f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url, offer.get('platform_links'), offer.get('direct_url'))}</article>"
             )
         return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
     items = "".join(
         "<li>"
         f"{html.escape(str(row.get('link_url') or ''))}"
-        f"{_tracking_block(row.get('discount_code'), row.get('tracking_path'), base_url)}"
+        f"{_tracking_block(row.get('discount_code'), row.get('tracking_path'), base_url, row.get('platform_links'), row.get('direct_url'))}"
         "</li>"
         for row in data.get("links") or []
     )
@@ -716,18 +720,45 @@ def _abn_note(item: dict) -> str:
     return f'<p class="note">{html.escape(commission.ABN_WARNING)}</p>'
 
 
-def _tracking_block(code: Optional[str], path: Optional[str], base_url: str) -> str:
+def _tracking_block(
+    code: Optional[str],
+    path: Optional[str],
+    base_url: str,
+    platform_links: Optional[list] = None,
+    direct_url: Optional[str] = None,
+) -> str:
     if not code or not path:
         return "<p class='tracking'>No tracking code yet.</p>"
     full = f"{base_url.rstrip('/')}{path}"
     safe_code = html.escape(str(code))
     safe_url = html.escape(full)
+    extra = ""
+    if direct_url:
+        safe_direct = html.escape(str(direct_url))
+        extra += (
+            f"<p>Direct <a href='{safe_direct}'>{safe_direct}</a> "
+            f"<button type='button' class='copy' data-copy='{safe_direct}'>Copy link</button></p>"
+        )
+    for variant in platform_links or []:
+        label = html.escape(str(variant.get("label") or variant.get("source_platform") or ""))
+        variant_url = html.escape(f"{base_url.rstrip('/')}{variant.get('tracking_path') or ''}")
+        extra += (
+            f"<p>{label} <a href='{variant_url}'>{variant_url}</a> "
+            f"<button type='button' class='copy' data-copy='{variant_url}'>Copy link</button></p>"
+        )
+        if variant.get("direct_url"):
+            safe_variant = html.escape(str(variant["direct_url"]))
+            extra += (
+                f"<p>{label} direct <a href='{safe_variant}'>{safe_variant}</a> "
+                f"<button type='button' class='copy' data-copy='{safe_variant}'>Copy link</button></p>"
+            )
     return (
         "<div class='tracking'>"
         f"<p><span class='code'>{safe_code}</span> "
         f"<button type='button' class='copy' data-copy='{safe_code}'>Copy code</button></p>"
         f"<p><a href='{safe_url}'>{safe_url}</a> "
         f"<button type='button' class='copy' data-copy='{safe_url}'>Copy link</button></p>"
+        f"{extra}"
         "</div>"
     )
 

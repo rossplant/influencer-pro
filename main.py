@@ -815,12 +815,13 @@ def get_creator_product_links(
 
 
 @app.get("/r/{code}")
-def redirect_tracking_code(code: str, _: None = Depends(rate_limit_public)):
+def redirect_tracking_code(code: str, request: Request, _: None = Depends(rate_limit_public)):
     link = attribution.resolve_redirect(code)
     destination = attribution.safe_destination((link or {}).get("link_url"))
     if link is None or destination is None:
         raise HTTPException(status_code=404, detail="Tracking code not found")
-    events.record_link_click(link)
+    source_platform, channel_kind = attribution.channel_from_query(request.query_params.get("s"), request.query_params.get("c"))
+    events.record_link_click(link, source_platform=source_platform, channel_kind=channel_kind)
     import shopify_sync
 
     if shopify_sync.shop_connected(link.get("shop_id")):
