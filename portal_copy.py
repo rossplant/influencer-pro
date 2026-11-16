@@ -81,6 +81,12 @@ LIVE_LINKS_AFTER_CANCEL = ross(
     "[Ross to confirm what happens to live links]",
 )
 
+# Brand names: Creatr, Foundr, Influencr, Membr, Curatr, Trendsettr, Debutr.
+# "supplier" and "suppliers" stay ordinary English. They are not an r-ending brand name.
+# Debutr is the public name of the paid seller launch add-on. No screen renders it.
+DEBUTR_NAME = "Debutr"
+CREATR_STRAPLINE = "Find products you genuinely rate. Cultivate their story, your way."
+
 VALUE_STRIP = "Hand-picked Creatrs. Matched to your products and audience."
 HERO_BADGE = "PILOT · first look"
 COMMISSION_LINE = "Commission is set and paid by the seller, not Plantr."
@@ -147,10 +153,7 @@ SELLER_DASHBOARD_EMPTY = {
 }
 CREATR_DASHBOARD = {
     "heading": "Hi {name}. Ready for your next collab?",
-    "subhead": (
-        "Products chosen with care, from Australian sellers who'd love you on board. "
-        "Pick the ones you genuinely want to try, and say yes only when it feels right."
-    ),
+    "subhead": CREATR_STRAPLINE,
     "matches": "See your matches",
     "links": "Get your links",
 }
@@ -240,10 +243,7 @@ FIND_EMPTY = {
 }
 MATCHES = {
     "heading": "Your matches",
-    "subhead": (
-        "Products chosen with care from Australian sellers who want to work with you. "
-        "Every match comes with the brief, the commission and the reasons we think it suits you."
-    ),
+    "subhead": CREATR_STRAPLINE,
     "why": "Why it's a match",
     "footnote": "AI-assisted, reviewed by our team",
     "in": "I'm in",
