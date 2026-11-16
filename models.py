@@ -185,6 +185,8 @@ class Creator(Base):
     marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     # Opt-in to marketing email. Separate from marketing_consent, which is the cookie and ad-platform choice.
     email_marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    # Optional. Creators without an ABN can join; sellers see a no-ABN withholding warning.
+    abn: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -452,6 +454,16 @@ class AttributedOrder(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     attributed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_true())
+    # Shopify order sync (0010). Amounts are ex shipping and ex tax.
+    attribution_method: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    attribution_note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    financial_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    settled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_true())
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    tax_excluded: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    shipping_excluded: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    statement_reported_net: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    external_updated_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
 
 
 class AdminUser(Base):
@@ -688,6 +700,8 @@ class CreatorProductLink(Base):
     discount_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default="active")
+    # The seller's own Shopify discount code for this creator (for example JESS10). Optional.
+    store_discount_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -727,3 +741,226 @@ class ReminderSend(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class ShopifyConnection(Base):
+    """How one shop sends orders to Plantr. Secrets are Fernet-encrypted. No bank or customer data."""
+
+    __tablename__ = "shopify_connections"
+    __table_args__ = (
+        CheckConstraint("mode IN ('app', 'store_webhooks')", name="ck_shopify_connections_mode"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, unique=True)
+    shop_domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    scopes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    access_token_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token_expires_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    refresh_token_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    refresh_token_expires_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    webhook_secret_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    webhook_path_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    oauth_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    oauth_state_expires_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    installed_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    uninstalled_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    last_webhook_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    last_backfill_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class ShopifyWebhookReceipt(Base):
+    """One row per delivered webhook id. Bodies are not stored."""
+
+    __tablename__ = "shopify_webhook_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    delivery_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    shop_domain: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CollabAgreement(Base):
+    """Offer terms both parties accepted: exact text, version, hash, and who accepted when."""
+
+    __tablename__ = "collab_agreements"
+    __table_args__ = (
+        CheckConstraint(
+            "paid_via IN ('plantr_tracked', 'tiktok_shop', 'shopify_collabs')",
+            name="ck_collab_agreements_paid_via",
+        ),
+        CheckConstraint("status IN ('offered', 'active', 'withdrawn', 'ended')", name="ck_collab_agreements_status"),
+        Index("ix_collab_agreements_pair", "shop_id", "creator_id", "product_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    shortlist_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shortlist_items.id"), nullable=True)
+    commission_rate: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    payment_terms_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    paid_via: Mapped[str] = mapped_column(String(32), nullable=False, default="plantr_tracked", server_default="plantr_tracked")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="offered", server_default="offered")
+    terms_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    terms_text: Mapped[str] = mapped_column(Text, nullable=False)
+    terms_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    seller_accepted_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    seller_accepted_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    seller_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    creator_accepted_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    creator_accepted_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    creator_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CommissionStatement(Base):
+    """Estimated commission owed by one shop to one creator for one month. Plantr never moves this money."""
+
+    __tablename__ = "commission_statements"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "creator_id", "period", "currency", name="uq_commission_statements_period"),
+        CheckConstraint(
+            "status IN ('open', 'marked_paid', 'confirmed', 'disputed', 'resolved')",
+            name="ck_commission_statements_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    net_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    amount_owed: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    orders_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rate_missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    overdue_on: Mapped[date] = mapped_column(Date, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+    marked_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    marked_paid_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    paid_reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    disputed_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    dispute_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    dispute_amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    resolution_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    overdue_notified_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+
+
+class CommissionStatementLine(Base):
+    """The order rows behind a statement. Adjustments carry later refunds forward."""
+
+    __tablename__ = "commission_statement_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    statement_id: Mapped[str] = mapped_column(ForeignKey("commission_statements.id"), nullable=False, index=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("attributed_orders.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    net_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    commission_rate: Mapped[Optional[float]] = mapped_column(Numeric(6, 2), nullable=True)
+    commission: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    collab_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CommissionAuditLog(Base):
+    """Append-only. Corrections are new rows."""
+
+    __tablename__ = "commission_audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    statement_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    actor_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CollabBlockLift(Base):
+    """An admin lifted a seller's block for the statements listed. New problems block again."""
+
+    __tablename__ = "collab_block_lifts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    statement_ids: Mapped[list] = mapped_column(JSON_TYPE, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    lifted_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class SellerPaymentResponse(Base):
+    """The seller's short public response shown next to their pays-on-time record."""
+
+    __tablename__ = "seller_payment_responses"
+
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), primary_key=True)
+    text: Mapped[str] = mapped_column(String(280), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class AbnWarningAck(Base):
+    """A seller acknowledged the no-ABN withholding warning for a creator. Append-only."""
+
+    __tablename__ = "abn_warning_acks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    context: Mapped[str] = mapped_column(String(32), nullable=False)
+    reference_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    warning_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    warning_text: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    acknowledged_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class CommissionCorrection(Base):
+    """A seller's request to correct a late or missed entry in the pays-on-time record.
+
+    The creator agrees or disagrees within the window; silence counts as agreement.
+    A disagreement goes to a Plantr admin, who corrects or keeps the entry with a reason.
+    """
+
+    __tablename__ = "commission_corrections"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending_creator', 'agreed', 'deemed_agreed', 'disagreed', 'admin_corrected', 'admin_kept')",
+            name="ck_commission_corrections_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    statement_id: Mapped[str] = mapped_column(ForeignKey("commission_statements.id"), nullable=False, index=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    entry_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending_creator", server_default="pending_creator")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    proposed_paid_on: Mapped[date] = mapped_column(Date, nullable=False)
+    original_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    original_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+    respond_by: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    creator_response_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    creator_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    decision_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

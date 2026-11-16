@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.17.0
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.18.0
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -66,7 +66,7 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.17.0`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.18.0`.
 - `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once.
 - `/seller` — shop login, profile, products, find creators, accept or decline, and accepted creators with a tracking code when one exists.
 - `/creator` — creator login, categories, accepted offers, and tracking codes. `/plantr_dashboard.html` redirects here.
@@ -74,6 +74,8 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 - `POST /creator-product-links` and `GET /creator-product-links` — admin session. One tracking code per creator and product. A second create returns the same code.
 - `GET /r/{code}` — public redirect. Logs `link_clicked`, then sends the browser to the product URL.
 - `POST /attributed-orders/import` — admin session. CSV of order id, date, code or link, gross amount, currency, and shop. Idempotent on shop and order id. `dry_run` writes nothing. Row errors are returned with the row.
+- Shopify order sync (v0.18.0, `shopify_sync.py`). Two ways to connect: the pilot bridge (`POST /seller/api/shopify/store-webhooks` with the store domain and the signing key from Settings > Notifications > Webhooks; the seller creates Order creation, Order update and Refund create webhooks pointing at the URL returned) or the Plantr Collab app (`GET /seller/shopify/install?shop=` then `/shopify/oauth/callback`, read_orders, expiring offline tokens). Webhooks: `POST /shopify/webhooks` (app, HMAC with `SHOPIFY_API_SECRET`) and `POST /shopify/webhooks/store/{token}` (bridge, HMAC with the store key). Bad HMAC returns 401; repeats are ignored by webhook id. Only orders with a Plantr link reference (`pc_ref`, added by `/r/{code}` for connected shops) or a creator code are stored, with no customer details. Net sales exclude shipping and GST and subtract refunds. When link and code point at different creators, the code wins. `POST /admin/api/shopify/{shop_id}/backfill` pulls up to 60 days (app mode). Secrets are encrypted with `SHOPIFY_TOKEN_KEY`.
+- Light commission (`commission.py`, `commission_routes.py`). Monthly statements (`POST /admin/api/commission/statements/generate`), seller mark paid, creator confirm / dispute / withdraw, admin resolve dispute after 14 days with a logged reason, admin block lift, pays-on-time record (seller and creators on that seller's briefs; never public) and seller response, seller corrections of late or missed entries (creator agrees or disagrees within 14 days, silence counts as agreement, disagreements go to an admin; entries under review leave the record), collab agreements with stored terms and both acceptances, and the no-ABN withholding warning with stored acknowledgements. Overdue or disputed amounts block only new collab offers and shortlist acceptances. No bank fields. Shopify Collabs collabs carry a double-payment warning for sellers. Settings: `COMMISSION_OVERDUE_RULE` (month_end default | payment_date), `COMMISSION_CORRECTION_WINDOW_DAYS`, `COMMISSION_OVERDUE_DAYS`, `COMMISSION_OVERDUE_GRACE_DAYS`, `COMMISSION_CONFIRM_WINDOW_DAYS`, `COMMISSION_DISPUTE_RESOLVE_AFTER_DAYS`, `COMMISSION_EXCLUDE_PLATFORM_PAID`, `COMMISSION_TIMEZONE`, `PAYS_ON_TIME_VISIBILITY`, `COLLAB_TERMS_VERSION`.
 - `GET /admin/setup` and `POST /admin/setup` — set the admin password once. Afterwards these return 410.
 - `POST /admin/login` and `POST /admin/logout` — signed HttpOnly session cookie, 12 hours.
 - `GET /admin` — login and the read-only dashboard. Shop pilot and underserved flags, and shortlist accept or decline, are the only writes.

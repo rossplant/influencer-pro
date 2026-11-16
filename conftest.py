@@ -19,6 +19,20 @@ def _isolated(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.delenv("SHOPIFY_STORE", raising=False)
     monkeypatch.delenv("SHOPIFY_TOKEN", raising=False)
+    for name in (
+        "SHOPIFY_API_KEY",
+        "SHOPIFY_API_SECRET",
+        "SHOPIFY_TOKEN_KEY",
+        "COMMISSION_OVERDUE_RULE",
+        "COMMISSION_OVERDUE_DAYS",
+        "COMMISSION_OVERDUE_GRACE_DAYS",
+        "COMMISSION_EXCLUDE_PLATFORM_PAID",
+        "COMMISSION_CONFIRM_WINDOW_DAYS",
+        "COMMISSION_DISPUTE_RESOLVE_AFTER_DAYS",
+        "PAYS_ON_TIME_VISIBILITY",
+        "COMMISSION_CORRECTION_WINDOW_DAYS",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("RATE_LIMIT_REQUESTS", raising=False)
     monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS", raising=False)
     monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
