@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.17.0"
+APP_VERSION = "0.18.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -821,6 +821,10 @@ def redirect_tracking_code(code: str, _: None = Depends(rate_limit_public)):
     if link is None or destination is None:
         raise HTTPException(status_code=404, detail="Tracking code not found")
     events.record_link_click(link)
+    import shopify_sync
+
+    if shopify_sync.shop_connected(link.get("shop_id")):
+        destination = shopify_sync.with_ref(destination, link["discount_code"])
     return RedirectResponse(url=destination, status_code=302)
 
 
@@ -1384,4 +1388,7 @@ import web_routes
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 web_routes.register(app)
+import commission_routes
+
+commission_routes.register(app)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

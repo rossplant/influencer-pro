@@ -550,6 +550,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             f"{html.escape(str(item.get('handle') or item.get('creator_id')))} · "
             f"{html.escape(str(item.get('product_title') or ''))}"
             f"{_tracking_block(item.get('discount_code'), item.get('tracking_path'), base_url)}"
+            f"{_abn_note(item)}"
             "</li>"
         )
     if page == "campaigns":
@@ -707,6 +708,14 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     """
 
 
+def _abn_note(item: dict) -> str:
+    if item.get("creator_has_abn") is not False:
+        return ""
+    import commission
+
+    return f'<p class="note">{html.escape(commission.ABN_WARNING)}</p>'
+
+
 def _tracking_block(code: Optional[str], path: Optional[str], base_url: str) -> str:
     if not code or not path:
         return "<p class='tracking'>No tracking code yet.</p>"
@@ -807,6 +816,7 @@ def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
                         "shop_name": shop.name if shop is not None else None,
                         "accepted_at": item.accepted_at,
                         "commission_rate": float(product.commission_rate) if product is not None and product.commission_rate is not None else None,
+                        "creator_has_abn": bool(getattr(creator, "abn", None)) if creator is not None else None,
                     }
                 )
             return rows

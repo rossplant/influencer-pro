@@ -56,7 +56,7 @@ def test_root_shape_and_version():
     body = response.json()
     assert set(body) == {"status", "version", "grok_enabled"}
     assert body["status"] == "Plantr Collab API running"
-    assert body["version"] == "0.17.0"
+    assert body["version"] == "0.18.0"
     assert body["grok_enabled"] is False
 
 
@@ -64,7 +64,7 @@ def test_root_stays_public_when_api_keys_are_set(monkeypatch):
     monkeypatch.setenv("API_KEYS", "secret-key")
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.17.0"
+    assert response.json()["version"] == "0.18.0"
 
 
 def test_enrich_fallback_without_xai_key():

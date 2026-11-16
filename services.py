@@ -464,6 +464,11 @@ def decide_shortlist_item(item_id: str, event_name: str, reason: Optional[str] =
             raise HTTPException(status_code=404, detail="Shortlist item not found")
         _reject_if_decided(item)
         item.shortlist = session.get(Shortlist, item.shortlist_id)
+        if event_name == "match_accepted" and item.shortlist is not None:
+            import commission
+
+            # A new collab. Blocked while the seller has an overdue or disputed owed amount.
+            commission.ensure_not_blocked(item.shortlist.shop_id)
         if item.creator_id:
             item.creator = session.get(Creator, item.creator_id)
         events.emit(event_name, item, "api", decline_reason=reason)

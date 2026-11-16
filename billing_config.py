@@ -189,6 +189,18 @@ EVENT_NAMES = {
     "founding_free_to_paid": "founding_free_to_paid",
     "attributed_sale": "attributed_sale",
     "consent_revoked": "consent_revoked",
+    "owed_calculated": "owed_calculated",
+    "owed_marked_paid": "owed_marked_paid",
+    "owed_confirmed": "owed_confirmed",
+    "owed_disputed": "owed_disputed",
+    "owed_dispute_withdrawn": "owed_dispute_withdrawn",
+    "owed_dispute_resolved": "owed_dispute_resolved",
+    "owed_overdue": "owed_overdue",
+    "seller_blocked": "seller_blocked",
+    "seller_unblocked": "seller_unblocked",
+    "shopify_connected": "shopify_connected",
+    "shopify_disconnected": "shopify_disconnected",
+    "collab_agreed": "collab_agreed",
 }
 
 # server: fan out from the API. browser: the page may fire the same event_id.
@@ -224,6 +236,19 @@ PLATFORM_EVENTS = {
     },
     "consent_revoked": {"internal": True},
     "attributed_sale": {"internal": True},
+    # Light commission and Shopify sync. Internal only; never sent to ad platforms.
+    "owed_calculated": {"internal": True},
+    "owed_marked_paid": {"internal": True},
+    "owed_confirmed": {"internal": True},
+    "owed_disputed": {"internal": True},
+    "owed_dispute_withdrawn": {"internal": True},
+    "owed_dispute_resolved": {"internal": True},
+    "owed_overdue": {"internal": True},
+    "seller_blocked": {"internal": True},
+    "seller_unblocked": {"internal": True},
+    "shopify_connected": {"internal": True},
+    "shopify_disconnected": {"internal": True},
+    "collab_agreed": {"internal": True},
 }
 
 
