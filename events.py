@@ -11,9 +11,9 @@ briefs_count_period, billing_period_start, and limit_hit.
 
 Starter allows 5 products, 1 campaign, and 3 match runs per UTC calendar month.
 Growth allows 50 products, 5 campaigns, and 25 matches. Scale allows 100 matches
-and does not cap campaigns or products. Prices are AUD ex GST: Growth 79 or 790
+and does not cap campaigns or products. Prices are AUD ex GST: Starter 29 or 290 a year, Growth 79 or 790
 a year, Scale 229 or 2290 a year. Annual MRR is the annual price / 12.
-Free, trial, trialing, invited, and starter contribute 0.
+Unsubscribed, free, trial, trialing, and invited contribute 0.
 
 Hand-run operator actions use the same event names with actor='operator'.
 """
@@ -68,14 +68,14 @@ PLAN_CAPS["starter"] = billing_config.shop_limits("starter")
 PLAN_CAPS["free"] = billing_config.shop_limits("starter")
 
 PLAN_MONTHLY_PRICE = {
-    "starter": 0,
+    "starter": billing_config.monthly_price("starter"),
     "free": 0,
     "growth": billing_config.monthly_price("growth"),
     "scale": billing_config.monthly_price("scale"),
 }
 
 PLAN_ANNUAL_PRICE = {
-    "starter": 0,
+    "starter": billing_config.annual_price("starter"),
     "free": 0,
     "growth": billing_config.annual_price("growth"),
     "scale": billing_config.annual_price("scale"),
@@ -105,14 +105,14 @@ def mrr(
 ) -> float:
     """Monthly recurring revenue.
 
-    With no explicit price, monthly MRR is the list price (growth 79, scale 229)
-    and annual MRR is the annual list price / 12 (growth 790, scale 2290).
+    With no explicit price, monthly MRR is the list price (starter 29, growth 79, scale 229)
+    and annual MRR is the annual list price / 12.
     An explicit price is used as-is for month and divided by 12 for year.
-    Free, trial, trialing, and starter contribute 0.
+    Unsubscribed, free, trial, trialing, and invited contribute 0.
     """
-    if (status or "").lower() in {"free", "trial", "trialing", "invited"}:
+    if (status or "").lower() in {"free", "trial", "trialing", "invited", "unsubscribed"}:
         return 0.0
-    if plan_tier in {"starter", "free", "trial", "member"}:
+    if plan_tier in {"free", "trial"}:
         return 0.0
     period = (interval or "month").lower()
     if price is None:

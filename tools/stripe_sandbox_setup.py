@@ -40,7 +40,10 @@ def _find_or_create_product(client, name, tier, audience):
     existing = client.products.search({"query": f"metadata['tier']:'{tier}' AND metadata['audience']:'{audience}'"})
     data = _rows(existing)
     if data:
-        return _stripe_id(data[0])
+        product_id = _stripe_id(data[0])
+        if _name_of(data[0]) != name:
+            client.products.update(product_id, {"name": name})
+        return product_id
     created = client.products.create({"name": name, "metadata": {"tier": tier, "audience": audience}})
     return _stripe_id(created)
 
@@ -65,20 +68,30 @@ def _find_or_create_price(client, product_id, lookup_key, cents, interval):
 
 def _find_or_create_coupon(client, coupon_id, spec):
     try:
-        client.coupons.retrieve(coupon_id)
-        return coupon_id
+        existing = client.coupons.retrieve(coupon_id)
     except Exception:
-        payload = {
-            "id": coupon_id,
-            "name": spec["name"],
-            "percent_off": spec["percent_off"],
-            "duration": spec["duration"],
-            "currency": billing_config.CURRENCY,
-        }
-        if spec.get("duration_in_months"):
-            payload["duration_in_months"] = spec["duration_in_months"]
-        client.coupons.create(payload)
+        existing = None
+    if existing is not None:
+        if _name_of(existing) != spec["name"]:
+            try:
+                client.coupons.update(coupon_id, {"name": spec["name"]})
+            except Exception:
+                print(f"Coupon {coupon_id} already exists and its name was left unchanged.", file=sys.stderr)
         return coupon_id
+    payload = {
+        "id": coupon_id,
+        "name": spec["name"],
+        "duration": spec["duration"],
+        "currency": billing_config.CURRENCY,
+    }
+    if spec.get("amount_off"):
+        payload["amount_off"] = spec["amount_off"]
+    else:
+        payload["percent_off"] = spec["percent_off"]
+    if spec.get("duration_in_months"):
+        payload["duration_in_months"] = spec["duration_in_months"]
+    client.coupons.create(payload)
+    return coupon_id
 
 
 def _find_or_create_promo(client, code, spec):
@@ -126,6 +139,12 @@ def _stripe_id(obj):
     if isinstance(obj, dict):
         return obj["id"]
     return obj.id
+
+
+def _name_of(obj):
+    if isinstance(obj, dict):
+        return obj.get("name")
+    return getattr(obj, "name", None)
 
 
 if __name__ == "__main__":

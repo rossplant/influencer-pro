@@ -31,19 +31,90 @@ class _MorePages:
 def test_coupon_display_names_fit_stripe_and_ids_stay_put():
     assert set(billing_config.COUPONS) == {
         "founding_curator_50_12mo",
+        "foundr_10aud_12mo",
         "seller_growth_50_3mo",
         "curator_sale_waiver",
         "elite_grant_3mo",
     }
     for coupon_id, spec in billing_config.COUPONS.items():
         assert len(spec["name"]) <= 40, coupon_id
-    assert set(billing_config.PROMOTION_CODES) == {"FOUNDING50", "PILOTGROWTH"}
+    assert set(billing_config.PROMOTION_CODES) == {"FOUNDING50", "FOUNDR9", "PILOTGROWTH"}
+    assert billing_config.COUPONS["foundr_10aud_12mo"]["amount_off"] == 1000
+    assert len(billing_config.COUPONS["foundr_10aud_12mo"]["name"]) <= 40
 
 
 def test_empty_stripe_list_is_not_paged_or_get():
     assert setup._rows(_EmptyList()) == []
     more = _MorePages()
     assert [item.id for item in setup._rows(more)] == ["first", "second"]
+
+
+def test_amount_off_coupon_is_created_without_a_percent():
+    created = {}
+
+    class Coupons:
+        @staticmethod
+        def retrieve(_coupon_id):
+            raise RuntimeError("missing")
+
+        @staticmethod
+        def create(payload):
+            created["payload"] = payload
+            return SimpleNamespace(id=payload["id"])
+
+    class Client:
+        coupons = Coupons
+
+    spec = billing_config.COUPONS["foundr_10aud_12mo"]
+    assert setup._find_or_create_coupon(Client(), "foundr_10aud_12mo", spec) == "foundr_10aud_12mo"
+    assert created["payload"]["amount_off"] == 1000
+    assert created["payload"]["currency"] == "aud"
+    assert created["payload"]["duration_in_months"] == 12
+    assert "percent_off" not in created["payload"]
+
+
+def test_existing_product_name_is_updated_to_the_current_label():
+    class Products:
+        updated = []
+
+        @staticmethod
+        def search(_query):
+            return SimpleNamespace(data=[SimpleNamespace(id="prod_curator", name="Curator")], has_more=False)
+
+        @staticmethod
+        def update(product_id, payload):
+            Products.updated.append((product_id, payload))
+            return SimpleNamespace(id=product_id)
+
+        @staticmethod
+        def create(_payload):
+            raise AssertionError("an existing product must not be created again")
+
+    class Client:
+        products = Products
+
+    assert setup._find_or_create_product(Client(), "Curatr", "curator", "creator") == "prod_curator"
+    assert Products.updated == [("prod_curator", {"name": "Curatr"})]
+    Products.updated.clear()
+
+    class SameName:
+        data = [SimpleNamespace(id="prod_trend", name="Trendsettr")]
+        has_more = False
+
+    class Quiet:
+        class products:
+            @staticmethod
+            def search(_query):
+                return SameName()
+
+            @staticmethod
+            def update(_product_id, _payload):
+                raise AssertionError("a product that already has the label must not be updated")
+
+    assert setup._find_or_create_product(Quiet(), "Trendsettr", "elite", "creator") == "prod_trend"
+    assert billing_config.CREATOR_TIERS["curator"]["label"] == "Curatr"
+    assert billing_config.CREATOR_TIERS["elite"]["label"] == "Trendsettr"
+    assert billing_config.lookup_key("creator", "curator", "month") == "creator_curator_month"
 
 
 def test_existing_promo_code_is_reused():

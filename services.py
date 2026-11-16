@@ -140,13 +140,13 @@ def shop_dict(shop: Any) -> dict:
 
 
 def _default_plan_status(plan_tier: str, explicit: Optional[str]) -> str:
-    """Starter and free default to free. Paid growth and scale default to active."""
+    """A shop with no subscription is unsubscribed. Growth and Scale default to active when status is omitted."""
     chosen = (explicit or "").strip()
     if chosen:
         return chosen
     if plan_tier in {"growth", "scale"}:
         return "active"
-    return "free"
+    return "unsubscribed"
 
 
 def allowed_category_slugs() -> set[str]:

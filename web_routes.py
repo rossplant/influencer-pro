@@ -46,7 +46,7 @@ def register(app) -> None:
             age = "<label><input name='age_confirmed' type='checkbox' value='yes' required> I am 18 or older</label>"
         number = ""
         if opened.get("founding_number"):
-            number = f"<p>Founding Curator #{opened['founding_number']}</p>"
+            number = f"<p>Foundr #{opened['founding_number']}</p>"
         body = f"""
         <h1>You've been selected.</h1>
         {number}
@@ -154,6 +154,8 @@ def register(app) -> None:
         session = portal.require_seller(request)
         form = await request.form()
         portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+        if not stripe_billing.commerce_open("seller", session["subject_id"]):
+            return RedirectResponse("/seller/billing?subscribe=1", status_code=303)
         services.create_campaign(session["subject_id"], str(form.get("name") or ""))
         return RedirectResponse("/seller/campaigns", status_code=303)
 
@@ -184,6 +186,8 @@ def register(app) -> None:
         session = portal.require_creator(request)
         form = await request.form()
         portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+        if not stripe_billing.commerce_open("creator", session["subject_id"]):
+            return RedirectResponse("/creator/billing?subscribe=1", status_code=303)
         if not _offer_for_creator(item_id, session["subject_id"]):
             raise HTTPException(status_code=404, detail="Offer not found")
         services.decide_shortlist_item(item_id, "match_accepted")
@@ -355,6 +359,7 @@ async def _checkout(request: Request, role: str):
             promo_code=str(form.get("promo_code") or ""),
             invite_code=context["signup_code"],
             campaign=context["signup_campaign"],
+            trial_end=stripe_billing.pilot_trial_end(role, session["subject_id"]),
         )
     except HTTPException as exc:
         if exc.status_code != 409:

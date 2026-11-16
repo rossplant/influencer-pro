@@ -165,9 +165,12 @@ def test_csv_import_is_idempotent_and_reports_row_errors(monkeypatch):
 
 
 def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
     from tests.test_persistence import use_database
 
     use_database(tmp_path, monkeypatch)
+    order_day = datetime.now(timezone.utc).date().isoformat()
     shop, creator, product_id = _catalogue()
     headers = _session(monkeypatch)
     code = client.post(
@@ -176,7 +179,7 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
         headers=headers,
     ).json()["discount_code"]
     assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
-    csv_text = f"order_id,date,link,gross,currency,shop\n55,2026-11-15,/r/{code},19,USD,{shop['id']}\n"
+    csv_text = f"order_id,date,link,gross,currency,shop\n55,{order_day},/r/{code},19,USD,{shop['id']}\n"
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["created"] == 1
     assert client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers).json()["existing"] == 1
     with db.session_scope() as session:
@@ -195,7 +198,11 @@ def test_import_persists_one_order_per_shop(tmp_path, monkeypatch):
 
 def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch):
     import attribution
+    from datetime import datetime, timezone
+
     from fastapi import HTTPException
+
+    order_day = datetime.now(timezone.utc).date().isoformat()
 
     shop, creator, product_id = _catalogue()
     headers = _session(monkeypatch)
@@ -205,7 +212,7 @@ def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch)
         headers=headers,
     ).json()["discount_code"]
     assert client.get(f"/r/{code}", follow_redirects=False).status_code == 302
-    csv_text = f"order_id,date,code,gross,currency,shop\n77,2026-11-15,{code},20,AUD,{shop['id']}\n"
+    csv_text = f"order_id,date,code,gross,currency,shop\n77,{order_day},{code},20,AUD,{shop['id']}\n"
     imported = client.post("/attributed-orders/import", json={"csv": csv_text}, headers=headers)
     assert imported.json()["created"] == 1
     order = db.memory_attributed_orders[-1]
@@ -226,7 +233,7 @@ def test_csv_import_records_csv_source_and_refunds_update_the_order(monkeypatch)
         attribution._validated_row(
             {
                 "order_id": "78",
-                "date": "2026-11-15",
+                "date": order_day,
                 "code": code,
                 "gross": "10",
                 "currency": "AUD",

@@ -21,10 +21,12 @@ from sqlalchemy.exc import IntegrityError
 
 import attribution
 import auth
+import billing_config
 import db
 import events
 import scoring
 import services
+import stripe_billing
 from events import PlanLimitReached
 from models import Brief, Creator, PortalAccount, Product, Shop, Shortlist, ShortlistItem, utcnow
 
@@ -423,9 +425,12 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
         return HTMLResponse(_layout("Seller", body, None, None))
     shop = shop_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
+    data["locked"] = not stripe_billing.commerce_open("seller", session["subject_id"])
     banner = ""
     if session.get("impersonator"):
         banner = "<p class='banner'>Viewing as this shop.</p>"
+    if data["locked"] and page != "profile":
+        banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
     nav = """
     <nav>
       <a href="/seller/profile">Profile</a>
@@ -459,7 +464,10 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
         return HTMLResponse(_layout("Creator", body, None, None))
     profile = creator_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
+    data["locked"] = not stripe_billing.commerce_open("creator", session["subject_id"])
     banner = "<p class='banner'>Viewing as this creator.</p>" if session.get("impersonator") else ""
+    if data["locked"] and page not in {"profile", "links"}:
+        banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
     nav = """
     <nav>
       <a href="/creator/profile">Profile</a>
@@ -481,9 +489,9 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             for row in data.get("products") or []
         )
         edit = data.get("edit") or {}
-        return f"""
-        <h1>Products</h1>
-        <ul>{rows or '<li>No products yet.</li>'}</ul>
+        form = ""
+        if not data.get("locked"):
+            form = f"""
         <h2>{'Edit' if edit else 'Add'} product</h2>
         <form method="post" action="/seller/products">
           <input type="hidden" name="csrf_token" value="{csrf}">
@@ -496,6 +504,11 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
           <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
           <button type="submit">Save product</button>
         </form>
+        """
+        return f"""
+        <h1>Products</h1>
+        <ul>{rows or '<li>No products yet.</li>'}</ul>
+        {form}
         """
     if page == "find":
         options = "".join(
@@ -510,19 +523,24 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
             estimates = html.escape(json.dumps(match.get("estimates") or {}, default=str))
             item_id = html.escape(str(match.get("shortlist_item_id") or ""))
             actions = ""
-            if item_id:
+            if item_id and not data.get("locked"):
                 actions = f"""
                 <form method="post" action="/seller/shortlist-items/{item_id}/accept"><input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">Accept</button></form>
                 <form method="post" action="/seller/shortlist-items/{item_id}/decline"><input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">Decline</button></form>
                 """
             cards.append(f"<article><h3>{handle}</h3><p>Score {html.escape(str(match.get('score')))}</p><ul>{reasons}</ul><pre>{estimates}</pre>{actions}</article>")
-        return f"""
-        <h1>Find creators</h1>
+        match_form = ""
+        if not data.get("locked"):
+            match_form = f"""
         <form method="post" action="/seller/find">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Product <select name="product_id">{options}</select></label>
           <button type="submit">Run match</button>
         </form>
+        """
+        return f"""
+        <h1>Find creators</h1>
+        {match_form}
         {''.join(cards) or '<p>Run a match to see ranked creators.</p>'}
         """
     rows = []
@@ -536,14 +554,19 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         )
     if page == "campaigns":
         rows = "".join(f"<li>{html.escape(row['name'])}</li>" for row in data.get("campaigns") or [])
-        return f"""
-        <h1>Campaigns</h1>
-        <ul>{rows or '<li>No campaigns yet.</li>'}</ul>
+        form = ""
+        if not data.get("locked"):
+            form = f"""
         <form method="post" action="/seller/campaigns">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Name <input name="name" required></label>
           <button type="submit">Create campaign</button>
         </form>
+        """
+        return f"""
+        <h1>Campaigns</h1>
+        <ul>{rows or '<li>No campaigns yet.</li>'}</ul>
+        {form}
         """
     if page == "billing":
         return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
@@ -555,7 +578,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
         number = profile.get("founding_number")
-        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         return badge + f"""
         <h1>{html.escape(profile.get('handle') or '')}</h1>
         <form method="post" action="/creator/profile">
@@ -576,7 +599,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                 else "The supplier has not set a commission rate yet."
             )
             accept = ""
-            if not offer.get("accepted_at"):
+            if not offer.get("accepted_at") and not data.get("locked"):
                 accept = (
                     f"<form method='post' action='/creator/offers/{html.escape(str(offer.get('id')))}/accept'>"
                     f"<input type='hidden' name='csrf_token' value='{csrf}'>"
@@ -600,7 +623,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
     )
     if page == "billing":
         number = profile.get("founding_number")
-        badge = f"<p>Founding Curator #{html.escape(str(number))}</p>" if number else ""
+        badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         return badge + _billing_body("creator", data.get("billing") or {}, csrf, "/creator/billing")
     return f"<h1>Links and codes</h1><ul>{items or '<li>No links yet.</li>'}</ul>"
 
@@ -608,7 +631,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
 def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     notice = "" if billing.get("configured") else "<p>Stripe is not configured.</p>"
     tier = billing.get("plan_tier") or ("starter" if role == "seller" else "member")
-    label = "Invited" if tier == "member" else tier
+    label = billing_config.tier_label(role, str(tier))
     plans = []
     for plan in billing.get("plans") or []:
         soon = ", ".join(plan.get("coming_soon") or [])
@@ -631,10 +654,19 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
             + manage
         )
     elif billing.get("configured"):
+        options = []
+        for plan in billing.get("plans") or []:
+            if str(plan.get("monthly") or "").startswith("Included"):
+                continue
+            selected = " selected" if plan.get("tier") == tier else ""
+            options.append(
+                f"<option value=\"{html.escape(str(plan.get('tier') or ''))}\"{selected}>"
+                f"{html.escape(str(plan.get('label') or ''))}</option>"
+            )
         checkout = f"""
         <form method="post" action="{action}/checkout">
           <input type="hidden" name="csrf_token" value="{csrf}">
-          <label>Plan <input name="tier" value="{html.escape(tier)}"></label>
+          <label>Plan <select name="tier">{''.join(options)}</select></label>
           <label>Interval
             <select name="interval"><option value="month">month</option><option value="year">year</option></select>
           </label>
@@ -643,10 +675,15 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
         </form>
         {manage}
         """
+    prompt = ""
+    if billing.get("commerce_open") is False:
+        prompt = f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
+    shown_status = billing.get("plan_status") or "unsubscribed"
     return f"""
     <h1>Subscription</h1>
+    {prompt}
     {notice}
-    <p>Current plan: {html.escape(str(label))}. Status: {html.escape(str(billing.get('plan_status') or 'not started'))}.</p>
+    <p>Current plan: {html.escape(str(label))}. Status: {html.escape(str(shown_status))}.</p>
     <p>Prices are ex GST. Stripe Tax is not enabled.</p>
     <ul>{''.join(plans)}</ul>
     {checkout}

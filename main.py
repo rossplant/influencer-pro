@@ -914,6 +914,13 @@ async def admin_view_creator(creator_id: str, request: Request, admin: str = Dep
     return response
 
 
+def _commerce_block(role: str, subject_id: str):
+    if stripe_billing.commerce_open(role, subject_id):
+        return None
+    path = "/seller/billing" if role == "seller" else "/creator/billing"
+    return RedirectResponse(f"{path}?subscribe=1", status_code=303)
+
+
 @app.get("/seller")
 @app.get("/seller/profile")
 def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
@@ -932,6 +939,9 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
     portal.save_product(
         session["subject_id"],
         product_id=str(form.get("product_id") or ""),
@@ -957,6 +967,9 @@ async def seller_run_match(request: Request, _: None = Depends(rate_limit_portal
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
     outcome = portal.run_match(session["subject_id"], str(form.get("product_id") or ""))
     products = portal.seller_products(session["subject_id"])
     return portal.render_seller(session, "find", base_url=billing_config.public_base_url(request), products=products, matches=outcome["matches"])
@@ -967,6 +980,9 @@ async def seller_accept(item_id: str, request: Request, _: None = Depends(rate_l
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    blocked = _commerce_block("seller", session["subject_id"])
+    if blocked is not None:
+        return blocked
     portal.decide(session["subject_id"], item_id, "match_accepted")
     return RedirectResponse("/seller/accepted", status_code=303)
 
