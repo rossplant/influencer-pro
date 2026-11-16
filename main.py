@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.19.0"
+APP_VERSION = "0.20.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -958,6 +958,7 @@ async def seller_save_profile(request: Request, _: None = Depends(rate_limit_por
             primary_category=str(form.get("primary_category") or ""),
             store_url=str(form.get("store_url") or ""),
             shopify_domain=str(form.get("shopify_domain") or ""),
+            sells_on_shopify=str(form.get("sells_on_shopify") or ""),
         )
     except HTTPException as exc:
         if exc.status_code not in {409, 422}:
@@ -971,6 +972,177 @@ async def seller_save_profile(request: Request, _: None = Depends(rate_limit_por
         page.status_code = exc.status_code
         return page
     return RedirectResponse("/seller/profile", status_code=303)
+
+
+@app.get("/seller/sales")
+def seller_sales(request: Request, period: str = "", _: None = Depends(rate_limit_portal)):
+    import manual_reporting
+
+    session = portal.seller_context(request)
+    if session is None:
+        return portal.render_seller(None, "sales")
+    chosen = period.strip() or manual_reporting.reporting_month()
+    try:
+        chosen = manual_reporting.parse_period(chosen)
+    except HTTPException:
+        chosen = manual_reporting.reporting_month()
+    return portal.render_seller(
+        session,
+        "sales",
+        base_url=billing_config.public_base_url(request),
+        period=chosen,
+        report=manual_reporting.seller_view(session["subject_id"], chosen),
+    )
+
+
+@app.get("/seller/sales/template")
+def seller_sales_template(request: Request, _: None = Depends(rate_limit_portal)):
+    import manual_reporting
+
+    session = portal.require_seller(request)
+    manual_reporting.ensure_manual_seller(session["subject_id"])
+    return Response(
+        content=manual_reporting.TEMPLATE_CSV,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=plantr-sales-report.csv"},
+    )
+
+
+@app.post("/seller/sales")
+async def seller_sales_upload(request: Request, _: None = Depends(rate_limit_portal)):
+    import manual_reporting
+
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    period = str(form.get("period") or "")
+    upload = form.get("file")
+    filename = getattr(upload, "filename", "") or ""
+    if not hasattr(upload, "read"):
+        result = {"ok": False, "errors": ["Choose a CSV file."], "period": period}
+    else:
+        payload = await upload.read()
+        try:
+            result = manual_reporting.submit_csv(
+                session["subject_id"],
+                period,
+                payload,
+                filename=str(filename),
+                actor=session.get("email") or "seller",
+            )
+        except HTTPException as exc:
+            if exc.status_code not in {403, 409, 422}:
+                raise
+            detail = exc.detail if isinstance(exc.detail, list) else [str(exc.detail)]
+            result = {
+                "ok": False,
+                "errors": detail,
+                "period": period or manual_reporting.reporting_month(),
+                "status": exc.status_code,
+            }
+    if result.get("ok"):
+        return RedirectResponse(f"/seller/sales?period={result['period']}", status_code=303)
+    try:
+        chosen = manual_reporting.parse_period(str(result.get("period") or ""))
+    except HTTPException:
+        chosen = manual_reporting.reporting_month()
+    page = portal.render_seller(
+        session,
+        "sales",
+        base_url=billing_config.public_base_url(request),
+        period=chosen,
+        report=manual_reporting.seller_view(session["subject_id"], chosen),
+        errors=result.get("errors") or [],
+    )
+    page.status_code = int(result.get("status") or 422)
+    return page
+
+
+@app.post("/seller/sales/none")
+async def seller_sales_none(request: Request, _: None = Depends(rate_limit_portal)):
+    import manual_reporting
+
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    period = str(form.get("period") or "")
+    try:
+        result = manual_reporting.submit_no_sales(session["subject_id"], period, actor=session.get("email") or "seller")
+    except HTTPException as exc:
+        if exc.status_code not in {403, 409, 422}:
+            raise
+        detail = exc.detail if isinstance(exc.detail, list) else [str(exc.detail)]
+        chosen = period or manual_reporting.reporting_month()
+        page = portal.render_seller(
+            session,
+            "sales",
+            base_url=billing_config.public_base_url(request),
+            period=chosen,
+            report=manual_reporting.seller_view(session["subject_id"], chosen) if exc.status_code != 422 else {},
+            errors=detail,
+        )
+        page.status_code = exc.status_code
+        return page
+    return RedirectResponse(f"/seller/sales?period={result['period']}", status_code=303)
+
+
+@app.get("/admin/manual-reporting")
+def admin_manual_reporting(request: Request, _: str = Depends(require_admin)):
+    import manual_reporting
+
+    token = auth.issue_form_token("admin")
+    return HTMLResponse(manual_reporting.render_admin_page(csrf=token))
+
+
+@app.post("/admin/manual-reporting/sellers/{shop_id}/approve")
+async def admin_approve_manual_seller(shop_id: str, request: Request, actor: str = Depends(require_admin)):
+    import manual_reporting
+
+    form = await request.form()
+    portal.check_login_csrf(str(form.get("csrf_token") or ""), "admin")
+    confirm = str(form.get("confirm_over_cap") or "").strip().lower() == "yes"
+    try:
+        manual_reporting.approve_manual_seller(shop_id, actor, confirm=confirm)
+    except HTTPException as exc:
+        token = auth.issue_form_token("admin")
+        detail = exc.detail if isinstance(exc.detail, str) else "Could not approve this seller."
+        page = HTMLResponse(manual_reporting.render_admin_page(csrf=token, error=detail), status_code=exc.status_code)
+        return page
+    return RedirectResponse("/admin/manual-reporting", status_code=303)
+
+
+@app.post("/admin/manual-reporting/reports/{report_id}/approve")
+async def admin_approve_sales_report(report_id: str, request: Request, actor: str = Depends(require_admin)):
+    import manual_reporting
+
+    form = await request.form()
+    portal.check_login_csrf(str(form.get("csrf_token") or ""), "admin")
+    try:
+        manual_reporting.approve_report(report_id, actor)
+    except HTTPException as exc:
+        token = auth.issue_form_token("admin")
+        detail = exc.detail
+        if isinstance(detail, list):
+            detail = " ".join(str(item) for item in detail)
+        page = HTMLResponse(manual_reporting.render_admin_page(csrf=token, error=str(detail)), status_code=exc.status_code)
+        return page
+    return RedirectResponse("/admin/manual-reporting", status_code=303)
+
+
+@app.post("/admin/manual-reporting/reports/{report_id}/reject")
+async def admin_reject_sales_report(report_id: str, request: Request, actor: str = Depends(require_admin)):
+    import manual_reporting
+
+    form = await request.form()
+    portal.check_login_csrf(str(form.get("csrf_token") or ""), "admin")
+    try:
+        manual_reporting.reject_report(report_id, actor, str(form.get("reason") or ""))
+    except HTTPException as exc:
+        token = auth.issue_form_token("admin")
+        detail = exc.detail if isinstance(exc.detail, str) else "Could not reject this report."
+        page = HTMLResponse(manual_reporting.render_admin_page(csrf=token, error=detail), status_code=exc.status_code)
+        return page
+    return RedirectResponse("/admin/manual-reporting", status_code=303)
 
 
 @app.get("/seller/products")

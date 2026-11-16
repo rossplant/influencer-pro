@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.0
+
+Manual sales reporting for sellers who are not on Shopify. Stripe stays sandbox only.
+
+- The seller profile asks "Do you sell on Shopify?". Yes requires a `*.myshopify.com` domain. No hides the domain and sets `sales_reporting` to `manual`. A shop that already had a domain is `shopify_sync`. A shop without one is left unset and asked on the next profile visit.
+- An admin approves manual sellers. `NON_SHOPIFY_CAP` (default 10) is shown on that screen, and going past it needs a confirmation. `MANUAL_REPORTING_LIVE` hides manual sellers from Creatrs until it is on. It defaults on for staging and off otherwise.
+- Manual sellers upload one CSV a month, or mark the month as no sales, from a Sales report tab. An admin reviews the queue at `/admin/manual-reporting`. Approving a file imports it with the existing order importer. A discount code credits the sale without a click in the last 7 days. The stored net is the net product amount, excluding shipping and GST.
+
 ## 0.19.0
 
 Seller onboarding and a curated catalogue for the pilot. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.

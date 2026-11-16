@@ -1189,7 +1189,12 @@ def list_agreements(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
             query = query.where(CollabAgreement.shop_id == shop_id)
         if creator_id:
             query = query.where(CollabAgreement.creator_id == creator_id)
-        return [_agreement_dict(session, ag, viewer=viewer) for ag in session.scalars(query).all()]
+        rows = [_agreement_dict(session, ag, viewer=viewer) for ag in session.scalars(query).all()]
+    if viewer == "creator":
+        import manual_reporting
+
+        return manual_reporting.filter_for_creators(rows)
+    return rows
 
 
 def agreement_detail(agreement_id: str, *, viewer: str, shop_id: Optional[str] = None, creator_id: Optional[str] = None) -> dict:
