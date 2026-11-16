@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.18.0
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.19.0
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -56,7 +56,7 @@ When `DATABASE_URL` is set, startup runs `alembic upgrade head` (revision `0001_
 
 `events.emit(name, entity, actor, **props)` inserts an append-only `events` row. `product_enriched` increments `products_enriched` and sets `first_enrich_at` the first time. `match_run` increments `matches_run`, sets `first_match_at` the first time, and sets `last_match_at` every time. `brief_sent` (not enrichment) increments `briefs_generated`, sets `first_brief_at` the first time, and sets `last_campaign_at` every time. Shop events copy `plan_tier` and `plan_status` into `properties`. Catalogue and period counters are columns on the event. Names are listed in `docs/event_names.md`. Operator actions use the same names with `actor="operator"`.
 
-Starter allows 5 products, 1 campaign, and 3 match runs per UTC calendar month (`docs/Pricing.md`). Enriching a product that already exists does not use another catalogue slot. Growth allows 50 products, 5 campaigns, and 25 matches. Scale does not cap products or campaigns and allows 100 matches. At the cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop is allowed through. Prices are AUD ex GST: Starter A$29 or A$290 a year, Growth A$79 or A$790 a year, Scale A$229 or A$2,290 a year. Annual MRR is that price / 12. Unsubscribed, free, trial, and trialing contribute 0. An active Starter subscription contributes 29.
+Starter allows 1 campaign and 3 match runs per UTC calendar month (`docs/Pricing.md`). Growth allows 5 campaigns and 25 matches. Scale does not cap campaigns and allows 100 matches. At a campaign or match cap the API writes `usage_limit_hit`. A non-pilot shop is blocked with `402`. A pilot shop is allowed through. Product counts are still written on shop events (`products_count`, `product_limit`, including the old Starter 5 and Growth 50 figures). Those product figures are not a hard block. Above `CATALOGUE_FEE_THRESHOLD` (default 10) the seller sees a warning that extra products may attract a fee after the pilot. The add is not blocked and nothing is charged. Crossing that line writes `catalogue_fee_threshold`. Prices are AUD ex GST: Starter A$29 or A$290 a year, Growth A$79 or A$790 a year, Scale A$229 or A$2,290 a year. Annual MRR is that price / 12. Unsubscribed, free, trial, and trialing contribute 0. An active Starter subscription contributes 29.
 
 If `alembic_version` is `0001_initial` but the tables still have the pre-analytics shape (`attributed_orders.amount`, or `events` without `products_count`), startup drops those Plantr Collab tables and recreates them from the edited `0001` revision. Production is not on 0.10 and has no tables, so this does not run there. Do not rely on that drop once production has data.
 
@@ -66,7 +66,9 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.18.0`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.19.0`.
+- `/seller/profile` — edit the trading name, optional ABN, primary category, website, and Shopify domain. Joining with an invite copies the pilot application's business name, ABN, first category, and website onto the shop. The account name stays the name from the invite.
+- `/seller/products` — a short curated list. Each product needs why it was chosen, the value for creators, and a commission before it can be matched. A CSV upload previews rows with nothing ticked; ticked rows can be saved as drafts (`source=csv`) or finished one by one. Drafts are not matched. Template: `GET /seller/products/csv-template`.
 - `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once.
 - `/seller` — shop login, profile, products, find creators, accept or decline, and accepted creators with a tracking code when one exists.
 - `/creator` — creator login, categories, accepted offers, and tracking codes. `/plantr_dashboard.html` redirects here.

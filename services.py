@@ -39,6 +39,9 @@ def create_shop(
     market: Optional[str] = None,
     currency: Optional[str] = None,
     primary_category: Optional[str] = None,
+    business_name: Optional[str] = None,
+    abn: Optional[str] = None,
+    store_url: Optional[str] = None,
 ) -> dict:
     tier = (plan_tier or "").strip() or "starter"
     # Pilot shops default to starter. An explicit plan_tier is kept.
@@ -52,6 +55,20 @@ def create_shop(
     currency_code = _currency_code(currency)
     if primary_category:
         validate_category_lists([primary_category])
+    import legal
+
+    clean_abn = None
+    if abn:
+        try:
+            clean_abn = legal.clean_abn(abn)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+    clean_store = _clean(store_url)
+    if clean_store:
+        import catalogue
+
+        if catalogue.http_url(clean_store) is None:
+            raise HTTPException(status_code=422, detail="Store URL must be an http or https address")
     shop_id = str(uuid.uuid4())
     now = utcnow()
     fields = dict(
@@ -67,6 +84,9 @@ def create_shop(
         market=market_code,
         currency=currency_code,
         primary_category=(primary_category or None),
+        business_name=_clean(business_name),
+        abn=clean_abn,
+        store_url=clean_store,
         products_enriched=0,
         matches_run=0,
         briefs_generated=0,
@@ -105,6 +125,73 @@ def fetch_shop(shop_id: str) -> Optional[dict]:
     return shop_dict(shop) if shop is not None else None
 
 
+def update_shop_profile(
+    shop_id: str,
+    *,
+    business_name: Optional[str],
+    abn: Optional[str],
+    primary_category: Optional[str],
+    store_url: Optional[str],
+    shopify_domain: Optional[str],
+) -> dict:
+    """Edit the seller profile. `name` stays the account name from join."""
+    import catalogue
+    import legal
+
+    category = _clean(primary_category)
+    if category:
+        category = category.lower()
+        validate_category_lists([category])
+    try:
+        clean_abn = legal.clean_abn(abn or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    site = _clean(store_url)
+    if site and catalogue.http_url(site) is None:
+        raise HTTPException(status_code=422, detail="Store URL must be an http or https address")
+    domain = catalogue.shopify_host(shopify_domain)
+    trading = _clean(business_name)
+    if trading and len(trading) > 255:
+        raise HTTPException(status_code=422, detail="Business name is too long")
+
+    def _apply(shop) -> None:
+        if domain and _domain_taken(shop, domain):
+            raise HTTPException(status_code=409, detail="A shop with this Shopify domain already exists")
+        shop.business_name = trading
+        shop.abn = clean_abn
+        shop.primary_category = category
+        shop.store_url = site
+        shop.shopify_domain = domain
+
+    if db.configured():
+        with db.session_scope() as session:
+            shop = session.get(Shop, shop_id)
+            if shop is None:
+                raise HTTPException(status_code=404, detail="Shop not found")
+            _apply(shop)
+            session.flush()
+            return shop_dict(shop)
+    shop = db.memory_shops.get(shop_id)
+    if shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    _apply(shop)
+    return shop_dict(shop)
+
+
+def _domain_taken(shop, domain: str) -> bool:
+    if db.configured():
+        from sqlalchemy.orm import object_session
+
+        session = object_session(shop)
+        if session is None:
+            return False
+        other = session.scalar(select(Shop).where(Shop.shopify_domain == domain, Shop.id != shop.id))
+        return other is not None
+    return any(
+        getattr(row, "shopify_domain", None) == domain and row.id != shop.id for row in db.memory_shops.values()
+    )
+
+
 def shop_dict(shop: Any) -> dict:
     return {
         "id": shop.id,
@@ -119,6 +206,9 @@ def shop_dict(shop: Any) -> dict:
         "market": getattr(shop, "market", None),
         "currency": getattr(shop, "currency", None),
         "primary_category": getattr(shop, "primary_category", None),
+        "business_name": getattr(shop, "business_name", None),
+        "abn": getattr(shop, "abn", None),
+        "store_url": getattr(shop, "store_url", None),
         "mrr": events.mrr(shop.plan_tier, status=shop.plan_status),
         "products_enriched": int(shop.products_enriched or 0),
         "matches_run": int(shop.matches_run or 0),
@@ -272,27 +362,20 @@ def create_campaign(shop_id: str, name: str) -> dict:
 
 
 def prepare_enrichment(shop_id: Optional[str], product_id: Optional[str]) -> None:
-    """Resolve the shop and enforce the product cap before a Grok call.
+    """Resolve the shop before a Grok call.
 
-    No-op when neither id is present. Raises 404 when the id does not resolve
-    and 402 when a non-pilot shop is already at its product cap.
+    No-op when neither id is present. Raises 404 when the id does not resolve.
+    Catalogue size is not a hard block.
     """
     shop_id = _clean(shop_id)
     product_id = _clean(product_id)
     if not shop_id and not product_id:
         return
-    try:
-        if db.configured():
-            with db.session_scope() as session:
-                shop, product = _resolve_db(session, shop_id, product_id)
-                if product is None:
-                    events.guard_plan_limit(shop, "products", session)
-            return
-        shop, product = _resolve_memory(shop_id, product_id)
-        if product is None:
-            events.guard_plan_limit(shop, "products", None)
-    except PlanLimitReached as exc:
-        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    if db.configured():
+        with db.session_scope() as session:
+            _resolve_db(session, shop_id, product_id)
+        return
+    _resolve_memory(shop_id, product_id)
 
 
 def save_enrichment(
@@ -312,6 +395,10 @@ def save_enrichment(
     attributes: dict,
     claims: list,
     commission_rate: Optional[float] = None,
+    why_chosen: Optional[str] = None,
+    value_to_creators: Optional[str] = None,
+    image_url: Optional[str] = None,
+    url: Optional[str] = None,
     fields_set: Optional[set] = None,
     source: str,
     talking_points: list,
@@ -327,9 +414,16 @@ def save_enrichment(
     subcategory = _subcategory_value(subcategory, category)
     brief_source = source if source in ("grok", "fallback") else "fallback"
     content = json.dumps({"talking_points": talking_points, "faqs": faqs})
+    import catalogue
+
+    if url:
+        attributes = dict(attributes or {})
+        attributes["url"] = url
     if db.configured():
         with db.session_scope() as session:
             shop, product = _resolve_db(session, shop_id, product_id)
+            creating = product is None
+            before = events.catalogue_count(shop, session) if creating else 0
             product = _apply_product(
                 session,
                 shop,
@@ -348,9 +442,17 @@ def save_enrichment(
                 attributes=attributes,
                 claims=claims,
                 commission_rate=commission_rate,
+                why_chosen=why_chosen,
+                value_to_creators=value_to_creators,
+                image_url=image_url,
+                url=url,
             )
             session.flush()
+            if creating:
+                events.note_catalogue_threshold(shop, before, before + 1)
             events.emit("product_enriched", product, "api", source=brief_source)
+            if not catalogue.product_is_complete(product):
+                return {"product_id": product.id, "brief_id": None}
             stored_creator = _existing_creator_id(session, creator_id)
             brief = Brief(
                 id=str(uuid.uuid4()),
@@ -371,6 +473,8 @@ def save_enrichment(
             return {"product_id": product.id, "brief_id": brief.id}
 
     shop, product = _resolve_memory(shop_id, product_id)
+    creating = product is None
+    before = events.catalogue_count(shop, None) if creating else 0
     product = _apply_product_memory(
         shop,
         product,
@@ -388,8 +492,16 @@ def save_enrichment(
         attributes=attributes,
         claims=claims,
         commission_rate=commission_rate,
+        why_chosen=why_chosen,
+        value_to_creators=value_to_creators,
+        image_url=image_url,
+        url=url,
     )
+    if creating:
+        events.note_catalogue_threshold(shop, before, before + 1)
     events.emit("product_enriched", product, "api", source=brief_source)
+    if not catalogue.product_is_complete(product):
+        return {"product_id": product.id, "brief_id": None}
     brief = SimpleNamespace(
         memory_kind="brief",
         id=str(uuid.uuid4()),
@@ -901,6 +1013,10 @@ _OPTIONAL_PRODUCT_FIELDS = (
     "attributes",
     "claims",
     "commission_rate",
+    "why_chosen",
+    "value_to_creators",
+    "image_url",
+    "url",
 )
 
 
@@ -927,6 +1043,13 @@ def _product_values(fields: dict, fields_set: set, *, creating: bool) -> dict:
         if not values.get("currency"):
             values["currency"] = "AUD"
         values.setdefault("source", "manual")
+    # Keep the column and attributes.url together when attributes are being written.
+    if isinstance(values.get("attributes"), dict):
+        raw_url = values["attributes"].get("url") or values["attributes"].get("product_url")
+        if raw_url and not values.get("url"):
+            values["url"] = str(raw_url).strip()
+        if values.get("url"):
+            values["attributes"]["url"] = values["url"]
     return values
 
 

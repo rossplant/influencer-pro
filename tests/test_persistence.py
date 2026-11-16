@@ -316,6 +316,9 @@ def test_match_records_placeholder_shortlist(tmp_path, monkeypatch):
             "tags": ["wireless"],
             "attributes": {"color": "black"},
             "claims": [{"claim": "24-hour battery", "source": "brand"}],
+            "why_chosen": "It is the one product we want creators to talk about",
+            "value_to_creators": "Easy to show on camera and explain in one sentence",
+            "commission_rate": 12,
         },
     )
     assert enrich.status_code == 200
@@ -418,21 +421,17 @@ def test_usage_limit_hit_blocks_non_pilot_and_allows_pilot(tmp_path, monkeypatch
         assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 5
         assert session.scalars(select(Event).where(Event.event_name == "usage_limit_hit")).all() == []
 
-    blocked = client.post("/enrich", json={**PRODUCT, "shop_id": shop["id"], "title": "One more"})
-    assert blocked.status_code == 402
-    assert blocked.json()["detail"] == "Plan limit reached: products (5/5)"
+    added = client.post("/enrich", json={**PRODUCT, "shop_id": shop["id"], "title": "One more"})
+    assert added.status_code == 200
     with db.session_scope() as session:
         row = session.get(Shop, shop["id"])
-        assert row.products_enriched == 1
-        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 5
+        assert row.products_enriched == 2
+        assert len(session.scalars(select(Product).where(Product.shop_id == shop["id"])).all()) == 6
         hits = session.scalars(select(Event).where(Event.shop_id == shop["id"], Event.event_name == "usage_limit_hit")).all()
-        assert len(hits) == 1
-        assert hits[0].actor == "api"
-        assert hits[0].properties["limit"] == "products"
-        assert hits[0].properties["plan_tier"] == "starter"
-        assert hits[0].products_count == 5
-        assert hits[0].product_limit == 5
-        assert hits[0].limit_hit is True
+        assert hits == []
+        signed = session.scalars(select(Event).where(Event.shop_id == shop["id"], Event.event_name == "product_enriched")).all()
+        assert signed[-1].product_limit == 5
+        assert signed[-1].products_count == 6
 
     pilot = client.post("/shops", json={"name": "Pilot", "is_pilot": True}).json()
     _fill_catalogue(pilot["id"], 5)
