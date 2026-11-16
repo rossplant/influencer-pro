@@ -283,7 +283,8 @@ def test_portal_flow_with_admin_cookie(monkeypatch):
     seller_cookie = _cookie(viewed, "plantr_seller")
     profile = client.get("/seller/profile", headers=seller_cookie)
     assert "View Shop" in profile.text
-    assert "Viewing as this shop." in profile.text
+    assert "Viewing as View Shop, read-only." in profile.text
+    assert ">Exit<" in profile.text
 
     creator_view = client.post(
         f"/admin/api/creators/{creator['id']}/view-as",
@@ -293,7 +294,7 @@ def test_portal_flow_with_admin_cookie(monkeypatch):
     creator_cookie = _cookie(creator_view, "plantr_creator")
     creator_page = client.get("/creator/offers", headers=creator_cookie)
     assert creator_page.status_code == 200
-    assert "Offers" in creator_page.text
+    assert "Your matches" in creator_page.text
     assert client.get("/seller/products", headers=creator_cookie).text.find("Seller sign in") >= 0
 
     login_page = client.get("/creator")

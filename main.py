@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.19.0"
+APP_VERSION = "0.20.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -585,6 +585,27 @@ async def lifespan(_app: FastAPI):
 
 _cors_origins, _cors_credentials = cors_policy()
 app = FastAPI(title="Plantr Collab API", version=APP_VERSION, lifespan=lifespan)
+
+
+@app.exception_handler(portal.ReadOnlyView)
+async def read_only_view(request: Request, _exc: portal.ReadOnlyView):
+    message = "This view is read-only. Choose Exit on the banner, then sign in as the account to make changes."
+    path = request.url.path
+    wants_json = (
+        path.startswith("/seller/api")
+        or path.startswith("/creator/api")
+        or "application/json" in request.headers.get("content-type", "")
+    )
+    if wants_json:
+        return JSONResponse({"detail": message}, status_code=403)
+    page = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'><title>Read-only</title></head>"
+        f"<body><h1>Read-only</h1><p>{html.escape(message)}</p></body></html>"
+    )
+    return HTMLResponse(page, status_code=403)
+
+
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -642,12 +663,10 @@ def plantr_admin_page():
 
 
 @app.get("/admin")
-def admin_page():
-    if not _admin_available():
-        raise HTTPException(status_code=503, detail="Admin area is disabled")
-    page = (ROOT / "admin.html").read_text(encoding="utf-8")
-    token = html.escape(auth.issue_form_token("admin"), quote=True)
-    return HTMLResponse(page.replace("__CSRF__", token))
+def admin_page(request: Request):
+    import admin_ui
+
+    return admin_ui.home(request)
 
 
 @app.get("/admin/setup")
@@ -680,7 +699,10 @@ async def admin_setup(request: Request):
 
 
 @app.post("/admin/login")
-def admin_login(body: LoginIn, request: Request):
+async def admin_login(request: Request):
+    payload, as_json = await _json_or_form_body(request)
+    email = str(payload.get("email") or "")
+    password = str(payload.get("password") or "")
     if not auth.secrets_configured():
         raise HTTPException(status_code=503, detail="Admin area is disabled")
     user = admin_data.find_admin(auth.admin_email())
@@ -688,26 +710,41 @@ def admin_login(body: LoginIn, request: Request):
     if not auth.admin_enabled(user_exists=user is not None):
         raise HTTPException(status_code=503, detail="Admin area is disabled")
     if not auth.login_attempt_allowed(client_ip(request)):
-        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="rate_limited")
-        raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": "900"})
+        events.record_admin("admin_login_failed", email=_login_email(email), reason="rate_limited")
+        return _login_failure(as_json, 429, "Too many login attempts. Wait 15 minutes and try again.")
     if not password_hash:
-        auth.verify_password(body.password, "invalid")
-        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not auth.credentials_match(body.email, body.password, password_hash):
-        events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        auth.verify_password(password, "invalid")
+        events.record_admin("admin_login_failed", email=_login_email(email), reason="invalid")
+        return _login_failure(as_json, 401, "That email or password is not right. Try again.")
+    if not auth.credentials_match(email, password, password_hash):
+        events.record_admin("admin_login_failed", email=_login_email(email), reason="invalid")
+        return _login_failure(as_json, 401, "That email or password is not right. Try again.")
     if user is not None:
         admin_data.mark_admin_login(user.email)
     events.record_admin("admin_login_succeeded", email=auth.admin_email())
-    return _session_cookie(JSONResponse({"ok": True}), auth.admin_email())
+    if as_json:
+        return _session_cookie(JSONResponse({"ok": True}), auth.admin_email())
+    return _session_cookie(RedirectResponse("/admin", status_code=303), auth.admin_email())
+
+
+def _login_failure(as_json: bool, status: int, message: str):
+    if as_json:
+        headers = {"Retry-After": "900"} if status == 429 else None
+        return JSONResponse({"detail": message}, status_code=status, headers=headers)
+    import admin_ui
+
+    return HTMLResponse(admin_ui.login_page(message), status_code=status)
 
 
 @app.post("/admin/logout")
-def admin_logout():
+async def admin_logout(request: Request):
     if not auth.secrets_configured():
         raise HTTPException(status_code=503, detail="Admin area is disabled")
-    response = JSONResponse({"ok": True})
+    as_json = "application/json" in request.headers.get("content-type", "")
+    if as_json:
+        response = JSONResponse({"ok": True})
+    else:
+        response = RedirectResponse("/admin", status_code=303)
     response.delete_cookie(auth.COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
     return response
 
@@ -914,10 +951,18 @@ async def admin_create_creator_login(creator_id: str, request: Request, actor: s
 async def admin_view_shop(shop_id: str, request: Request, admin: str = Depends(require_admin)):
     fields = await _request_fields(request)
     portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
-    if services.fetch_shop(shop_id) is None:
+    shop = services.fetch_shop(shop_id)
+    if shop is None:
         raise HTTPException(status_code=404, detail="Shop not found")
     response = _portal_result(request, {"ok": True, "redirect": "/seller"}, "/seller")
-    portal.set_role_cookie(response, "seller", admin, shop_id, impersonator=admin)
+    portal.begin_impersonation(
+        response,
+        "seller",
+        admin,
+        shop_id,
+        shop.get("business_name") or shop.get("name") or "",
+        reason=str(fields.get("reason") or ""),
+    )
     return response
 
 
@@ -925,10 +970,19 @@ async def admin_view_shop(shop_id: str, request: Request, admin: str = Depends(r
 async def admin_view_creator(creator_id: str, request: Request, admin: str = Depends(require_admin)):
     fields = await _request_fields(request)
     portal.check_login_csrf(str(fields.get("csrf_token") or ""), "admin")
-    if services.fetch_creator(creator_id) is None:
+    creator = services.fetch_creator(creator_id)
+    if creator is None:
         raise HTTPException(status_code=404, detail="Creator not found")
+    profile = creator.get("influencer") or {}
     response = _portal_result(request, {"ok": True, "redirect": "/creator"}, "/creator")
-    portal.set_role_cookie(response, "creator", admin, creator_id, impersonator=admin)
+    portal.begin_impersonation(
+        response,
+        "creator",
+        admin,
+        creator_id,
+        profile.get("handle") or profile.get("name") or "",
+        reason=str(fields.get("reason") or ""),
+    )
     return response
 
 
@@ -942,7 +996,8 @@ def _commerce_block(role: str, subject_id: str):
 @app.get("/seller")
 @app.get("/seller/profile")
 def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_seller(portal.seller_context(request), "profile", base_url=billing_config.public_base_url(request))
+    page = "dashboard" if request.url.path.rstrip("/") == "/seller" else "profile"
+    return portal.render_seller(portal.seller_context(request), page, base_url=billing_config.public_base_url(request))
 
 
 @app.post("/seller/profile")
@@ -1170,6 +1225,7 @@ async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.end_impersonation(session)
     response = RedirectResponse("/seller", status_code=303)
     portal.clear_role_cookie(response, "seller")
     return response
@@ -1178,7 +1234,8 @@ async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
 @app.get("/creator")
 @app.get("/creator/profile")
 def creator_profile_page(request: Request, _: None = Depends(rate_limit_portal)):
-    return portal.render_creator(portal.creator_context(request), "profile", base_url=billing_config.public_base_url(request))
+    page = "dashboard" if request.url.path.rstrip("/") == "/creator" else "profile"
+    return portal.render_creator(portal.creator_context(request), page, base_url=billing_config.public_base_url(request))
 
 
 @app.post("/creator/profile")
@@ -1260,6 +1317,7 @@ async def creator_logout(request: Request, _: None = Depends(rate_limit_portal))
     session = portal.require_creator(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.end_impersonation(session)
     response = RedirectResponse("/creator", status_code=303)
     portal.clear_role_cookie(response, "creator")
     return response
@@ -1310,6 +1368,15 @@ def _truthy(value) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _json_or_form_body(request: Request) -> tuple[dict, bool]:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        return (body if isinstance(body, dict) else {}), True
+    form = await request.form()
+    return {key: form.get(key) for key in form.keys()}, False
 
 
 async def _json_or_form(request: Request) -> dict:
@@ -1487,7 +1554,7 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
     services.persist_creator(record)
     if influencer.email and influencer.password:
         if not influencer.age_confirmed:
-            raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+            raise HTTPException(status_code=422, detail="Creatrs must confirm they are 18 or older")
         if not influencer.invite_code or not _invite_ok(influencer.invite_code):
             raise HTTPException(status_code=422, detail="Creator membership is invite-only")
         portal.create_login(
@@ -1533,4 +1600,7 @@ web_routes.register(app)
 import commission_routes
 
 commission_routes.register(app)
+import admin_ui
+
+admin_ui.register(app)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

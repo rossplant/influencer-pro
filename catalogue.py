@@ -28,14 +28,14 @@ TEMPLATE_CSV = (
     "Ceramic pourer,https://example.com/pourer,42,home,https://example.com/pourer.jpg,15\n"
 )
 
-PRODUCTS_COPY = (
-    "List the products you actually want a creator to talk about. "
-    "A short list, with a plain reason for each one, is what we use. You do not need to add the whole shop."
-)
-FIRST_PRODUCT_COPY = (
-    "Start with one product you have chosen on purpose. "
-    "Say why it is on the list and what a creator's audience gets from it."
-)
+def _portal_line(key: str, fallback: str) -> str:
+    import portal_copy
+
+    return portal_copy.HERO_INTRO if key == "intro" else portal_copy.PRODUCTS_EMPTY["body"]
+
+
+PRODUCTS_COPY = _portal_line("intro", "")
+FIRST_PRODUCT_COPY = _portal_line("empty", "")
 COMPLETE_PROMPT = "Complete this product"
 
 
@@ -174,9 +174,9 @@ def parse_price(raw: Any) -> Optional[float]:
 
 def require_curation(why: Any, value: Any, commission: Any) -> float:
     if not _text(why):
-        raise HTTPException(status_code=422, detail="Say why you chose this product")
+        raise HTTPException(status_code=422, detail="Say what makes this product special, in facts you can stand behind.")
     if not _text(value):
-        raise HTTPException(status_code=422, detail="Say what this product offers creators")
+        raise HTTPException(status_code=422, detail="Say what's in it for Creatrs.")
     rate = parse_commission(commission, required=True)
     assert rate is not None
     return rate

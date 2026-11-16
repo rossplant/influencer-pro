@@ -23,12 +23,12 @@ SELLER_PANEL = (
     "Plantr Collab is a paid subscription service. Plans: Starter A$29, Growth A$79 or Scale A$229 per month "
     "(or 10 times the monthly price per year). Prices exclude GST. We are not yet registered for GST, so no GST "
     "is charged now. If we register, we will give you 30 days' notice before adding GST. Plans renew automatically "
-    "until you cancel. Plantr charges no transaction fee on sales. You pay creators' commission directly. "
+    "until you cancel. Plantr charges no transaction fee on sales. You pay Creatrs' commission directly. "
     "Pilot sellers get Growth free from 20 November 2026 to 20 January 2027, then A$39.50 a month "
     "for 3 months, then A$79 a month, but only if they choose to subscribe."
 )
 CREATOR_PANEL = (
-    "Plantr Collab is a paid subscription service for creators. Plans: Membr A$15, Curatr A$19 or Trendsettr A$49 "
+    "Plantr Collab is a paid subscription service for Creatrs. Plans: Membr A$15, Curatr A$19 or Trendsettr A$49 "
     "per month (or 10 times the monthly price per year). Prices exclude GST (not charged until we register for GST, "
     "with 30 days' notice). Plans renew automatically until you cancel. Foundrs get the pilot free from 20 November "
     "2026 to 20 January 2027, then Curatr at A$9 a month for 12 months with code FOUNDR9, then A$19 a month, but only "
@@ -43,7 +43,7 @@ SELLER_APPLY = (
 SELLER_AUTHORITY = "I am 18 or older and authorised to act for this business."
 CREATOR_AGE = "I am 18 or older."
 CREATOR_APPLY = (
-    "I understand creator plans are paid (from A$15 a month ex GST), and that Foundrs are free only until 20 January "
+    "I understand Creatr plans are paid (from A$15 a month ex GST), and that Foundrs are free only until 20 January "
     "2027. I have read the Privacy Policy. I agree that Plantr may review my application and public social profile "
     "metrics, using automated tools with a final decision by a person. Applying does not create a contract or commit "
     "me to pay."
@@ -58,7 +58,7 @@ SELLER_JOIN_PILOT = (
     "automatically until I cancel. I will not be charged unless I choose a plan and enter payment details."
 )
 CREATOR_JOIN_TERMS = (
-    "I am 18 or older, and I agree to the Platform Terms of Service, Creator and Foundr Terms and Acceptable Use "
+    "I am 18 or older, and I agree to the Platform Terms of Service, Creatr and Foundr Terms and Acceptable Use "
     "Policy. I will clearly disclose every paid or commission-earning promotion (for example with #ad and the "
     "platform's paid-partnership label). I have read the Privacy Policy."
 )

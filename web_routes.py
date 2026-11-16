@@ -231,10 +231,9 @@ def register(app) -> None:
 
     @app.get("/admin/pilots")
     def admin_pilots(request: Request):
-        if not auth.session_email(request):
-            raise HTTPException(status_code=401, detail="Admin session required")
-        board = pilots.dashboard()
-        return HTMLResponse(_shell(f"<h1>Pilots</h1><pre>{_dump(board)}</pre><p><a href='/admin/pilots.csv'>CSV</a></p>"))
+        import admin_ui
+
+        return admin_ui.applications_page(request)
 
     @app.get("/admin/pilots.csv")
     def admin_pilots_csv(request: Request):

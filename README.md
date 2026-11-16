@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.19.0
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.20.0
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -26,7 +26,7 @@ uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-i
 
 Set `PORT=8000` when you run that command locally. The default xAI model is `grok-4.3`.
 
-Open `/admin`, `/plantr_dashboard.html`, `/plantr_onboarding.html`, or `/onboarding_form.html` on that same host. `/plantr_admin.html` redirects to `/admin`. The pages call the API at their own origin. Override the base with `?api=https://your-api.example` or `window.PLANTR_API_BASE`. Pages do not read an API key from the URL. The dashboard sends the admin session cookie.
+Open `/admin` for the operator pages (sellers, creators, products, collabs, sales, applications, and launch readiness). `/plantr_admin.html` redirects to `/admin`. `/plantr_dashboard.html` redirects to `/creator`.
 
 ## Environment
 
@@ -66,13 +66,13 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.19.0`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.20.0`.
 - `/seller/profile` — edit the trading name, optional ABN, primary category, website, and Shopify domain. Joining with an invite copies the pilot application's business name, ABN, first category, and website onto the shop. The account name stays the name from the invite.
 - `/seller/products` — a short curated list. Each product needs why it was chosen, the value for creators, and a commission before it can be matched. A CSV upload previews rows with nothing ticked; ticked rows can be saved as drafts (`source=csv`) or finished one by one. Drafts are not matched. Template: `GET /seller/products/csv-template`.
 - `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once.
 - `/seller` — shop login, profile, products, find creators, accept or decline, and accepted creators with a tracking code when one exists.
 - `/creator` — creator login, categories, accepted offers, and tracking codes. `/plantr_dashboard.html` redirects here.
-- Admin shop and creator details can create those logins and open “view as”.
+- `/admin/sellers/{id}` and `/admin/creators/{id}` create a sign-in, set a pilot password, issue a one-time reset link, or open a read-only view. The password is never shown again.
 - `POST /creator-product-links` and `GET /creator-product-links` — admin session. One tracking code per creator and product. A second create returns the same code.
 - `GET /r/{code}` — public redirect. Logs `link_clicked` with `source_platform` (`?s=tt|ig|yt|fb|ot`, or `unknown`) and `channel_kind` (`link`, or `ad` when `c=ad`), then sends the browser to the product URL. The same link is also issued as a direct seller URL: the product URL plus `?plantr=<code>` and the same `s` param. `GET /creator/api/links` returns one of each per platform.
 - `POST /attributed-orders/import` — admin session. CSV of order id, date, code or link, gross amount, currency, and shop. Idempotent on shop and order id. `dry_run` writes nothing. Row errors are returned with the row.
@@ -82,7 +82,7 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 - Spark Ads codes live on the collab (`collab_spark_ads`). Only that collab's creator can add or revoke one, with explicit consent. The code is Fernet-encrypted with `SHOPIFY_TOKEN_KEY` and is shown only to that creator and that seller, never in a list or a log. The ad destination is the seller's product URL. Revoking hides the code and the destination. Past sales stay credited. Seller views include: "Boosted posts must keep the creator's ad disclosure. Plantr doesn't run or pay for ads."
 - `GET /admin/setup` and `POST /admin/setup` — set the admin password once. Afterwards these return 410.
 - `POST /admin/login` and `POST /admin/logout` — signed HttpOnly session cookie, 12 hours.
-- `GET /admin` — login and the read-only dashboard. Shop pilot and underserved flags, and shortlist accept or decline, are the only writes.
+- `GET /admin` — operator sign-in, then the dashboard. Lists and records live at `/admin/sellers`, `/admin/creators`, `/admin/products`, `/admin/collabs`, `/admin/sales`, `/admin/applications`, and `/admin/settings`. `/admin/api/*` is unchanged.
 - `POST /shops` — create a shop. `is_pilot` and `plan_tier` are settable. The response includes `mrr`.
 - `GET /shops/{id}` and `GET /creators/{id}` — read one row.
 - `POST /enrich` — talking points and FAQs for any product. The response keeps the existing fields and adds `source` (`grok` or `fallback`). Pass `shop_id` and/or `product_id` to store the product (category, subcategory, price, currency, tags, attributes, claims with a source) and a brief draft, and emit `product_enriched`. That call does not set `first_brief_at`. `POST /briefs/{id}/sent` emits `brief_sent` (`actor` may be `operator`). Without shop or product ids, enrich behaves as before. Token counts are logged, not returned.

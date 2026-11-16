@@ -21,7 +21,7 @@ def test_landing_copy_is_approved_and_privacy_stays_draft(monkeypatch):
     assert "Sell more. Earn more. Matched with care." in creators.text
     assert "Draft" not in creators.text
     assert "sign up free" not in creators.text.lower()
-    assert "Sell more through the right creators." in sellers.text
+    assert "Sell more through the right Creatrs." in sellers.text
     assert "Apply for a pilot place" in sellers.text
     assert "Foundr number" in creators.text
     assert "Curatr for 48 hours" in creators.text
