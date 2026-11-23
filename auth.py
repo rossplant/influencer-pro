@@ -36,12 +36,14 @@ _login_lock = threading.Lock()
 
 
 _setup_buckets: dict[str, deque] = defaultdict(deque)
+_reset_buckets: dict[str, deque] = defaultdict(deque)
 
 
 def reset_login_limits() -> None:
     with _login_lock:
         _login_buckets.clear()
         _setup_buckets.clear()
+        _reset_buckets.clear()
 
 
 def admin_email() -> str:
@@ -127,6 +129,11 @@ def setup_attempt_allowed(ip: str) -> bool:
     return _attempt_allowed(_setup_buckets, ip)
 
 
+def reset_attempt_allowed(ip: str) -> bool:
+    """Five admin password-reset requests per IP per 15 minutes."""
+    return _attempt_allowed(_reset_buckets, ip)
+
+
 def _attempt_allowed(buckets: dict[str, deque], ip: str) -> bool:
     now = time.monotonic()
     with _login_lock:
@@ -139,10 +146,11 @@ def _attempt_allowed(buckets: dict[str, deque], ip: str) -> bool:
         return True
 
 
-def issue_session(email: str) -> str:
+def issue_session(email: str, epoch: int = 0) -> str:
     payload = {
         "email": email.strip().lower(),
         "exp": int(time.time()) + SESSION_SECONDS,
+        "epoch": int(epoch),
     }
     body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     return f"{body}.{_sign(body)}"
@@ -204,11 +212,24 @@ def session_email(request: Request) -> Optional[str]:
         payload = json.loads(_b64decode(body))
         exp = int(payload["exp"])
         email = str(payload["email"])
+        epoch = int(payload.get("epoch") or 0)
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
     if exp < int(time.time()) or not email:
         return None
+    if not _session_epoch_ok(email, epoch):
+        return None
     return email
+
+
+def _session_epoch_ok(email: str, epoch: int) -> bool:
+    import admin_data
+
+    user = admin_data.find_admin(email)
+    if user is None:
+        return True
+    current = int(getattr(user, "session_epoch", 0) or 0)
+    return current == int(epoch)
 
 
 def locked_environment() -> bool:

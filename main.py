@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.26.0"
+APP_VERSION = "0.26.1"
 
 PromotionStyle = Literal[
     "educational",
@@ -361,9 +361,11 @@ def _reject_setup_closed() -> None:
 
 
 def _session_cookie(response: JSONResponse, email: str) -> JSONResponse:
+    user = admin_data.find_admin(email)
+    epoch = int(getattr(user, "session_epoch", 0) or 0) if user is not None else 0
     response.set_cookie(
         key=auth.COOKIE_NAME,
-        value=auth.issue_session(email),
+        value=auth.issue_session(email, epoch),
         max_age=auth.SESSION_SECONDS,
         httponly=True,
         secure=True,
@@ -744,6 +746,96 @@ def admin_login(body: LoginIn, request: Request):
         admin_data.mark_admin_login(user.email)
     events.record_admin("admin_login_succeeded", email=auth.admin_email())
     return _session_cookie(JSONResponse({"ok": True}), auth.admin_email())
+
+
+ADMIN_RESET_MESSAGE = "If that email is an admin account, a reset link is on its way."
+
+
+def _admin_reset_page(title: str, body: str, status: int = 200) -> HTMLResponse:
+    import brand_ui
+
+    return HTMLResponse(brand_ui.document(title, body), status_code=status)
+
+
+@app.get("/admin/forgot")
+def admin_forgot_page():
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    token = html.escape(auth.issue_form_token("admin-forgot"))
+    return _admin_reset_page(
+        "Reset admin password",
+        f"""
+        <h1>Reset admin password</h1>
+        <form method="post" action="/admin/forgot">
+          <input type="hidden" name="csrf_token" value="{token}">
+          <label>Email <input name="email" type="email" autocomplete="username" required></label>
+          <button type="submit">Send reset link</button>
+        </form>
+        <p><a href="/admin">Back to sign in</a></p>
+        """,
+    )
+
+
+@app.post("/admin/forgot")
+async def admin_forgot(request: Request):
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    form = await request.form()
+    if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-forgot"):
+        raise HTTPException(status_code=403, detail="CSRF check failed")
+    if not auth.reset_attempt_allowed(client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many reset attempts. Try again in 15 minutes.", headers={"Retry-After": "900"})
+    email = str(form.get("email") or "").strip().lower()
+    user = admin_data.find_admin(email)
+    if user is not None:
+        import secrets as pysecrets
+
+        import emailer
+
+        token = pysecrets.token_urlsafe(32)
+        admin_data.store_admin_reset(email, token)
+        base = billing_config.public_base_url(request)
+        emailer.send("admin_password_reset", email, url=f"{base}/admin/reset/{token}")
+    return _admin_reset_page("Reset admin password", f"<h1>Reset admin password</h1><p>{html.escape(ADMIN_RESET_MESSAGE)}</p><p><a href='/admin'>Back to sign in</a></p>")
+
+
+@app.get("/admin/reset/{token}")
+def admin_reset_page(token: str):
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    if admin_data.admin_for_reset_token(token) is None:
+        raise HTTPException(status_code=422, detail="That reset link is not valid.")
+    csrf = html.escape(auth.issue_form_token("admin-reset"))
+    return _admin_reset_page(
+        "Choose a new admin password",
+        f"""
+        <h1>Choose a new admin password</h1>
+        <form method="post" action="/admin/reset/{html.escape(token)}">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>New password <input name="password" type="password" minlength="12" autocomplete="new-password" required></label>
+          <label>Confirm <input name="password_confirm" type="password" minlength="12" autocomplete="new-password" required></label>
+          <button type="submit">Save password</button>
+        </form>
+        """,
+    )
+
+
+@app.post("/admin/reset/{token}")
+async def admin_reset(token: str, request: Request):
+    if not auth.secrets_configured():
+        raise HTTPException(status_code=503, detail="Admin area is disabled")
+    form = await request.form()
+    if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-reset"):
+        raise HTTPException(status_code=403, detail="CSRF check failed")
+    password = str(form.get("password") or "")
+    confirmation = str(form.get("password_confirm") or "")
+    if len(password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    if not auth.passwords_match(password, confirmation):
+        raise HTTPException(status_code=422, detail="Password confirmation does not match")
+    if not admin_data.complete_admin_reset(token, auth.hash_password(password)):
+        raise HTTPException(status_code=422, detail="That reset link is not valid.")
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/logout")
