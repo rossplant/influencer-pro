@@ -112,11 +112,27 @@ def passwords_match(password: str, confirmation: str) -> bool:
     )
 
 
-def credentials_match(email: str, password: str, password_hash: str) -> bool:
+def credentials_match(email: str, password: str, password_hash: str, *, expected: str = "") -> bool:
     """Compare the account without skipping the hash when the email is wrong."""
-    email_ok = emails_match(email, admin_email())
+    email_ok = emails_match(email, expected or admin_email())
     password_ok = verify_password(password, password_hash)
     return email_ok and password_ok
+
+
+def staging_test_admin_email() -> str:
+    """The extra staging admin, ignored on production."""
+    import tracking
+
+    if tracking.production():
+        return ""
+    return os.getenv("STAGING_TEST_ADMIN_EMAIL", "").strip().lower()
+
+
+def is_staging_test_admin(email: str) -> bool:
+    expected = staging_test_admin_email()
+    if not expected or not (email or "").strip():
+        return False
+    return emails_match(email, expected)
 
 
 def login_attempt_allowed(ip: str) -> bool:

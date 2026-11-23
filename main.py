@@ -59,7 +59,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.27.2"
+APP_VERSION = "0.27.3"
 
 PromotionStyle = Literal[
     "educational",
@@ -367,7 +367,11 @@ def require_login_operator(request: Request) -> str:
 
 
 def _admin_available() -> bool:
-    return auth.admin_enabled(user_exists=admin_data.admin_exists(auth.admin_email()))
+    known = admin_data.admin_exists(auth.admin_email())
+    extra = auth.staging_test_admin_email()
+    if extra and admin_data.admin_exists(extra):
+        known = True
+    return auth.admin_enabled(user_exists=known)
 
 
 def _reject_setup_closed() -> None:
@@ -798,9 +802,19 @@ async def admin_setup(request: Request):
 def admin_login(body: LoginIn, request: Request):
     if not auth.secrets_configured():
         raise HTTPException(status_code=503, detail="Admin area is disabled")
-    user = admin_data.find_admin(auth.admin_email())
-    password_hash = user.password_hash if user is not None else auth.fallback_password_hash()
-    if not auth.admin_enabled(user_exists=user is not None):
+    submitted = body.email.strip().lower()
+    staging_login = auth.is_staging_test_admin(submitted)
+    if staging_login:
+        user = admin_data.find_admin(submitted)
+        password_hash = user.password_hash if user is not None else ""
+        session_for = submitted
+        expected = submitted
+    else:
+        user = admin_data.find_admin(auth.admin_email())
+        password_hash = user.password_hash if user is not None else auth.fallback_password_hash()
+        session_for = auth.admin_email()
+        expected = auth.admin_email()
+    if not _admin_available() and not auth.admin_enabled(user_exists=user is not None):
         raise HTTPException(status_code=503, detail="Admin area is disabled")
     if not auth.login_attempt_allowed(client_ip(request)):
         events.record_admin("admin_login_failed", email=_login_email(body.email), reason="rate_limited")
@@ -809,13 +823,13 @@ def admin_login(body: LoginIn, request: Request):
         auth.verify_password(body.password, "invalid")
         events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not auth.credentials_match(body.email, body.password, password_hash):
+    if not auth.credentials_match(body.email, body.password, password_hash, expected=expected):
         events.record_admin("admin_login_failed", email=_login_email(body.email), reason="invalid")
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user is not None:
         admin_data.mark_admin_login(user.email)
-    events.record_admin("admin_login_succeeded", email=auth.admin_email())
-    return _session_cookie(JSONResponse({"ok": True}), auth.admin_email())
+    events.record_admin("admin_login_succeeded", email=session_for)
+    return _session_cookie(JSONResponse({"ok": True}), session_for)
 
 
 ADMIN_RESET_MESSAGE = "If that email is an admin account, a reset link is on its way."

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.3
+
+The staging test admin can sign in. Stripe stays sandbox only. This does not merge.
+
+- Off production, POST /admin/login accepts STAGING_TEST_ADMIN_EMAIL, checks that row's password hash, and issues the session for that email. Admin pages accept the session.
+- Production still accepts only ADMIN_EMAIL. A wrong password is rejected. Forgot password is unchanged.
+
 ## 0.27.2
 
 UAT invites take a first name, a shop name, and an optional second Creatr email. Stripe stays sandbox only. This does not merge.
