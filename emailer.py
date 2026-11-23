@@ -113,10 +113,6 @@ TEMPLATES = {
         "subject": "Your commission statement is ready",
         "body": "The statement for {period} is ready. Open Statements to read it or download the CSV. This is new.",
     },
-    "uat_invite": {
-        "subject": "Your Plantr Collab test invites",
-        "body": "These are test accounts. There are two journeys. All users must be 18 or over.",
-    },
     "quality_warning": {
         "subject": "Quality standard missed for {month}",
         "body": (
@@ -134,37 +130,82 @@ TEMPLATES = {
 }
 
 
-def uat_invite_parts(supplier_url: str, creatr_url: str) -> tuple[str, str]:
-    """Plain text keeps each URL on its own line. HTML uses button links. No catalogue."""
-    text = (
-        "These are test accounts. There are two journeys. All users must be 18 or over.\n"
-        "\n"
-        "Open the supplier invite\n"
-        f"<{supplier_url}>\n"
-        "\n"
-        "Open the Creatr invite\n"
-        f"<{creatr_url}>\n"
+# Placeholder invite copy. Marketing replaces these fields. Keep each email under about 120 words.
+# Per-role emails have one button. The combined UAT email carries both journeys.
+INVITE_COPY = {
+    "supplier_invite": {
+        "subject": "Your Plantr Collab supplier test invite",
+        "preheader": "A test account for the supplier journey. All users must be 18 or over.",
+        "headline": "Supplier test invite",
+        "body": "This is a test account for the supplier journey. Set a password to continue. All users must be 18 or over.",
+        "buttons": (("Open the supplier invite", "url"),),
+        "footer": "Plantr Collab. No cut of your sales.",
+    },
+    "creatr_invite": {
+        "subject": "Your Plantr Collab Creatr test invite",
+        "preheader": "A test account for the Creatr journey. All users must be 18 or over.",
+        "headline": "Creatr test invite",
+        "body": "This is a test account for the Creatr journey. Set a password to continue. All users must be 18 or over.",
+        "buttons": (("Open the Creatr invite", "url"),),
+        "footer": "Plantr Collab. No cut of your sales.",
+    },
+    "uat_invite": {
+        "subject": "Your Plantr Collab test invites",
+        "preheader": "Test accounts for two journeys. All users must be 18 or over.",
+        "headline": "Your test invites",
+        "body": "These are test accounts. There are two journeys. All users must be 18 or over.",
+        "buttons": (
+            ("Open the supplier invite", "supplier_url"),
+            ("Open the Creatr invite", "creatr_url"),
+        ),
+        "footer": "Plantr Collab. No cut of your sales.",
+    },
+}
+
+
+def render_invite(kind: str, **urls: str) -> tuple[str, str, str]:
+    """Return subject, plain text, and HTML from INVITE_COPY. Each URL is on its own line."""
+    spec = INVITE_COPY[kind]
+    buttons = []
+    for label, key in spec["buttons"]:
+        href = str(urls.get(key) or "")
+        buttons.append((label, href))
+    text_lines = [spec["preheader"], "", spec["headline"], "", spec["body"], ""]
+    for label, href in buttons:
+        text_lines.extend([label, f"<{href}>", ""])
+    text_lines.append(spec["footer"])
+    text = "\n".join(text_lines).strip() + "\n"
+    button_html = "".join(
+        f"<p><a href=\"{href}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">{label}</a></p>"
+        for label, href in buttons
     )
     html_body = (
         "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;font-family:Inter,Arial,sans-serif;color:#17211c;background:#ffffff\">"
+        f"<div style=\"display:none;max-height:0;overflow:hidden\">{spec['preheader']}</div>"
         "<p style=\"margin:0 0 8px;font-weight:700;color:#C2127F\">Plantr Collab</p>"
-        "<h1 style=\"font-size:24px\">Your test invites</h1>"
-        "<p>These are test accounts. There are two journeys. All users must be 18 or over.</p>"
-        f"<p><a href=\"{supplier_url}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">Open the supplier invite</a></p>"
-        f"<p><a href=\"{creatr_url}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">Open the Creatr invite</a></p>"
-        "<p>No cut of your sales.</p>"
+        f"<h1 style=\"font-size:24px\">{spec['headline']}</h1>"
+        f"<p>{spec['body']}</p>"
+        f"{button_html}"
+        f"<p>{spec['footer']}</p>"
         "</body></html>"
     )
+    return spec["subject"], text, html_body
+
+
+def uat_invite_parts(supplier_url: str, creatr_url: str) -> tuple[str, str]:
+    """Plain text and HTML for the combined UAT invite. Copy lives in INVITE_COPY."""
+    _subject, text, html_body = render_invite("uat_invite", supplier_url=supplier_url, creatr_url=creatr_url)
     return text, html_body
 
 
 def send(template_key: str, to_email: str, **values) -> dict:
-    spec = TEMPLATES[template_key]
-    subject = spec["subject"].format(**values)
-    body = spec["body"].format(**values)
-    html_body = None
-    if template_key == "uat_invite":
-        body, html_body = uat_invite_parts(str(values.get("supplier_url") or ""), str(values.get("creatr_url") or ""))
+    if template_key in INVITE_COPY:
+        subject, body, html_body = render_invite(template_key, **values)
+    else:
+        spec = TEMPLATES[template_key]
+        subject = spec["subject"].format(**values)
+        body = spec["body"].format(**values)
+        html_body = None
     row = {
         "id": str(uuid.uuid4()),
         "template_key": template_key,

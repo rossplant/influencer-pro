@@ -70,6 +70,28 @@ def test_resend_failure_logs_status_and_name_not_the_key_or_body(monkeypatch, ca
     assert "the message body" not in caplog.text
 
 
+def test_role_invites_use_the_same_template_fields_and_one_button():
+    import emailer
+
+    for kind, label in (("supplier_invite", "Open the supplier invite"), ("creatr_invite", "Open the Creatr invite")):
+        spec = emailer.INVITE_COPY[kind]
+        assert set(spec) == {"subject", "preheader", "headline", "body", "buttons", "footer"}
+        assert len(spec["buttons"]) == 1
+        url = "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc"
+        subject, text, html_body = emailer.render_invite(kind, url=url)
+        words = spec["preheader"].split() + spec["headline"].split() + spec["body"].split() + spec["buttons"][0][0].split() + spec["footer"].split()
+        assert len(words) < 120
+        assert subject == spec["subject"]
+        assert html_body.count("<a ") == 1
+        assert f'href="{url}"' in html_body
+        assert label in html_body
+        assert f"<{url}>" in text.splitlines()
+        assert "Stoneware" not in html_body
+    combined = emailer.INVITE_COPY["uat_invite"]
+    assert combined["subject"] == "Your Plantr Collab test invites"
+    assert len(combined["buttons"]) == 2
+
+
 def test_uat_invite_email_is_branded_html_and_plain_links(tmp_path):
     import emailer
 

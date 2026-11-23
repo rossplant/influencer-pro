@@ -4,7 +4,7 @@
 
 UAT invites are branded HTML with short https links, and the supplier uploads the sample catalogue. Stripe stays sandbox only. This does not merge.
 
-- The invite email has two button links and a text version with each URL on its own line. No attachment and no product list.
+- The invite copy sits in one template (subject, preheader, headline, body, button labels, footer). There is a supplier email, a Creatr email, and the combined UAT email. Placeholder copy is short. Per-role emails have one button.
 - Invite paths are short, expire, and need an absolute https site address. A bad link is a branded page.
 - The CSV template is the three homeware rows. A UAT set does not insert those products. A signed-out template request shows sign-in. Excel uploads get a page error, not raw JSON.
 - Old journey paths redirect. Browser 404s are branded. The UAT Creatr profile shows audience 45,000.
