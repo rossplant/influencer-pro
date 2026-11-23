@@ -14,7 +14,7 @@ from tests.test_stripe import FakeStripe
 def test_creator_labels_and_pilot_prices_keep_internal_ids():
     assert billing_config.tier_label("creator", "member") == "Membr"
     assert billing_config.tier_label("creator", "curator") == "Curatr"
-    assert billing_config.tier_label("creator", "elite") == "Trendsettr"
+    assert billing_config.tier_label("creator", "elite") == "Curatr Pro"
     assert billing_config.tier_label("seller", "growth") == "Growth"
     assert billing_config.lookup_key("creator", "elite", "year") == "creator_elite_year"
     assert "founding_curator_50_12mo" not in billing_config.COUPONS
@@ -39,7 +39,7 @@ def test_creator_labels_and_pilot_prices_keep_internal_ids():
     )
     assert "Current plan: Membr" in page
     assert "Curatr" in page
-    assert "Trendsettr" in page
+    assert "Curatr Pro" in page
     assert 'value="curator"' in page
     assert 'value="elite"' in page
     assert "Elite" not in page

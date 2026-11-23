@@ -61,4 +61,4 @@ def test_alembic_upgrade_head_on_postgres():
     main.init_storage()
     page = TestClient(main.app).get("/founding-curators")
     assert page.status_code == 200
-    assert "Earn from products your audience will actually buy." in page.text
+    assert "Find products you genuinely rate." in page.text

@@ -69,13 +69,15 @@ def test_checkout_disclosure_matches_the_acceptance_wording():
     assert seller == (
         "No charge today. Your first charge of A$39.50 (ex GST) will be on 20 January 2027. "
         "You will pay A$39.50 a month for 3 months, then A$79 a month from 20 April 2027, "
-        "renewing automatically until you cancel. Cancel before 20 January 2027 and you will not be charged."
+        "renewing automatically until you cancel. Cancel before 20 January 2027 and you will not be charged. "
+        "The pilot is at no charge until 20 January 2027 unless cancelled."
     )
     foundr = stripe_billing.checkout_disclosure("creator", "curator", "month", offer="FOUNDR9", trial_end=end)
     assert foundr == (
         "No charge today. Code FOUNDR9 applied. Your first charge of A$9 (ex GST) will be on 20 January 2027. "
         "You will pay A$9 a month for 12 months, then A$19 a month from 20 January 2028, "
-        "renewing automatically until you cancel. Cancel before 20 January 2027 and you will not be charged."
+        "renewing automatically until you cancel. Cancel before 20 January 2027 and you will not be charged. "
+        "The pilot is at no charge until 20 January 2027 unless cancelled."
     )
     other = stripe_billing.checkout_disclosure("creator", "elite", "year", trial_end=end)
     assert other.startswith("No charge today. Your first charge of A$490 (ex GST) will be on 20 January 2027.")
@@ -393,7 +395,7 @@ def test_seller_application_needs_authority_and_a_valid_abn_and_records_acceptan
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     page = client.get("/pilot-sellers").text
     assert "authorised to act for this business" in page
-    fee = "Plantr charges no transaction fee on sales. You pay creators' commission directly."
+    fee = "Plantr charges no transaction fee on sales. You pay Creatrs' commission directly."
     assert fee in legal.SELLER_PANEL
     assert html.escape(fee) in page
     assert "name='abn'" in page

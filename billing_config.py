@@ -35,7 +35,7 @@ SELLER_TIERS = {
         "lookup_year": "seller_growth_year",
         "limits": {"campaigns": 5, "products": 50, "matches_per_month": 25},
         "reaches": ("member", "curator"),
-        "features": ("csv_import", "per_creator_report", "exclusive_first_look"),
+        "features": ("csv_import", "per_creator_report"),
     },
     "scale": {
         "label": "Scale",
@@ -47,8 +47,8 @@ SELLER_TIERS = {
         "limits": {"campaigns": None, "products": None, "matches_per_month": 100},
         "products_label": "250+",
         "reaches": ("member", "curator", "elite"),
-        "features": ("csv_import", "per_creator_report", "priority_matching", "export", "exclusive_first_look"),
-        "coming_soon": ("brief_help", "featured_supplier"),
+        "features": ("csv_import", "per_creator_report", "priority_matching", "export"),
+        "coming_soon": ("brief_help",),
     },
 }
 
@@ -60,7 +60,7 @@ CREATOR_TIERS = {
         "amount_year_cents": 15000,
         "lookup_month": "creator_member_month",
         "lookup_year": "creator_member_year",
-        "limits": {"matches_per_month": 2, "curated_offers_per_month": 0},
+        "limits": {"matches_per_month": 4, "curated_offers_per_month": 0, "active_collabs": 3},
         "features": ("tracking_links", "basic_sales"),
     },
     "curator": {
@@ -70,21 +70,19 @@ CREATOR_TIERS = {
         "amount_year_cents": 19000,
         "lookup_month": "creator_curator_month",
         "lookup_year": "creator_curator_year",
-        "limits": {"matches_per_month": 10, "curated_offers_per_month": 4},
-        "features": ("curated_suppliers", "early_look_48h", "badge", "public_profile", "sales_report"),
-        "first_look_hours": 48,
+        "limits": {"matches_per_month": 12, "curated_offers_per_month": 4, "active_collabs": 6},
+        "features": ("curated_suppliers", "badge", "public_profile", "sales_report"),
     },
     "elite": {
-        "label": "Trendsettr",
+        # Display label is Curatr Pro. The id and Stripe lookup keys stay elite.
+        "label": "Curatr Pro",
         "audience": "creator",
         "amount_month_cents": 4900,
         "amount_year_cents": 49000,
         "lookup_month": "creator_elite_month",
         "lookup_year": "creator_elite_year",
-        "limits": {"matches_per_month": None, "curated_offers_per_month": 12},
-        "features": ("first_look_7d",),
-        "coming_soon": ("top_shortlist", "elite_perks"),
-        "first_look_hours": 24 * 7,
+        "limits": {"matches_per_month": None, "curated_offers_per_month": 12, "active_collabs": 12},
+        "features": ("category_matches",),
     },
 }
 
@@ -103,14 +101,14 @@ COUPONS = {
         "applies_to": [("creator", "curator")],
     },
     "pilotgrowth_growth_50_3mo": {
-        "name": "Pilot Growth 50% for 3 months",
+        "name": "Pilot Growth A$39.50 for 3 months",
         "percent_off": 50,
         "duration": "repeating",
         "duration_in_months": 3,
         "applies_to": [("seller", "growth")],
     },
     "elite_grant_3mo": {
-        "name": "Trendsettr 100% for 3 months",
+        "name": "Curatr Pro at no charge for 3 months",
         "percent_off": 100,
         "duration": "repeating",
         "duration_in_months": 3,

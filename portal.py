@@ -23,6 +23,7 @@ import attribution
 import auth
 import billing_config
 import catalogue
+import recognition
 import db
 import events
 import scoring
@@ -186,6 +187,11 @@ def save_product(
     image_url: str = "",
     source: str = "manual",
     as_draft: bool = False,
+    promo_rate: str = "",
+    promo_days: str = "",
+    fact_what: str = "",
+    fact_who: str = "",
+    selling_fast: bool = False,
 ) -> str:
     title = (title or "").strip()
     if not title:
@@ -225,6 +231,20 @@ def save_product(
             attributes["url"] = destination
         elif "url" in attributes:
             attributes.pop("url", None)
+        if (fact_what or "").strip() or (fact_who or "").strip():
+            attributes["key_facts"] = {"what": (fact_what or "").strip(), "who": (fact_who or "").strip()}
+        attributes["selling_fast"] = bool(selling_fast)
+        if (promo_rate or "").strip():
+            from datetime import date as _date
+
+            try:
+                days = int(promo_days or "0")
+                ends = recognition.promo_end(_date.today(), days)
+                attributes["promo_rate"] = float(promo_rate)
+                attributes["promo_ends"] = ends.isoformat()
+                attributes["promo_line"] = recognition.promo_line(float(promo_rate), ends)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         product.attributes = attributes
         if creating:
             product.source = source
@@ -391,7 +411,7 @@ def creator_profile(creator_id: str) -> dict:
     }
 
 
-def update_creator_categories(creator_id: str, active: list[str], desired: list[str]) -> None:
+def update_creator_categories(creator_id: str, active: list[str], desired: list[str], *, leaderboard: bool = False) -> None:
     services.validate_category_lists(active, desired)
     if db.configured():
         with db.session_scope() as session:
@@ -403,6 +423,7 @@ def update_creator_categories(creator_id: str, active: list[str], desired: list[
             profile = dict(creator.profile or {})
             profile["active_categories"] = active
             profile["desired_categories"] = desired
+            profile["leaderboard_opt_in"] = bool(leaderboard)
             creator.profile = profile
         return
     record = db.memory_creators.get(creator_id)
@@ -410,6 +431,7 @@ def update_creator_categories(creator_id: str, active: list[str], desired: list[
         raise HTTPException(status_code=404, detail="Creator not found")
     record["active_categories"] = active
     record["desired_categories"] = desired
+    record["leaderboard_opt_in"] = bool(leaderboard)
     stored = db.memory_creator_objects.get(creator_id)
     if stored is not None:
         stored.active_categories = active
@@ -434,6 +456,8 @@ def creator_offers(creator_id: str) -> list[dict]:
         item["tracking_path"] = link.get("tracking_path") if link else None
         item["direct_url"] = link.get("direct_url") if link else None
         item["platform_links"] = link.get("platform_links") if link else None
+        if not recognition.supplier_visible_to_creators({"shopify_domain": item.get("shopify_domain")}):
+            continue
         offers.append(item)
     return offers
 
@@ -469,12 +493,10 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
         banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
     nav = """
     <nav>
-      <a href="/seller/profile">Profile</a>
-      <a href="/seller/products">Products</a>
-      <a href="/seller/find">Find creators</a>
-      <a href="/seller/accepted">Accepted</a>
-      <a href="/seller/campaigns">Campaigns</a>
-      <a href="/seller/billing">Billing</a>
+      <a href="/seller">Home</a>
+      <a href="/seller/products">Catalogue</a>
+      <a href="/seller/find">Collabs</a>
+      <a href="/seller/profile">Settings</a>
     </nav>
     """
     content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
@@ -487,7 +509,7 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
     if session is None:
         token = auth.issue_form_token("creator-login")
         body = f"""
-        <h1>Creator sign in</h1>
+        <h1>Creatr sign in</h1>
         <form method="post" action="/creator/login">
           <input type="hidden" name="csrf_token" value="{html.escape(token)}">
           <label for="email">Email</label>
@@ -506,10 +528,10 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
         banner += f"<p class='banner'>{html.escape(stripe_billing.SUBSCRIBE_PROMPT)}</p>"
     nav = """
     <nav>
-      <a href="/creator/profile">Profile</a>
-      <a href="/creator/offers">Offers</a>
-      <a href="/creator/links">Links</a>
-      <a href="/creator/billing">Subscription</a>
+      <a href="/creator">Home</a>
+      <a href="/creator/offers">Matches</a>
+      <a href="/creator/links">Sales</a>
+      <a href="/creator/profile">Settings</a>
     </nav>
     """
     content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
@@ -530,7 +552,9 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
     <form method="post" action="/seller/profile">
       <input type="hidden" name="csrf_token" value="{csrf}">
       <label>Business name <input name="business_name" value="{html.escape(shop.get('business_name') or '')}" autocomplete="organization"></label>
-      <label>ABN (optional) <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}"></label>
+      <label>ABN (optional) <input name="abn" inputmode="numeric" value="{html.escape(shop.get('abn') or '')}" aria-describedby="abn-help"></label>
+      <!-- TODO: replace this note with onboarding_help_text when that file is in the repo. -->
+      <p id="abn-help"><small>We use an ABN to show the right tax warning. You can leave it blank.</small></p>
       <label>Primary category <select name="primary_category">{''.join(options)}</select></label>
       <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
       <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
@@ -581,6 +605,11 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
           <label>Why you chose it <textarea name="why_chosen" required>{html.escape(edit.get('why_chosen') or '')}</textarea></label>
           <label>Value for creators <textarea name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea></label>
           <label>Commission percent <input name="commission" value="{html.escape(commission_value)}" required></label>
+          <label>Promo commission % for 7 to 30 days (optional) <input name="promo_rate" value=""></label>
+          <label>Promo length in days <input name="promo_days" inputmode="numeric" placeholder="14"></label>
+          <label>What it is <input name="fact_what" value=""></label>
+          <label>Who it is for <input name="fact_who" value=""></label>
+          <label><input type="checkbox" name="selling_fast" value="yes"> Selling fast</label>
           <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
           <button type="submit">Save product</button>
         </form>
@@ -743,6 +772,28 @@ def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) ->
 
 
 def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "home":
+        import quality_standing
+
+        standing = quality_standing.standing_for("supplier", shop.get("id") or "")
+        notice = standing.get("notice") or ""
+        if standing.get("demoted"):
+            notice = "Pays on time and Top seller are paused after repeated missed quality months."
+        notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
+        return f"""
+        <h1>Home</h1>
+        <p>Carefully selected Creatrs, matched to your products.</p>
+        <p>{html.escape(recognition.momentum_line(int(data.get('confirmed_7d') or 0)))}</p>
+        <p>{html.escape(recognition.QUALITY_STANDARD_SUPPLIER)}</p>
+        {notice_html}
+        <form method="post" action="/seller/quality-review">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Month <input name="month" placeholder="2026-11" required></label>
+          <label>What happened <input name="note"></label>
+          <button type="submit">Request a review</button>
+        </form>
+        <p><a href="/seller/products">Open catalogue</a></p>
+        """
     if page == "profile":
         return _profile_form(shop, csrf, data.get("profile_error") or "")
     if page == "products":
@@ -760,7 +811,12 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         cards = []
         for match in data.get("matches") or []:
             creator = match.get("creator") or {}
+            earned = recognition.tier_status(
+                0,
+                pilot_invite=bool(creator.get("founding_number") or creator.get("signup_campaign") == "founding_curators"),
+            )
             handle = html.escape(str(creator.get("handle") or creator.get("influencer_id") or ""))
+            handle = f"{handle} · {html.escape(earned['label'])}"
             reasons = "".join(f"<li>{html.escape(str(reason))}</li>" for reason in match.get("reasons") or [])
             estimates = html.escape(json.dumps(match.get("estimates") or {}, default=str))
             item_id = html.escape(str(match.get("shortlist_item_id") or ""))
@@ -782,12 +838,13 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         """
         waiting = ""
         if not ready:
-            waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for creators, and a commission.</p>"
+            waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for Creatrs, and a commission.</p>"
         return f"""
-        <h1>Find creators</h1>
+        <h1>Collabs</h1>
+        <p><a href="/seller/accepted">Accepted</a> · <a href="/seller/campaigns">Campaigns</a></p>
         {waiting}
         {match_form}
-        {''.join(cards) or '<p>Run a match to see ranked creators.</p>'}
+        {''.join(cards) or '<p>Run a match to see ranked Creatrs.</p>'}
         """
     rows = []
     for item in data.get("accepted") or []:
@@ -817,10 +874,42 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         """
     if page == "billing":
         return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
-    return f"<h1>Accepted creators</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
+    return f"<h1>Accepted Creatrs</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
 
 
 def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "home":
+        sales = int(data.get("confirmed_sales") or 0)
+        pilot = bool(profile.get("founding_number") or profile.get("signup_campaign") == "founding_curators")
+        shown = recognition.progression(sales, pilot_invite=pilot)
+        import quality_standing
+
+        standing = quality_standing.standing_for("creator", profile.get("id") or "", sales=sales, pilot_invite=pilot)
+        if standing.get("demoted"):
+            shown["label"] = standing["label"]
+        lines = "".join(f"<li>{html.escape(line)}</li>" for line in shown["lines"])
+        target = shown.get("next_sales") or shown["sales"] or 1
+        notice = standing.get("notice") or ""
+        if standing.get("demoted"):
+            notice = "Earned tier and early access are paused after repeated missed quality months."
+        notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
+        return f"""
+        <h1>Home</h1>
+        <p>Find products you genuinely rate. Cultivate their story, your way.</p>
+        <p>Your tier: {html.escape(shown['label'])}.</p>
+        <p>{html.escape(shown['next_line'])}</p>
+        <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="{html.escape(str(target))}" aria-valuenow="{html.escape(str(shown['sales']))}" aria-label="{html.escape(shown['next_line'])}"><span style="width:{int(shown['percent'])}%"></span></div>
+        <ul>{lines}</ul>
+        <p>{html.escape(recognition.QUALITY_STANDARD_CREATR)}</p>
+        {notice_html}
+        <form method="post" action="/creator/quality-review">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Month <input name="month" placeholder="2026-11" required></label>
+          <label>What happened <input name="note"></label>
+          <button type="submit">Request a review</button>
+        </form>
+        <p><a href="/creator/offers">See matches</a></p>
+        """
     if page == "profile":
         active = ", ".join(profile.get("active_categories") or [])
         desired = ", ".join(profile.get("desired_categories") or [])
@@ -832,6 +921,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Active categories <input name="active_categories" value="{html.escape(active)}"></label>
           <label>Desired categories <input name="desired_categories" value="{html.escape(desired)}"></label>
+          <label><input type="checkbox" name="leaderboard_opt_in" value="yes"> Show me on the leaderboard</label>
           <button type="submit">Save profile</button>
         </form>
         """
@@ -852,15 +942,42 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                     f"<input type='hidden' name='csrf_token' value='{csrf}'>"
                     "<button type='submit'>Accept offer</button></form>"
                 )
+            photo = ""
+            image = offer.get("image_url")
+            if image:
+                photo = f"<img src='{html.escape(str(image))}' alt='' width='160' height='160'>"
+            badges = []
+            if offer.get("selling_fast"):
+                badges.append("Selling fast")
+            if offer.get("reliability_badge"):
+                badges.append(str(offer["reliability_badge"]))
+            if offer.get("top_seller"):
+                badges.append("Top seller")
+            badge_html = f"<p>{html.escape(' · '.join(badges))}</p>" if badges else ""
+            facts = offer.get("key_facts") or {}
+            fact_html = ""
+            if facts:
+                fact_html = (
+                    "<section><h3>Key facts</h3>"
+                    f"<p>{html.escape(str(facts.get('what') or ''))}</p>"
+                    f"<p>{html.escape(str(facts.get('who') or ''))}</p></section>"
+                )
+            promo = ""
+            if offer.get("promo_line"):
+                promo = f"<p>{html.escape(str(offer['promo_line']))}</p>"
+            top_note = ""
+            if offer.get("top_seller"):
+                top_note = f"<p><small>{html.escape(recognition.TOP_SELLER_EXPLANATION)}</small></p>"
             blocks.append(
-                f"<article><h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
+                f"<article>{photo}<h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
+                f"{badge_html}{promo}{fact_html}{top_note}"
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
                 f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url, offer.get('platform_links'), offer.get('direct_url'))}</article>"
             )
-        return f"<h1>Offers</h1>{''.join(blocks) or '<p>No accepted offers yet.</p>'}"
+        return f"<h1>Matches</h1>{''.join(blocks) or '<p>No matches yet.</p>'}"
     items = "".join(
         "<li>"
         f"{html.escape(str(row.get('link_url') or ''))}"
@@ -883,9 +1000,12 @@ def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     for plan in billing.get("plans") or []:
         soon = ", ".join(plan.get("coming_soon") or [])
         soon_text = f" Coming soon: {html.escape(soon)}." if soon else ""
+        extra = ""
+        if role == "creator":
+            extra = " " + html.escape(". ".join(recognition.plan_card_lines(str(plan.get("tier") or "")))) + "."
         plans.append(
             f"<li><strong>{html.escape(plan['label'])}</strong> "
-            f"{html.escape(plan['monthly'])} / month or {html.escape(plan['annual'])} / year, ex GST.{soon_text}</li>"
+            f"{html.escape(plan['monthly'])} / month or {html.escape(plan['annual'])} / year, ex GST.{extra}{soon_text}</li>"
         )
     checkout = ""
     subscribed = str(billing.get("subscription_status") or "").strip().lower() in {"active", "trialing", "past_due"}
@@ -1024,10 +1144,12 @@ nav a {{ margin-right: 12px; }}
 form, article {{ background: white; padding: 16px; border-radius: 12px; margin: 12px 0; }}
 label {{ display: block; margin: 8px 0; }}
 input, textarea, select {{ font: inherit; padding: 8px; width: 100%; box-sizing: border-box; }}
-button {{ background: #1f6b4a; color: white; border: 0; border-radius: 8px; padding: 8px 12px; }}
+button {{ background: #C2127F; color: white; border: 0; border-radius: 999px; padding: 8px 14px; }}
 button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
 .tracking {{ margin-top: 8px; }}
 .banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
+.meter {{ height: 10px; background: #efeaf3; border-radius: 999px; overflow: hidden; }}
+.meter span {{ display: block; height: 100%; background: #C2127F; }}
 </style></head><body>
 <header><strong>Plantr Collab</strong>{logout_form}</header>
 <main>{body}</main>
@@ -1113,6 +1235,8 @@ def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
                         "product_title": product.title if product is not None else None,
                         "shop_id": shortlist.shop_id,
                         "shop_name": shop.name if shop is not None else None,
+                        "shopify_domain": shop.shopify_domain if shop is not None else None,
+                        "image_url": product.image_url if product is not None else None,
                         "accepted_at": item.accepted_at,
                         "commission_rate": float(product.commission_rate) if product is not None and product.commission_rate is not None else None,
                         "creator_has_abn": bool(getattr(creator, "abn", None)) if creator is not None else None,
@@ -1142,6 +1266,8 @@ def _accepted_items(*, shop_id: Optional[str] = None, creator_id: Optional[str] 
                 "product_title": getattr(product, "title", None),
                 "shop_id": shortlist.shop_id,
                 "shop_name": getattr(shop, "name", None),
+                "shopify_domain": getattr(shop, "shopify_domain", None),
+                "image_url": getattr(product, "image_url", None) if product is not None else None,
                 "accepted_at": item.accepted_at,
                 "commission_rate": float(product.commission_rate) if product is not None and getattr(product, "commission_rate", None) is not None else None,
             }
@@ -1176,6 +1302,8 @@ def _offer_items(creator_id: str, *, pending: bool) -> list[dict]:
                         "product_title": product.title if product is not None else None,
                         "shop_id": shortlist.shop_id,
                         "shop_name": shop.name if shop is not None else None,
+                        "shopify_domain": shop.shopify_domain if shop is not None else None,
+                        "image_url": product.image_url if product is not None else None,
                         "accepted_at": None,
                         "commission_rate": float(rate) if rate is not None else None,
                     }
@@ -1201,6 +1329,8 @@ def _offer_items(creator_id: str, *, pending: bool) -> list[dict]:
                 "product_title": getattr(product, "title", None),
                 "shop_id": shortlist.shop_id,
                 "shop_name": getattr(shop, "name", None),
+                "shopify_domain": getattr(shop, "shopify_domain", None),
+                "image_url": getattr(product, "image_url", None) if product is not None else None,
                 "accepted_at": None,
                 "commission_rate": float(rate) if rate is not None else None,
             }

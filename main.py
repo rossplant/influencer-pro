@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.19.0"
+APP_VERSION = "0.21.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -712,6 +712,31 @@ def admin_logout():
     return response
 
 
+@app.get("/admin/api/quality/queue")
+def admin_quality_queue(_: str = Depends(require_admin)):
+    import quality_standing
+
+    return {"items": quality_standing.queue()}
+
+
+@app.post("/admin/api/quality/excuse")
+async def admin_quality_excuse(request: Request, admin_email: str = Depends(require_admin)):
+    import quality_standing
+
+    body = await request.json()
+    audit = quality_standing.excuse(
+        admin_email=admin_email,
+        subject_type=str(body.get("subject_type") or ""),
+        subject_id=str(body.get("subject_id") or ""),
+        month=str(body.get("month") or ""),
+        reason=str(body.get("reason") or ""),
+        note=str(body.get("note") or ""),
+        restore=bool(body.get("restore")),
+        review_id=str(body.get("review_id") or ""),
+    )
+    return {"ok": True, "audit": audit}
+
+
 @app.get("/admin/api/summary")
 def admin_summary(_: str = Depends(require_admin)):
     return admin_data.summary()
@@ -940,6 +965,32 @@ def _commerce_block(role: str, subject_id: str):
 
 
 @app.get("/seller")
+def seller_home(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_seller(portal.seller_context(request), "home", base_url=billing_config.public_base_url(request))
+
+
+@app.post("/seller/quality-review")
+async def seller_quality_review(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import quality_standing
+
+    quality_standing.request_review("supplier", session["subject_id"], month=str(form.get("month") or ""), note=str(form.get("note") or ""))
+    return RedirectResponse("/seller", status_code=303)
+
+
+@app.post("/creator/quality-review")
+async def creator_quality_review(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import quality_standing
+
+    quality_standing.request_review("creator", session["subject_id"], month=str(form.get("month") or ""), note=str(form.get("note") or ""))
+    return RedirectResponse("/creator", status_code=303)
+
+
 @app.get("/seller/profile")
 def seller_profile(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_seller(portal.seller_context(request), "profile", base_url=billing_config.public_base_url(request))
@@ -1007,6 +1058,11 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
         why_chosen=str(form.get("why_chosen") or ""),
         value_to_creators=str(form.get("value_to_creators") or ""),
         image_url=str(form.get("image_url") or ""),
+        promo_rate=str(form.get("promo_rate") or ""),
+        promo_days=str(form.get("promo_days") or ""),
+        fact_what=str(form.get("fact_what") or ""),
+        fact_who=str(form.get("fact_who") or ""),
+        selling_fast=str(form.get("selling_fast") or "") == "yes",
     )
     return RedirectResponse("/seller/products", status_code=303)
 
@@ -1176,6 +1232,10 @@ async def seller_logout(request: Request, _: None = Depends(rate_limit_portal)):
 
 
 @app.get("/creator")
+def creator_home(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_creator(portal.creator_context(request), "home", base_url=billing_config.public_base_url(request))
+
+
 @app.get("/creator/profile")
 def creator_profile_page(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_creator(portal.creator_context(request), "profile", base_url=billing_config.public_base_url(request))
@@ -1188,7 +1248,12 @@ async def creator_save_profile(request: Request, _: None = Depends(rate_limit_po
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
     active = [part.strip().lower() for part in str(form.get("active_categories") or "").split(",") if part.strip()]
     desired = [part.strip().lower() for part in str(form.get("desired_categories") or "").split(",") if part.strip()]
-    portal.update_creator_categories(session["subject_id"], active, desired)
+    portal.update_creator_categories(
+        session["subject_id"],
+        active,
+        desired,
+        leaderboard=str(form.get("leaderboard_opt_in") or "") == "yes",
+    )
     return RedirectResponse("/creator/profile", status_code=303)
 
 
@@ -1253,6 +1318,68 @@ async def creator_login(request: Request, _: None = Depends(rate_limit_portal)):
     response = RedirectResponse("/creator/profile", status_code=303)
     portal.set_role_cookie(response, "creator", account.email, account.creator_id)
     return response
+
+
+@app.post("/account/verify")
+async def account_verify_request(request: Request):
+    form = await request.form()
+    import account_mail
+
+    account_mail.request_verification(str(form.get("email") or ""), billing_config.public_base_url(request) or str(request.base_url).rstrip("/"))
+    return HTMLResponse("<p>If that email is signed up, a confirmation is on its way.</p>")
+
+
+@app.get("/account/verify/{token}")
+def account_verify(token: str):
+    import account_mail
+
+    account = account_mail.read_account_token(token, "verify")
+    if account is None:
+        raise HTTPException(status_code=404, detail="That link has expired")
+    return HTMLResponse("<p>Email confirmed.</p>")
+
+
+@app.post("/account/reset")
+async def account_reset_request(request: Request):
+    form = await request.form()
+    import account_mail
+
+    account_mail.request_password_reset(str(form.get("email") or ""), billing_config.public_base_url(request) or str(request.base_url).rstrip("/"))
+    return HTMLResponse("<p>If that email is signed up, a reset link is on its way.</p>")
+
+
+@app.get("/account/reset/{token}")
+def account_reset_form(token: str):
+    import account_mail
+
+    if account_mail.read_account_token(token, "reset") is None:
+        raise HTTPException(status_code=404, detail="That link has expired")
+    safe = html.escape(token)
+    return HTMLResponse(
+        f"<form method='post' action='/account/reset/{safe}'>"
+        "<label>New password <input name='password' type='password' minlength='12' required></label>"
+        "<label>Confirm <input name='password_confirm' type='password' minlength='12' required></label>"
+        "<button type='submit'>Save password</button></form>"
+    )
+
+
+@app.post("/account/reset/{token}")
+async def account_reset_submit(token: str, request: Request):
+    import account_mail
+
+    account = account_mail.read_account_token(token, "reset")
+    if account is None:
+        raise HTTPException(status_code=404, detail="That link has expired")
+    form = await request.form()
+    portal.create_login(
+        role=account.role,
+        email=account.email,
+        password=str(form.get("password") or ""),
+        password_confirm=str(form.get("password_confirm") or ""),
+        shop_id=account.shop_id,
+        creator_id=account.creator_id,
+    )
+    return HTMLResponse("<p>Password saved. You can sign in.</p>")
 
 
 @app.post("/creator/logout")

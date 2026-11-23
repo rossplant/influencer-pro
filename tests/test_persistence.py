@@ -287,7 +287,7 @@ def test_shop_pilot_defaults_to_starter_with_zero_mrr(tmp_path, monkeypatch):
     with db.session_scope() as session:
         signed = session.scalars(select(Event).where(Event.event_name == "shop_signed_up")).one()
         assert signed.shop_id == body["id"]
-        assert signed.product_limit == 5
+        assert signed.product_limit is None
         assert signed.products_count == 0
 
     growth = client.post("/shops", json={"name": "Growth", "plan_tier": "growth"}).json()

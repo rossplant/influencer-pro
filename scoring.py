@@ -180,7 +180,7 @@ def score_creator(
         boost = float(DEFAULTS["underserved_boost"])
         total += boost
         boost_reason = (
-            f"Underserved supplier boost of {boost:g} points applied. "
+            f"Category-need boost of {boost:g} points applied. "
             "This is a priority adjustment, not a measured sales figure."
         )
     score = round(min(100.0, max(0.0, total)), 4)

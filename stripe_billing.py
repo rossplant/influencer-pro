@@ -260,7 +260,8 @@ def checkout_disclosure(role: str, tier: str, interval: str, *, offer: str = "",
             return (
                 f"No charge today.{applied} Your first charge of {discounted} (ex GST) will be on {first_label}. "
                 f"You will pay {discounted} a month for {months} months, then {price} a month from {full_from}, "
-                f"renewing automatically until you cancel. Cancel before {first_label} and you will not be charged."
+                f"renewing automatically until you cancel. Cancel before {first_label} and you will not be charged. "
+                f"The pilot is at no charge until {first_label} unless cancelled."
             )
         return (
             f"No charge today. Your first charge of {price} (ex GST) will be on {first_label}. "
