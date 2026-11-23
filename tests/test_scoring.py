@@ -97,7 +97,8 @@ def test_underserved_supplier_boost_is_configurable():
     plain = scoring.score_creator(PRODUCT, STRONG, shop={"is_underserved": False}, weights=scoring.WEIGHTS["balanced"], blocked=set())
     boosted = scoring.score_creator(PRODUCT, STRONG, shop={"is_underserved": True}, weights=scoring.WEIGHTS["balanced"], blocked=set())
     assert boosted["score"] == min(100, round(plain["score"] + scoring.DEFAULTS["underserved_boost"], 4))
-    assert any("Underserved supplier boost" in reason for reason in boosted["reasons"])
+    assert any("Category-need boost" in reason for reason in boosted["reasons"])
+    assert not any("underserved" in reason.lower() for reason in boosted["reasons"])
 
 
 def test_accept_and_decline_and_stored_exclusions(tmp_path, monkeypatch):

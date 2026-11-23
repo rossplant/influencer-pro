@@ -1,6 +1,7 @@
 """Mail sending interface with a Resend adapter.
 
-RESEND_API_KEY, EMAIL_FROM and (optionally) EMAIL_REPLY_TO turn sending on.
+Transactional mail only. RESEND_API_KEY and RESEND_FROM turn sending on.
+EMAIL_FROM is accepted only when RESEND_FROM is unset. There is no reply-to.
 When the key or From address is missing the adapter sends nothing, logs a
 warning, and returns status "no_provider" so callers can retry later.
 """
@@ -38,8 +39,8 @@ class ResendMailer:
     def from_env(cls) -> "ResendMailer":
         return cls(
             api_key=os.getenv("RESEND_API_KEY", "").strip(),
-            sender=os.getenv("EMAIL_FROM", "").strip(),
-            reply_to=os.getenv("EMAIL_REPLY_TO", "").strip(),
+            sender=os.getenv("RESEND_FROM", "").strip() or os.getenv("EMAIL_FROM", "").strip(),
+            reply_to="",
         )
 
     @property
@@ -50,13 +51,11 @@ class ResendMailer:
         global _warned
         if not self.ready:
             if not _warned:
-                missing = "RESEND_API_KEY" if not self.api_key else "EMAIL_FROM"
+                missing = "RESEND_API_KEY" if not self.api_key else "RESEND_FROM"
                 logger.warning("%s is not set. Email is logged only and NOTHING IS SENT.", missing)
                 _warned = True
             return {"status": NO_PROVIDER, "id": None}
         payload = {"from": self.sender, "to": [to], "subject": subject, "text": text}
-        if self.reply_to:
-            payload["reply_to"] = self.reply_to
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key[:256]

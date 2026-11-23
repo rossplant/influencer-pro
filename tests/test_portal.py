@@ -135,6 +135,7 @@ def test_seller_and_creator_apps(monkeypatch):
     assert signed_in.status_code == 303
     seller_cookie = _cookie(signed_in, "plantr_seller")
     db.memory_shops[shop["id"]].subscription_status = "active"
+    db.memory_shops[shop["id"]].shopify_domain = "brand.myshopify.com"
 
     products = client.get("/seller/products", headers=seller_cookie)
     assert products.status_code == 200
@@ -293,7 +294,7 @@ def test_portal_flow_with_admin_cookie(monkeypatch):
     creator_cookie = _cookie(creator_view, "plantr_creator")
     creator_page = client.get("/creator/offers", headers=creator_cookie)
     assert creator_page.status_code == 200
-    assert "Offers" in creator_page.text
+    assert "Matches" in creator_page.text
     assert client.get("/seller/products", headers=creator_cookie).text.find("Seller sign in") >= 0
 
     login_page = client.get("/creator")

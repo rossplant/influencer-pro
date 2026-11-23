@@ -16,17 +16,20 @@ def test_landing_copy_is_approved_and_privacy_stays_draft(monkeypatch):
     sellers = client.get("/pilot-sellers")
     privacy = client.get("/privacy")
     assert creators.status_code == 200
-    assert "Earn from products your audience will actually buy." in creators.text
+    assert "Find products you genuinely rate." in creators.text
     assert "Request your invite" in creators.text
     assert "Sell more. Earn more. Matched with care." in creators.text
     assert "Draft" not in creators.text
     assert "sign up free" not in creators.text.lower()
-    assert "Sell more through the right creators." in sellers.text
+    assert "Sell more through the right Creatrs." in sellers.text
     assert "Apply for a pilot place" in sellers.text
     assert "Foundr number" in creators.text
-    assert "Curatr for 48 hours" in creators.text
-    assert "Trendsettr for 7 days" in creators.text
-    assert "Curated suppliers" in creators.text
+    assert "48-hour early access is earned at Trendsettr and Headlinr." in creators.text
+    assert "Curatr for 48 hours" not in creators.text
+    assert "Trendsettr for 7 days" not in creators.text
+    assert "underserved" not in creators.text.lower()
+    assert "underserved" not in sellers.text.lower()
+    assert "untapped" not in (creators.text + sellers.text).lower()
     assert "A$9 a month for 12 months" in creators.text
     assert "A$15 a month" in creators.text
     assert "A$9.50" not in creators.text

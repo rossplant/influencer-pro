@@ -23,15 +23,15 @@ SELLER_PANEL = (
     "Plantr Collab is a paid subscription service. Plans: Starter A$29, Growth A$79 or Scale A$229 per month "
     "(or 10 times the monthly price per year). Prices exclude GST. We are not yet registered for GST, so no GST "
     "is charged now. If we register, we will give you 30 days' notice before adding GST. Plans renew automatically "
-    "until you cancel. Plantr charges no transaction fee on sales. You pay creators' commission directly. "
-    "Pilot sellers get Growth free from 20 November 2026 to 20 January 2027, then A$39.50 a month "
+    "until you cancel. Plantr charges no transaction fee on sales. You pay Creatrs' commission directly. "
+    "Pilot suppliers are at no charge until 20 January 2027 unless cancelled, then A$39.50 a month "
     "for 3 months, then A$79 a month, but only if they choose to subscribe."
 )
 CREATOR_PANEL = (
-    "Plantr Collab is a paid subscription service for creators. Plans: Membr A$15, Curatr A$19 or Trendsettr A$49 "
+    "Plantr Collab is a paid subscription service for Creatrs. Plans: Membr A$15, Curatr A$19 or Curatr Pro A$49 "
     "per month (or 10 times the monthly price per year). Prices exclude GST (not charged until we register for GST, "
-    "with 30 days' notice). Plans renew automatically until you cancel. Foundrs get the pilot free from 20 November "
-    "2026 to 20 January 2027, then Curatr at A$9 a month for 12 months with code FOUNDR9, then A$19 a month, but only "
+    "with 30 days' notice). Plans renew automatically until you cancel. Foundr is a permanent invite-only status. "
+    "Foundrs are at no charge until 20 January 2027 unless cancelled, then Curatr at A$9 a month for 12 months with code FOUNDR9, then A$19 a month, but only "
     "if they choose to subscribe."
 )
 
@@ -43,7 +43,7 @@ SELLER_APPLY = (
 SELLER_AUTHORITY = "I am 18 or older and authorised to act for this business."
 CREATOR_AGE = "I am 18 or older."
 CREATOR_APPLY = (
-    "I understand creator plans are paid (from A$15 a month ex GST), and that Foundrs are free only until 20 January "
+    "I understand Creatr plans are paid (from A$15 a month ex GST), and that Foundrs are at no charge only until 20 January "
     "2027. I have read the Privacy Policy. I agree that Plantr may review my application and public social profile "
     "metrics, using automated tools with a final decision by a person. Applying does not create a contract or commit "
     "me to pay."
@@ -53,7 +53,7 @@ SELLER_JOIN_TERMS = (
     "Agreement, Data Processing Addendum and Acceptable Use Policy, and I have read the Privacy Policy."
 )
 SELLER_JOIN_PILOT = (
-    "I understand the pilot is free from 20 November 2026 to 20 January 2027. After that, Plantr Collab is paid. If I "
+    "I understand the pilot is at no charge from 20 November 2026 to 20 January 2027 unless cancelled. After that, Plantr Collab is paid. If I "
     "choose to continue on Growth, I will pay A$39.50 a month ex GST for 3 months, then A$79 a month ex GST, renewing "
     "automatically until I cancel. I will not be charged unless I choose a plan and enter payment details."
 )
@@ -63,7 +63,7 @@ CREATOR_JOIN_TERMS = (
     "platform's paid-partnership label). I have read the Privacy Policy."
 )
 CREATOR_JOIN_PILOT = (
-    "I understand the Foundr pilot is free until 20 January 2027. After that, if I choose to continue, Curatr is A$9 "
+    "I understand the Foundr pilot is at no charge until 20 January 2027 unless cancelled. Foundr stays an invite-only status. After that, if I choose to continue, Curatr is A$9 "
     "a month ex GST for 12 months with code FOUNDR9, then A$19 a month ex GST, renewing automatically until I cancel. "
     "I will not be charged unless I choose a plan and enter payment details."
 )

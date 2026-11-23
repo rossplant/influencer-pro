@@ -48,13 +48,19 @@ When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot s
 
 ## For creators
 
-Internal tier values stay `member`, `curator`, and `elite`. The names on screen are Membr, Curatr, and Trendsettr.
+Internal tier values stay `member`, `curator`, and `elite`. The names on screen are Membr, Curatr, and Curatr Pro. Stripe lookup keys stay `creator_elite_month` and `creator_elite_year`.
 
-| tier | Label | Price, ex GST |
-| --- | --- | --- |
-| member | Membr | A$15 / month or A$150 / year |
-| curator | Curatr | A$19 / month or A$190 / year |
-| elite | Trendsettr | A$49 / month or A$490 / year |
+| tier | Label | Price, ex GST | New matches / month | Curated offers | Active collabs |
+| --- | --- | --- | --- | --- | --- |
+| member | Membr | A$15 / month or A$150 / year | 4 | 0 | 3 |
+| curator | Curatr | A$19 / month or A$190 / year | 12 | 4 | 6 |
+| elite | Curatr Pro | A$49 / month or A$490 / year | Every qualifying match in the Creatr's categories | 12 | 12 |
+
+Allowances refresh each calendar month. Unused matches do not roll over. Trendsettr adds 2 active collabs and Headlinr adds 4. Those are earned tiers, not plans. 5 attributed sales in a calendar month add 3 matches that month, on every plan. Curatr Pro does not say unlimited, and it does not include top placement in shortlists.
+
+Earned Creatr tiers, from confirmed refund-adjusted sales over a rolling 3 months, counted from 20 November 2026: Contributr on joining, Influencr at 5, Trendsettr at 15, Headlinr at 40. Pilot invitees start at Influencr until 20 April 2027. A plan never buys a tier. 48-hour early access is Trendsettr and Headlinr only.
+
+Suppliers do not earn those tiers. Creatrs see each Creatr's tier when a supplier is choosing. A supplier can show "Pays on time" and, separately, "Top seller". Top seller is free, earned, and does not change match order.
 
 Every plan is paid. An account with no live subscription, and that is not in the current pilot, is unsubscribed. It can sign in and edit its profile, and it sees a subscribe prompt instead of creating products, campaigns, matches, or accepted offers.
 

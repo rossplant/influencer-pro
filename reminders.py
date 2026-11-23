@@ -117,6 +117,7 @@ def subscription_reminders(row: dict, email: str) -> list[Reminder]:
     trial_end = _aware(row.get("trial_end"))
     if status == "trialing" and trial_end is not None:
         first_cents = code_spec.get("discounted_month_cents") if code_spec and unit == "month" else full_cents
+        charge_values = {"charge_date": _day(trial_end), "amount": billing_config.amount_label(first_cents), "plan": spec["label"], "unit": unit}
         found.append(
             Reminder(
                 key=f"first_charge:{sub_id}:{trial_end.date().isoformat()}",
@@ -125,7 +126,18 @@ def subscription_reminders(row: dict, email: str) -> list[Reminder]:
                 to_email=email,
                 due_at=trial_end - FIRST_CHARGE_LEAD,
                 event_at=trial_end,
-                values={"charge_date": _day(trial_end), "amount": billing_config.amount_label(first_cents), "plan": spec["label"], "unit": unit},
+                values=charge_values,
+            )
+        )
+        found.append(
+            Reminder(
+                key=f"first_charge_2d:{sub_id}:{trial_end.date().isoformat()}",
+                kind="first_charge_2d",
+                template="first_charge_2_days",
+                to_email=email,
+                due_at=trial_end - timedelta(days=2),
+                event_at=trial_end,
+                values=charge_values,
             )
         )
     period_end = _aware(row.get("current_period_end"))
@@ -160,6 +172,30 @@ def subscription_reminders(row: dict, email: str) -> list[Reminder]:
                 },
             )
         )
+        if code == "PILOTGROWTH":
+            step_values = {"ends": _day(discount_end), "amount": billing_config.amount_label(full_cents)}
+            found.append(
+                Reminder(
+                    key=f"growth_step_7d:{sub_id}:{discount_end.date().isoformat()}",
+                    kind="growth_step_7d",
+                    template="growth_step_7_days",
+                    to_email=email,
+                    due_at=discount_end - timedelta(days=7),
+                    event_at=discount_end,
+                    values=step_values,
+                )
+            )
+            found.append(
+                Reminder(
+                    key=f"growth_step_2d:{sub_id}:{discount_end.date().isoformat()}",
+                    kind="growth_step_2d",
+                    template="growth_step_2_days",
+                    to_email=email,
+                    due_at=discount_end - timedelta(days=2),
+                    event_at=discount_end,
+                    values=step_values,
+                )
+            )
     return found
 
 

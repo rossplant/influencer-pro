@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.0
+
+Creatr tiers, match allowances, and supplier badges. Stripe stays sandbox only. This does not merge.
+
+- Creatr ladder: Contributr, Influencr at 5, Trendsettr at 15, Headlinr at 40 confirmed refund-adjusted sales over a rolling 3 months, from 20 November 2026. Pilot invitees start at Influencr until 20 April 2027. Plans do not buy a tier. 48-hour early access is Trendsettr and Headlinr only. The plan-based first look is removed.
+- The elite plan's name on screen is Curatr Pro. The id and Stripe lookup keys stay `elite`.
+- Match allowances refresh monthly with no rollover. Membr 4 matches and 3 active collabs. Curatr 12 matches, 4 offers, 6 collabs. Curatr Pro sees every qualifying category match, 12 offers, and 12 collabs. Trendsettr adds 2 active collabs and Headlinr adds 4. Five attributed sales in a month add 3 matches.
+- Suppliers do not earn tiers. Creatrs see a Creatr's tier as a selection signal. Suppliers can show "Pays on time" and "Top seller". Top seller is free and earned, and it does not change ranking.
+- Non-Shopify suppliers are hidden from Creatrs. Pilot caps are 20 Shopify and 10 non-Shopify. The product cap is not applied during the pilot.
+- Listing Studio is stubbed and off. No image API is called.
+- Transactional email uses `RESEND_API_KEY` and `RESEND_FROM`, with no reply-to. It covers sign-up verification, password reset, and billing reminders 7 days and 2 days before the first charge and before the Growth step-up.
+
 ## 0.19.0
 
 Seller onboarding and a curated catalogue for the pilot. Stripe stays sandbox only: live secret keys are still refused, and this change does not touch Stripe or Railway.

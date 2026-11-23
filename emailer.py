@@ -1,6 +1,7 @@
 """Email templates. Every message is logged, then handed to mailer.py.
 
-Until RESEND_API_KEY and EMAIL_FROM are set, nothing is delivered.
+Until RESEND_API_KEY and RESEND_FROM are set, nothing is delivered.
+EMAIL_FROM is used only when RESEND_FROM is empty. There is no reply-to.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from models import EmailMessage, utcnow
 logger = logging.getLogger("plantr.email")
 
 PROVIDER_REQUIRED = (
-    "Email is logged only. Set RESEND_API_KEY and EMAIL_FROM to send. Nothing is sent."
+    "Email is logged only. Set RESEND_API_KEY and RESEND_FROM to send. Nothing is sent."
 )
 
 TEMPLATES = {
@@ -61,6 +62,35 @@ TEMPLATES = {
     "converted": {
         "subject": "Your Plantr Collab plan is active",
         "body": "Your plan is now {tier}. The supplier or you pays Plantr for the subscription. Commission is settled by the supplier.",
+    },
+    "signup_verification": {
+        "subject": "Confirm your Plantr Collab email",
+        "body": "Confirm your email by opening {url}. This link expires. If you did not sign up, you can ignore this message.",
+    },
+    "password_reset": {
+        "subject": "Reset your Plantr Collab password",
+        "body": "Reset your password by opening {url}. This link expires. If you did not ask for this, you can ignore this message.",
+    },
+    "first_charge_2_days": {
+        "subject": "Your Plantr Collab charge is in 2 days",
+        "body": (
+            "Your first charge of {amount} ex GST for {plan} is on {charge_date}. "
+            "Cancel before then in Billing and you will not be charged."
+        ),
+    },
+    "growth_step_7_days": {
+        "subject": "Your Growth price changes on {ends}",
+        "body": (
+            "On {ends} your Growth plan moves to {amount} ex GST a month. "
+            "Cancel or change plan in Billing before then if you do not want that price."
+        ),
+    },
+    "growth_step_2_days": {
+        "subject": "Your Growth price changes in 2 days",
+        "body": (
+            "On {ends} your Growth plan moves to {amount} ex GST a month. "
+            "Cancel or change plan in Billing before then if you do not want that price."
+        ),
     },
 }
 

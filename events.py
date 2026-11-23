@@ -378,7 +378,7 @@ def _shop_metrics(shop: Any, session, event_name: str) -> dict:
         enrichments += 1
     elif event_name == "brief_sent":
         briefs += 1
-    product_limit = caps.get("products")
+    product_limit = None if bool(getattr(shop, "is_pilot", False)) else caps.get("products")
     match_limit = caps.get("matches_per_month")
     at_products = product_limit is not None and products_count >= product_limit
     at_matches = match_limit is not None and matches_count >= match_limit

@@ -101,7 +101,7 @@ def test_existing_product_name_is_updated_to_the_current_label():
     Products.updated.clear()
 
     class SameName:
-        data = [SimpleNamespace(id="prod_trend", name="Trendsettr")]
+        data = [SimpleNamespace(id="prod_trend", name="Curatr Pro")]
         has_more = False
 
     class Quiet:
@@ -114,9 +114,9 @@ def test_existing_product_name_is_updated_to_the_current_label():
             def update(_product_id, _payload):
                 raise AssertionError("a product that already has the label must not be updated")
 
-    assert setup._find_or_create_product(Quiet(), "Trendsettr", "elite", "creator") == "prod_trend"
+    assert setup._find_or_create_product(Quiet(), "Curatr Pro", "elite", "creator") == "prod_trend"
     assert billing_config.CREATOR_TIERS["curator"]["label"] == "Curatr"
-    assert billing_config.CREATOR_TIERS["elite"]["label"] == "Trendsettr"
+    assert billing_config.CREATOR_TIERS["elite"]["label"] == "Curatr Pro"
     assert billing_config.lookup_key("creator", "curator", "month") == "creator_curator_month"
 
 

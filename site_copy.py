@@ -12,28 +12,27 @@ APPROVED = True
 
 CORE_HEADLINE = "Sell more. Earn more. Matched with care."
 CORE_BODY = (
-    "An invite-only marketplace connecting selected creators with underserved suppliers. "
-    "Creators earn commission on the sales they drive; suppliers sell through creators who fit "
-    "their products — matched on category, audience, performance and supplier fit, reviewed by our team."
+    "An invite-only marketplace connecting carefully selected Creatrs and suppliers. "
+    "Creatrs earn commission on the sales they drive; suppliers sell through Creatrs who fit "
+    "their products. Both sides are chosen to match each other, and our team reviews the match."
 )
 
 CREATOR_PAGE = {
     "path": "/founding-curators",
     "role": "creator",
     "cohort": "founding_curators",
-    "headline": "Earn from products your audience will actually buy.",
-    "subhead": "You're invited to apply. Earn commission on the tracked sales you drive.",
+    "headline": "Find products you genuinely rate.",
+    "subhead": "Cultivate their story, your way.",
     "cta": "Request your invite",
     "points": (
-        "Invite-only. Foundrs are numbered and the cohort is capped.",
-        "Curated suppliers in your niche, chosen because they are underserved on TikTok, Instagram and YouTube.",
-        "A time-boxed first look at new suppliers: Curatr for 48 hours, Trendsettr for 7 days, where the seller opted in.",
-        "Tailored offers and bundle ideas.",
+        "Invite-only. Foundr is a permanent invite-only status, and the cohort is capped.",
+        "Carefully selected suppliers in your niche, chosen to match the right Creatrs.",
+        "48-hour early access is earned at Trendsettr and Headlinr. A plan does not buy it.",
         "Your own tracking links and codes. The supplier sets the commission and pays it only on tracked sales.",
-        "A title, badge and profile. Your Foundr number is shown once you are approved.",
-        "Foundrs have no charge for the pilot, from 20 November 2026 until 20 January 2027, then Curatr is A$9 a month ex GST for 12 months, then A$19 a month ex GST.",
-        "Membr is A$15 a month ex GST or A$150 a year ex GST. Curatr is A$19 ex GST or A$190 ex GST. Trendsettr is A$49 ex GST or A$490 ex GST. Annual prices are two months off.",
-        "Curatr only: your next monthly Curatr fee is waived when you drive 5 or more attributed sales in a month. It does not apply to Membr or Trendsettr.",
+        "A plain Influencr badge when you hold that tier. Your Foundr number is shown once you are approved.",
+        "Foundrs are at no charge from 20 November 2026 until 20 January 2027 unless cancelled, then Curatr is A$9 a month ex GST for 12 months, then A$19 a month ex GST.",
+        "Membr is A$15 a month ex GST. Curatr is A$19 ex GST. Curatr Pro is A$49 ex GST.",
+        "Curatr only: your next monthly Curatr fee is waived when you drive 5 or more attributed sales in a month. The same 5 sales unlock 3 extra matches that month.",
     ),
 }
 
@@ -41,17 +40,16 @@ SUPPLIER_PAGE = {
     "path": "/pilot-sellers",
     "role": "seller",
     "cohort": "seller_pilot",
-    "headline": "Sell more through the right creators.",
-    "subhead": "Great products deserve the right voices.",
+    "headline": "Sell more through the right Creatrs.",
+    "subhead": "Carefully selected, then matched.",
     "cta": "Apply for a pilot place",
     "points": (
-        "We select suppliers that are underserved on TikTok, Instagram and YouTube.",
-        "Curated creator shortlists, reviewed by our team.",
-        "Sales through your creators' tracking links and codes are reported to you.",
+        "Plantr Collab carefully selects suppliers and Creatrs, using criteria designed to match the right Creatrs to your products.",
+        "Hand-reviewed Creatr shortlists.",
+        "Sales through your Creatrs' tracking links and codes are reported to you.",
         "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
-        "Brief help for the creators you accept.",
-        "10 pilot places. Growth has no charge for the pilot, from 20 November 2026 until 20 January 2027, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
-        "Starter is A$29 a month ex GST or A$290 a year ex GST. Growth is A$79 ex GST or A$790 ex GST. Scale is A$229 ex GST or A$2,290 ex GST. Annual prices are two months off.",
+        "Growth is at no charge from 20 November 2026 until 20 January 2027 unless cancelled, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
+        "Starter is A$29 a month ex GST. Growth is A$79 ex GST. Scale is A$229 ex GST.",
     ),
 }
 
