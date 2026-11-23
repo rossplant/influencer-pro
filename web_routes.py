@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 
 from fastapi import HTTPException, Request
@@ -16,6 +17,24 @@ import site_copy
 import stripe_billing
 import touch
 import tracking
+
+
+def _draft_reader(request: Request) -> bool:
+    import db
+    import uat_mode
+
+    if auth.session_email(request):
+        return True
+    if not uat_mode.enabled() or not portal.portal_enabled():
+        return False
+    ids = getattr(db, "memory_uat_ids", {}) or {}
+    seller = portal.seller_context(request)
+    creator = portal.creator_context(request)
+    if seller and seller.get("subject_id") == ids.get("shop_id"):
+        return True
+    if creator and creator.get("subject_id") == ids.get("creator_id"):
+        return True
+    return False
 
 
 def register(app) -> None:
@@ -45,14 +64,15 @@ def register(app) -> None:
         if not billing_config.operator_legal_name():
             return HTMLResponse(_shell(f"<h1>You're invited.</h1><p>{legal.OPENING_SOON}</p>"))
         token = auth.issue_form_token("join")
+        dob = "<label>Date of birth <input name='date_of_birth' type='date' required autocomplete='bday'></label>"
         if opened["role"] == "creator":
-            age = legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
+            age = dob + legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
             boxes = legal.checkbox("terms_accepted", legal.CREATOR_JOIN_TERMS, required=True) + legal.checkbox(
                 "pilot_terms_accepted", legal.CREATOR_JOIN_PILOT, required=True
             )
             panel = legal.CREATOR_PANEL
         else:
-            age = legal.checkbox("age_confirmed", legal.SELLER_AUTHORITY, required=True)
+            age = dob + legal.checkbox("age_confirmed", legal.SELLER_AUTHORITY, required=True)
             boxes = legal.checkbox("terms_accepted", legal.SELLER_JOIN_TERMS, required=True) + legal.checkbox(
                 "pilot_terms_accepted", legal.SELLER_JOIN_PILOT, required=True
             )
@@ -78,6 +98,15 @@ def register(app) -> None:
           <button type="submit">Continue</button>
         </form>
         <p>Plantr Collab is operated by {operator}. <a href="/privacy">Privacy</a></p>
+        <p>Draft documents, pending legal review:
+          <a href="/terms/platform">Terms</a>,
+          <a href="/terms/creatr-foundr">Creatr and Foundr terms</a>,
+          <a href="/terms/seller">Seller terms</a>,
+          <a href="/terms/fees">Fees and plans</a>,
+          <a href="/privacy">Privacy</a>,
+          <a href="/terms/acceptable-use">Acceptable use</a>,
+          <a href="/terms/integration-data">Integration data</a>.
+        </p>
         """
         return HTMLResponse(_shell(body))
 
@@ -90,6 +119,11 @@ def register(app) -> None:
             import legal
 
             raise HTTPException(status_code=503, detail=legal.OPENING_SOON)
+        import creatr_age
+
+        born, date_error = creatr_age.parse_born(str(form.get("date_of_birth") or ""))
+        if date_error:
+            raise HTTPException(status_code=422, detail=date_error)
         result = pilots.join_with_invite(
             code,
             name=str(form.get("name") or ""),
@@ -97,6 +131,7 @@ def register(app) -> None:
             password=str(form.get("password") or ""),
             categories=str(form.get("categories") or ""),
             age_confirmed=str(form.get("age_confirmed") or "") == "yes",
+            date_of_birth=born,
             touch_state=request.scope.get("plantr_touch"),
             consent=tracking.consent_from_scope(request.scope),
             terms_accepted=str(form.get("terms_accepted") or "") == "yes",
@@ -109,8 +144,33 @@ def register(app) -> None:
         return RedirectResponse(target, status_code=303)
 
     @app.get("/privacy")
-    def privacy_page():
-        return HTMLResponse(site_copy.privacy_html())
+    def privacy_page(request: Request):
+        import legal
+
+        privileged = _draft_reader(request)
+        if not privileged:
+            return HTMLResponse(legal.legal_page("privacy"))
+        import site_copy as copy
+
+        body = f"<p class='banner'>DRAFT — NEEDS LEGAL REVIEW (NOT BINDING)</p><h1>Privacy</h1><p>{html.escape(copy.PRIVACY['body'])}</p><p>[PRIVACY POLICY PENDING LEGAL REVIEW]</p>"
+        return HTMLResponse(__import__("brand_ui").document("Privacy", body))
+
+    @app.get("/terms/{slug}")
+    def terms_page(slug: str, request: Request):
+        import legal
+
+        if slug not in legal.LEGAL_PAGES or slug == "privacy":
+            raise HTTPException(status_code=404, detail="That page is not available")
+        return HTMLResponse(legal.legal_page(slug, privileged=_draft_reader(request)))
+
+    @app.get("/robots.txt")
+    def robots_txt():
+        import tracking
+        from fastapi.responses import PlainTextResponse
+
+        if not tracking.staging():
+            raise HTTPException(status_code=404, detail="Not available")
+        return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
     @app.post("/track/consent")
     async def update_consent(request: Request):
@@ -368,6 +428,12 @@ async def _apply(request: Request, slug: str):
         import legal
 
         return HTMLResponse(site_copy.landing_html(kind, thanks=legal.OPENING_SOON), status_code=503)
+    import creatr_age
+
+    born, date_error = creatr_age.parse_born(str(form.get("date_of_birth") or ""))
+    if date_error:
+        raise HTTPException(status_code=422, detail=date_error)
+    age_yes = str(form.get("age_confirmed") or "") == "yes"
     result = pilots.apply(
         slug,
         name=str(form.get("name") or ""),
@@ -375,14 +441,15 @@ async def _apply(request: Request, slug: str):
         role=str(form.get("role") or ""),
         categories=str(form.get("categories") or ""),
         contact=str(form.get("contact") or ""),
-        age_confirmed=str(form.get("age_confirmed") or "") == "yes",
+        age_confirmed=age_yes,
+        date_of_birth=born,
         touch_state=request.scope.get("plantr_touch"),
         consent=tracking.consent_from_scope(request.scope),
         event_id=str(form.get("event_id") or ""),
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
         paid_service_confirmed=str(form.get("paid_service_confirmed") or "") == "yes",
-        authority_confirmed=str(form.get("authority_confirmed") or "") == "yes",
+        authority_confirmed=str(form.get("authority_confirmed") or "") == "yes" or (kind == "seller" and age_yes),
         email_consent=str(form.get("email_consent") or "") == "yes",
         business_name=str(form.get("business_name") or ""),
         abn=str(form.get("abn") or ""),

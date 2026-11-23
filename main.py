@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.25.0"
+APP_VERSION = "0.26.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -99,6 +99,7 @@ class InfluencerIn(BaseModel):
     password: Optional[str] = None
     invite_code: Optional[str] = None
     age_confirmed: bool = False
+    date_of_birth: Optional[str] = None
 
 
 class ClaimIn(BaseModel):
@@ -414,6 +415,7 @@ def public_profile(influencer: InfluencerIn, influencer_id: str) -> Dict[str, An
     record.pop("email", None)
     record.pop("invite_code", None)
     record.pop("age_confirmed", None)
+    record.pop("date_of_birth", None)
     if not record.get("platforms"):
         record.pop("platforms", None)
     if not record.get("follower_band"):
@@ -594,6 +596,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLogMiddleware)
+
+
+class StagingRobotsMiddleware:
+    """Staging is public, so every response asks crawlers not to index it."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        import tracking
+
+        if not tracking.staging():
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-robots-tag", b"noindex"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+app.add_middleware(StagingRobotsMiddleware)
 
 
 def _html(name: str) -> FileResponse:
@@ -1375,6 +1406,84 @@ async def seller_run_match(request: Request, _: None = Depends(rate_limit_portal
     return portal.render_seller(session, "find", base_url=billing_config.public_base_url(request), products=products, matches=outcome["matches"])
 
 
+@app.post("/seller/team")
+async def seller_team_invite(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import creatr_age
+
+    born, date_error = creatr_age.parse_born(str(form.get("date_of_birth") or ""))
+    if date_error:
+        raise HTTPException(status_code=422, detail=date_error)
+    blocked = creatr_age.check_signup(born=born, attested=str(form.get("age_confirmed") or "") == "yes")
+    if blocked:
+        raise HTTPException(status_code=422, detail=blocked)
+    email = str(form.get("email") or "").strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Enter an email address")
+    if not hasattr(db, "memory_team_invites"):
+        db.memory_team_invites = []
+    db.memory_team_invites.append({"shop_id": session["subject_id"], "email": email, "age_confirmed": True})
+    return RedirectResponse("/seller/profile", status_code=303)
+
+
+def _email_for_creator(creator_id: str) -> str:
+    if not creator_id:
+        return ""
+    if db.configured():
+        from sqlalchemy import select
+
+        from models import PortalAccount
+
+        with db.session_scope() as session:
+            row = session.scalar(select(PortalAccount).where(PortalAccount.creator_id == creator_id))
+            return "" if row is None else row.email
+    for row in db.memory_portal_accounts:
+        if getattr(row, "role", "") == "creator" and getattr(row, "creator_id", None) == creator_id:
+            return row.email
+    return ""
+
+
+def _email_match(item_id: str) -> None:
+    import emailer
+
+    creator_id = None
+    title = "a product"
+    if db.configured():
+        from models import Product, Shortlist, ShortlistItem
+
+        with db.session_scope() as session:
+            item = session.get(ShortlistItem, item_id)
+            if item is None:
+                return
+            creator_id = item.creator_id
+            shortlist = session.get(Shortlist, item.shortlist_id)
+            if shortlist is not None and shortlist.product_id:
+                product = session.get(Product, shortlist.product_id)
+                title = product.title if product is not None else title
+    else:
+        item = next((row for row in db.memory_shortlist_items if getattr(row, "id", None) == item_id), None)
+        if item is None:
+            return
+        creator_id = getattr(item, "creator_id", None)
+        shortlist = next((row for row in db.memory_shortlists if row.id == getattr(item, "shortlist_id", None)), None)
+        if shortlist is not None:
+            product = db.memory_products.get(getattr(shortlist, "product_id", None))
+            title = getattr(product, "title", None) or title
+    address = _email_for_creator(creator_id or "")
+    if address:
+        emailer.send("new_match", address, product=title)
+
+
+def _email_sample_accepted(row: dict) -> None:
+    import emailer
+
+    address = _email_for_creator(str(row.get("creator_id") or ""))
+    if address:
+        emailer.send("sample_accepted", address, product=row.get("product_title") or "your sample")
+
+
 @app.post("/seller/shortlist-items/{item_id}/accept")
 async def seller_accept(item_id: str, request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.require_seller(request)
@@ -1384,6 +1493,7 @@ async def seller_accept(item_id: str, request: Request, _: None = Depends(rate_l
     if blocked is not None:
         return blocked
     portal.decide(session["subject_id"], item_id, "match_accepted")
+    _email_match(item_id)
     return RedirectResponse("/seller/accepted", status_code=303)
 
 
@@ -1573,7 +1683,8 @@ async def seller_sample_approve(sample_id: str, request: Request, _: None = Depe
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
     import samples as sample_flow
 
-    sample_flow.decide(sample_id, session["subject_id"], approved=True)
+    row = sample_flow.decide(sample_id, session["subject_id"], approved=True)
+    _email_sample_accepted(row)
     return RedirectResponse("/seller/samples", status_code=303)
 
 
@@ -1978,14 +2089,20 @@ def onboard_influencer(influencer: InfluencerIn, _: None = Depends(rate_limit_pu
                 status_code=422,
                 detail="Creator login needs an email and a password of at least 12 characters",
             )
+        import creatr_age
+
+        born, date_error = creatr_age.parse_born(influencer.date_of_birth or "")
+        if date_error:
+            raise HTTPException(status_code=422, detail=date_error)
+        blocked = creatr_age.check_signup(born=born, attested=bool(influencer.age_confirmed))
+        if blocked:
+            raise HTTPException(status_code=422, detail=blocked)
+        if not influencer.invite_code or not _invite_ok(influencer.invite_code):
+            raise HTTPException(status_code=422, detail="Creator membership is invite-only")
     influencer_id = str(uuid.uuid4())
     record = public_profile(influencer, influencer_id)
     services.persist_creator(record)
     if influencer.email and influencer.password:
-        if not influencer.age_confirmed:
-            raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
-        if not influencer.invite_code or not _invite_ok(influencer.invite_code):
-            raise HTTPException(status_code=422, detail="Creator membership is invite-only")
         portal.create_login(
             role="creator",
             email=influencer.email,
@@ -2027,6 +2144,8 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 web_routes.register(app)
 import commission_routes
+import revision_routes
 
 commission_routes.register(app)
+revision_routes.register(app, require_admin)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

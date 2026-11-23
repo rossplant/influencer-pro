@@ -230,6 +230,13 @@ def run(now: Optional[datetime] = None, *, sender: Optional[mailer.Mailer] = Non
         summary[status if status in summary else "failed"] += 1
     if summary["no_provider"]:
         logger.warning("%s reminders are due but RESEND_API_KEY is not set; they will retry", summary["no_provider"])
+    if now.day == 1 and db.configured():
+        try:
+            import statements_mail
+
+            statements_mail.run_month(now.strftime("%Y-%m"))
+        except Exception:
+            logger.exception("monthly statements")
     return summary
 
 

@@ -49,7 +49,7 @@ def test_positioning_drops_unverifiable_claims_and_prompts_lock_the_product():
     fake = FakeClient()
     state = listing_studio.generate(_product(), supplier_id="shop-1", client=fake)
     assert len(state["angles"]) == 3
-    assert all("#ad" in row["caption"] for row in state["angles"])
+    assert all(row["caption"].startswith("#Ad") for row in state["angles"])
     assert all("best" not in row["insight"].lower() for row in state["angles"])
     assert "Never add, remove, or change" in fake.prompts[0]
     assert "No plants" in fake.prompts[1]

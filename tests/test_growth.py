@@ -37,7 +37,8 @@ def test_landing_copy_is_approved_and_privacy_stays_draft(monkeypatch):
     assert "/founding-curators/apply" in creators.text
     assert "A$39.50 a month for 3 months, then A$79" in sellers.text
     assert "A$29 a month" in sellers.text
-    assert "Draft for legal review" in privacy.text
+    assert "Draft — pending legal review" in privacy.text
+    assert "hashed email" not in privacy.text
     for banned in ("passive income", "guaranteed", "go viral", "unlimited reach", "make $"):
         assert banned not in creators.text.lower()
         assert banned not in sellers.text.lower()
@@ -71,6 +72,7 @@ def test_public_creator_login_requires_an_invite():
             "email": "open@example.com",
             "password": "correct horse battery",
             "age_confirmed": True,
+            "date_of_birth": "1990-01-01",
         },
     )
     assert response.status_code == 422
@@ -94,6 +96,7 @@ def test_approval_numbers_founding_curators_and_logs_internally(monkeypatch):
             "categories": "home",
             "contact": "@ada",
             "age_confirmed": "yes",
+            "date_of_birth": "1990-01-01",
             "paid_service_confirmed": "yes",
             "event_id": "form-1",
         },
@@ -227,6 +230,7 @@ def test_waitlisted_application_still_emits_apply_submit(monkeypatch):
             "categories": "home",
             "contact": "@bea",
             "age_confirmed": "yes",
+            "date_of_birth": "1990-01-01",
             "paid_service_confirmed": "yes",
             "event_id": event_id,
         },

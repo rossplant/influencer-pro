@@ -45,6 +45,9 @@ def _isolated(monkeypatch):
     monkeypatch.setenv("REMINDERS_LOOP", "off")
     # Pilot applications stay closed until the operator is named. Most tests need them open.
     monkeypatch.setenv("OPERATOR_LEGAL_NAME", "Test Operator Pty Ltd")
+    monkeypatch.delenv("UAT_MODE", raising=False)
+    monkeypatch.delenv("MIN_USER_AGE", raising=False)
+    monkeypatch.delenv("MIN_CREATR_AGE", raising=False)
     monkeypatch.delenv("ENV", raising=False)
     monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
     monkeypatch.delenv("ADMIN_EMAIL", raising=False)

@@ -505,6 +505,7 @@ class PortalAccount(Base):
 
     __tablename__ = "portal_accounts"
     __table_args__ = (
+        UniqueConstraint("email", "role", name="uq_portal_accounts_email_role"),
         CheckConstraint("role IN ('seller', 'creator')", name="ck_portal_accounts_role"),
         CheckConstraint(
             "(role = 'seller' AND shop_id IS NOT NULL AND creator_id IS NULL) OR "
@@ -515,7 +516,7 @@ class PortalAccount(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     shop_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shops.id"), nullable=True, index=True)
     creator_id: Mapped[Optional[str]] = mapped_column(ForeignKey("creators.id"), nullable=True, index=True)
@@ -1071,4 +1072,16 @@ class SampleRequest(Base):
     reminder_7_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     reminder_2_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
     address_redacted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class UatFeedback(Base):
+    """A pass or fail note from the staging UAT checklist."""
+
+    __tablename__ = "uat_feedback"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    step: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[str] = mapped_column(String(8), nullable=False, default="")
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)

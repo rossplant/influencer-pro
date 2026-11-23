@@ -385,6 +385,8 @@ def _seller_form(page, **extra):
         "role": "seller",
         "business_name": "Sam's Plants",
         "authority_confirmed": "yes",
+        "age_confirmed": "yes",
+        "date_of_birth": "1990-01-01",
         "paid_service_confirmed": "yes",
     }
     data.update(extra)
@@ -394,13 +396,13 @@ def _seller_form(page, **extra):
 def test_seller_application_needs_authority_and_a_valid_abn_and_records_acceptance(monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     page = client.get("/pilot-sellers").text
-    assert "You must be 18+ and authorised to apply for this business" in page
+    assert "All users must be 18 or over" in page
     fee = "Plantr takes no cut of your sales. You pay Creatrs' commission directly."
     assert fee in legal.SELLER_PANEL
     assert html.escape(fee) in page
     assert "name='abn'" in page
     assert "email_consent" in page and "required> Send me" not in page
-    assert client.post("/pilot-sellers/apply", data=_seller_form(page, authority_confirmed=None)).status_code == 422
+    assert client.post("/pilot-sellers/apply", data=_seller_form(page, age_confirmed=None)).status_code == 422
     page = client.get("/pilot-sellers").text
     assert client.post("/pilot-sellers/apply", data=_seller_form(page, abn="1234")).status_code == 422
     page = client.get("/pilot-sellers").text
@@ -440,7 +442,14 @@ def test_join_needs_the_terms_boxes_and_stores_an_acceptance_record(monkeypatch)
     page = client.get(f"/join/{invite.code}").text
     assert "Seller Pilot Agreement" in page and "terms_accepted" in page
     token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
-    base = {"csrf_token": token, "name": "Jo", "email": "join@example.com", "password": "a-long-password-1", "age_confirmed": "yes"}
+    base = {
+        "csrf_token": token,
+        "name": "Jo",
+        "email": "join@example.com",
+        "password": "a-long-password-1",
+        "age_confirmed": "yes",
+        "date_of_birth": "1990-01-01",
+    }
     refused = client.post(f"/join/{invite.code}", data=base, follow_redirects=False)
     assert refused.status_code == 422
     token = client.get(f"/join/{invite.code}").text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]

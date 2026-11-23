@@ -48,7 +48,7 @@ SELLER_TIERS = {
         "products_label": "250+",
         "reaches": ("member", "curator", "elite"),
         "features": ("csv_import", "per_creator_report", "priority_matching", "export"),
-        "coming_soon": ("brief_help",),
+        "coming_soon": ("Help writing the brief",),
     },
 }
 
