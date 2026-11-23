@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import main
 
 client = TestClient(main.app)
-STYLESHEET = "/assets/plantr.css?v=0.23.0"
+STYLESHEET = "/assets/plantr.css?v=0.24.0"
 
 
 def test_portal_pages_share_the_stylesheet_and_wordmark(monkeypatch):

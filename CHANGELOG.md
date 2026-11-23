@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.0
+
+Listing Studio can draft positioning and scenes, check the product, and wait for supplier approval. Stripe stays sandbox only. This does not merge.
+
+- Text uses xAI when `XAI_API_KEY` is set. Scenes use Google nano-banana-2 on Replicate when `REPLICATE_API_TOKEN` is set, with xAI image edit as the backup.
+- A failed product check retries twice, then the backup, then an admin hold. Product-inaccuracy rejections are free. The first brand or positioning change is free. Later changes use an image credit.
+- Missing keys show "Generation unavailable". A global cap defaults to A$20 a day. Keys are not logged.
+
 ## 0.23.0
 
 Shared visual system for the portal, matched to the signed-off v10 prototype. Stripe stays sandbox only. This does not merge.
