@@ -23,6 +23,7 @@ import attribution
 import auth
 import billing_config
 import catalogue
+import brand_ui
 import recognition
 import supplier_copy
 import db
@@ -468,23 +469,42 @@ def creator_links(creator_id: str) -> list[dict]:
     return attribution.list_links(shop_id=None, creator_id=creator_id)
 
 
+def login_message(detail: str) -> str:
+    text = (detail or "").lower()
+    if "too many" in text:
+        return "Too many sign-in attempts. Try again in 15 minutes."
+    return "That email or password is not right. Try again."
+
+
+def login_page(role: str, error: str = "", *, status: int = 200) -> HTMLResponse:
+    purpose = "seller-login" if role == "seller" else "creator-login"
+    action = "/seller/login" if role == "seller" else "/creator/login"
+    title = "Supplier sign in" if role == "seller" else "Creatr sign in"
+    token = auth.issue_form_token(purpose)
+    alert = f"<p class='error' role='alert'>{html.escape(error)}</p>" if error else ""
+    body = f"""
+    <h1>{title}</h1>
+    {alert}
+    <form method="post" action="{action}">
+      <input type="hidden" name="csrf_token" value="{html.escape(token)}">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+      <label for="password">Password</label>
+      <div class="password-row">
+        <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        <button class="secondary" type="button" data-show-password="password">Show password</button>
+      </div>
+      <button type="submit">Sign in</button>
+    </form>
+    """
+    return HTMLResponse(_layout(title, body, None, None), status_code=status)
+
+
 def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
     if session is None:
-        token = auth.issue_form_token("seller-login")
-        body = f"""
-        <h1>Seller sign in</h1>
-        <form method="post" action="/seller/login">
-          <input type="hidden" name="csrf_token" value="{html.escape(token)}">
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="username" required>
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button type="submit">Sign in</button>
-        </form>
-        """
-        return HTMLResponse(_layout("Seller", body, None, None))
+        return login_page("seller", str(data.get("error") or ""))
     shop = shop_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
     data["locked"] = not stripe_billing.commerce_open("seller", session["subject_id"])
@@ -503,27 +523,15 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
     </nav>
     <p class="pills"><a href="/seller/badges">Pays on time</a> <a href="/seller/badges">Top seller</a></p>
     """
-    content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
-    return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"]))
+    content = banner + _seller_body(page, shop, csrf, base_url=base_url, **data)
+    return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"], nav=nav))
 
 
 def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **data) -> HTMLResponse:
     if not portal_enabled():
         raise HTTPException(status_code=503, detail="Portal is disabled")
     if session is None:
-        token = auth.issue_form_token("creator-login")
-        body = f"""
-        <h1>Creatr sign in</h1>
-        <form method="post" action="/creator/login">
-          <input type="hidden" name="csrf_token" value="{html.escape(token)}">
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="username" required>
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button type="submit">Sign in</button>
-        </form>
-        """
-        return HTMLResponse(_layout("Creator", body, None, None))
+        return login_page("creator", str(data.get("error") or ""))
     profile = creator_profile(session["subject_id"])
     csrf = html.escape(session["csrf"])
     data["locked"] = not stripe_billing.commerce_open("creator", session["subject_id"])
@@ -538,8 +546,8 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
       <a href="/creator/profile">Settings</a>
     </nav>
     """
-    content = banner + nav + _creator_body(page, profile, csrf, base_url=base_url, **data)
-    return HTMLResponse(_layout(profile.get("handle") or "Creator", content, "/creator/logout", session["csrf"]))
+    content = banner + _creator_body(page, profile, csrf, base_url=base_url, **data)
+    return HTMLResponse(_layout(profile.get("handle") or "Creatr", content, "/creator/logout", session["csrf"], nav=nav))
 
 
 def _profile_form(shop: dict, csrf: str, error: str) -> str:
@@ -1196,49 +1204,15 @@ def _tracking_block(
     )
 
 
-def _layout(title: str, body: str, logout: Optional[str], csrf: Optional[str]) -> str:
-    logout_form = ""
-    if logout and csrf:
-        logout_form = (
-            f'<form method="post" action="{html.escape(logout)}">'
+def _layout(title: str, body: str, logout_path: Optional[str], csrf: Optional[str], *, nav: str = "") -> str:
+    logout = ""
+    if logout_path and csrf:
+        logout = (
+            f'<form method="post" action="{html.escape(logout_path)}">'
             f'<input type="hidden" name="csrf_token" value="{html.escape(csrf)}">'
-            "<button type='submit'>Sign out</button></form>"
+            "<button class='secondary' type='submit'>Sign out</button></form>"
         )
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)}</title>
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 0; background: #f3f6f4; color: #17211c; }}
-header, main {{ max-width: 880px; margin: 0 auto; padding: 16px; }}
-header {{ display: flex; justify-content: space-between; align-items: center; }}
-nav a {{ margin-right: 12px; }}
-form, article {{ background: white; padding: 16px; border-radius: 12px; margin: 12px 0; }}
-label {{ display: block; margin: 8px 0; }}
-input, textarea, select {{ font: inherit; padding: 8px; width: 100%; box-sizing: border-box; }}
-button {{ background: #C2127F; color: white; border: 0; border-radius: 999px; padding: 8px 14px; }}
-button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
-.tracking {{ margin-top: 8px; }}
-.banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
-.meter {{ height: 10px; background: #efeaf3; border-radius: 999px; overflow: hidden; }}
-.meter span {{ display: block; height: 100%; background: #C2127F; }}
-.pills a {{ display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: #f6f5fb; color: #0D0B18; font-size: 12px; }}
-</style></head><body>
-<header><strong>Plantr Collab</strong>{logout_form}</header>
-<main>{body}</main>
-<script>
-document.querySelectorAll("button.copy").forEach((button) => {{
-  button.addEventListener("click", async () => {{
-    const value = button.getAttribute("data-copy") || "";
-    try {{
-      await navigator.clipboard.writeText(value);
-      button.textContent = "Copied";
-    }} catch (error) {{
-      button.textContent = "Copy failed";
-    }}
-  }});
-}});
-</script>
-</body></html>"""
+    return brand_ui.document(title, body, nav=nav, logout=logout)
 
 
 def _approved_listing_tips(product_id: Optional[str]) -> str:

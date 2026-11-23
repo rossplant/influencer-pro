@@ -295,7 +295,7 @@ def test_portal_flow_with_admin_cookie(monkeypatch):
     creator_page = client.get("/creator/offers", headers=creator_cookie)
     assert creator_page.status_code == 200
     assert "Matches" in creator_page.text
-    assert client.get("/seller/products", headers=creator_cookie).text.find("Seller sign in") >= 0
+    assert client.get("/seller/products", headers=creator_cookie).text.find("Supplier sign in") >= 0
 
     login_page = client.get("/creator")
     signed = client.post(
