@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
 
 import db
+
+logger = logging.getLogger("plantr.uat")
 
 STEPS = (
     "supplier_invite",
@@ -157,6 +160,7 @@ def current_set() -> dict | None:
                 "creator_id": row.creator_id,
                 "audience": row.audience,
                 "invite_sent_at": None if row.invite_sent_at is None else row.invite_sent_at.isoformat(),
+                "invite_provider_id": row.invite_provider_id or "",
                 "last_press_id": row.last_press_id or "",
                 "billing": "sandbox",
             }
@@ -180,6 +184,7 @@ def _remember(row: dict) -> None:
                     creator_id=row["creator_id"],
                     audience=row["audience"],
                     invite_sent_at=None,
+                    invite_provider_id=None,
                     last_press_id=None,
                     created_at=utcnow(),
                 )
@@ -316,13 +321,18 @@ def send_invite(press_id: str = "", base_url: str = "") -> dict:
     email = ids["email"]
     supplier_token = auth.issue_form_token(f"uat-set:seller:{email}")
     creatr_token = auth.issue_form_token(f"uat-set:creator:{email}")
-    emailer.send(
+    result = emailer.send(
         "uat_invite",
         email,
         supplier_url=f"{base}/uat/invite/{supplier_token}",
         creatr_url=f"{base}/uat/invite/{creatr_token}",
     )
+    provider_id = str(result.get("provider_id") or "").strip()
+    if not provider_id:
+        reason = str(result.get("reason") or "the mail service did not accept it")
+        return {"sent": False, "duplicate": False, "reason": reason, "invite_sent_at": None, "email": email}
     sent_at = datetime.now(timezone.utc).isoformat()
+    logger.info("uat_invite resend_id=%s", provider_id)
     if db.configured():
         from models import UatSet
 
@@ -330,11 +340,13 @@ def send_invite(press_id: str = "", base_url: str = "") -> dict:
             row = session.get(UatSet, ids["id"])
             if row is not None:
                 row.invite_sent_at = datetime.now(timezone.utc)
+                row.invite_provider_id = provider_id[:64]
                 row.last_press_id = press or None
     ids["invite_sent_at"] = sent_at
+    ids["invite_provider_id"] = provider_id
     ids["last_press_id"] = press
     _sync(ids)
-    return {"sent": True, "duplicate": False, "invite_sent_at": sent_at, "email": email}
+    return {"sent": True, "duplicate": False, "invite_sent_at": sent_at, "invite_provider_id": provider_id, "email": email}
 
 
 def create_and_send(email: str, press_id: str, base_url: str = "") -> dict:

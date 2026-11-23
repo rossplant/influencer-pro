@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.26.3
+
+UAT invites are marked sent only when Resend accepts them. Stripe stays sandbox only. This does not merge.
+
+- The Resend request sends a PlantrCollab user agent and JSON content type.
+- A failed send logs the HTTP status and the Resend error name, not the key or the message body.
+- The UAT page says the invite failed and keeps the set unsent, so a new press can try again. A press that already succeeded is not sent twice.
+- Sets marked sent without a Resend id, including the 8:16pm staging press, are cleared on migrate.
+
 ## 0.26.2
 
 Creating a UAT set no longer needs a shop that already exists. Stripe stays sandbox only. This does not merge.

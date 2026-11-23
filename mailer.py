@@ -56,18 +56,54 @@ class ResendMailer:
                 _warned = True
             return {"status": NO_PROVIDER, "id": None}
         payload = {"from": self.sender, "to": [to], "subject": subject, "text": text}
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": _user_agent(),
+        }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key[:256]
         request = urllib.request.Request(RESEND_URL, data=json.dumps(payload).encode(), headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 body = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as exc:
+            name, message = _resend_error(exc)
+            logger.warning("Resend send failed: HTTP %s %s %s", exc.code, name, message)
+            reason = f"HTTP {exc.code}"
+            if name:
+                reason = f"{reason} {name}"[:80]
+            return {"status": FAILED, "id": None, "reason": reason}
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             logger.warning("Resend send failed: %s", type(exc).__name__)
-            return {"status": FAILED, "id": None}
+            return {"status": FAILED, "id": None, "reason": type(exc).__name__}
         return {"status": SENT, "id": body.get("id")}
 
 
 def default() -> Mailer:
     return ResendMailer.from_env()
+
+
+def _user_agent() -> str:
+    try:
+        from main import APP_VERSION
+    except Exception:
+        return "PlantrCollab/dev"
+    return f"PlantrCollab/{APP_VERSION}"
+
+
+def _resend_error(exc: urllib.error.HTTPError) -> tuple[str, str]:
+    raw = b""
+    try:
+        raw = exc.read() or b""
+    except Exception:
+        raw = b""
+    try:
+        parsed = json.loads(raw.decode() or "{}")
+    except (UnicodeDecodeError, ValueError):
+        return "", ""
+    if not isinstance(parsed, dict):
+        return "", ""
+    name = str(parsed.get("name") or "")[:80]
+    message = str(parsed.get("message") or "")[:160]
+    return name, message

@@ -231,6 +231,9 @@ def register(app, require_admin) -> None:
             return _uat_message(text)
         if result.get("duplicate"):
             return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
+        if not result.get("sent"):
+            reason = result.get("reason") or "the mail service did not accept it"
+            return _uat_message(f"Invite failed: {reason}, try again")
         when = result.get("invite_sent_at") or ""
         return _uat_message(f"Invite sent at {when}.", error=False)
 
@@ -258,6 +261,9 @@ def register(app, require_admin) -> None:
             return _uat_message(str(getattr(exc, "detail", None) or exc))
         if result.get("duplicate"):
             return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
+        if not result.get("sent"):
+            reason = result.get("reason") or "the mail service did not accept it"
+            return _uat_message(f"Invite failed: {reason}, try again")
         return _uat_message(f"Invite sent at {result.get('invite_sent_at')}.", error=False)
 
     @app.get("/uat/invite/{token}")

@@ -162,6 +162,8 @@ def send(template_key: str, to_email: str, **values) -> dict:
     sent = result.get("status") == mailer.SENT
     logger.info("email template=%s to=%s status=%s", template_key, _mask(to_email), result.get("status"))
     out = {"logged": True, "sent": sent, "status": result.get("status"), "provider_id": result.get("id"), "template": template_key}
+    if result.get("reason"):
+        out["reason"] = result["reason"]
     if not sent:
         out["notice"] = PROVIDER_REQUIRED if result.get("status") == mailer.NO_PROVIDER else "Email provider returned an error."
     return out
