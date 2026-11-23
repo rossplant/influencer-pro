@@ -1,18 +1,26 @@
 """Email templates. Every message is logged, then handed to mailer.py.
 
 Until RESEND_API_KEY and RESEND_FROM are set, nothing is delivered.
-EMAIL_FROM is used only when RESEND_FROM is empty. There is no reply-to.
+EMAIL_FROM is used only when RESEND_FROM is empty.
+Invite emails set Reply-To. Other templates do not.
 """
 
 from __future__ import annotations
 
+import html
+import json
 import logging
+import os
+import time
 import uuid
+from pathlib import Path
 from typing import Optional
 
+import auth
 import db
 import mailer
-from models import EmailMessage, utcnow
+import tracking
+from models import EmailMessage, InviteOptOut, utcnow
 
 logger = logging.getLogger("plantr.email")
 
@@ -130,60 +138,169 @@ TEMPLATES = {
 }
 
 
-# Placeholder invite copy. Marketing replaces these fields. Keep each email under about 120 words.
-# Each email has one button. Send invite delivers both of these. There is no combined email.
-INVITE_COPY = {
-    "supplier_invite": {
-        "subject": "Your Plantr Collab supplier test invite",
-        "preheader": "A test account for the supplier journey. All users must be 18 or over.",
-        "headline": "Supplier test invite",
-        "body": "This is a test account for the supplier journey. Set a password to continue. All users must be 18 or over.",
-        "buttons": (("Open the supplier invite", "url"),),
-        "footer": "Plantr Collab. No cut of your sales.",
-    },
-    "creatr_invite": {
-        "subject": "Your Plantr Collab Creatr test invite",
-        "preheader": "A test account for the Creatr journey. All users must be 18 or over.",
-        "headline": "Creatr test invite",
-        "body": "This is a test account for the Creatr journey. Set a password to continue. All users must be 18 or over.",
-        "buttons": (("Open the Creatr invite", "url"),),
-        "footer": "Plantr Collab. No cut of your sales.",
-    },
+# Approved invite files. Replace these files to change the copy. One button each.
+INVITE_FILES = {
+    "supplier_invite": "invite-supplier",
+    "creatr_invite": "invite-creatr",
 }
+_TEMPLATE_DIR = Path(__file__).resolve().parent / "emails"
+_STAGING_LINE = "Test environment — this invite is for staging only."
+_DEFAULT_FROM_NAME = "Ross at Plantr Collab"
+_DEFAULT_REPLY_TO = "hello@plantr-collab.com"
 
 
-def render_invite(kind: str, **urls: str) -> tuple[str, str, str]:
-    """Return subject, plain text, and HTML from INVITE_COPY. Each URL is on its own line."""
-    spec = INVITE_COPY[kind]
-    buttons = []
-    for label, key in spec["buttons"]:
-        href = str(urls.get(key) or "")
-        buttons.append((label, href))
-    text_lines = [spec["preheader"], "", spec["headline"], "", spec["body"], ""]
-    for label, href in buttons:
-        text_lines.extend([label, f"<{href}>", ""])
-    text_lines.append(spec["footer"])
-    text = "\n".join(text_lines).strip() + "\n"
-    button_html = "".join(
-        f"<p><a href=\"{href}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">{label}</a></p>"
-        for label, href in buttons
-    )
-    html_body = (
-        "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;font-family:Inter,Arial,sans-serif;color:#17211c;background:#ffffff\">"
-        f"<div style=\"display:none;max-height:0;overflow:hidden\">{spec['preheader']}</div>"
-        "<p style=\"margin:0 0 8px;font-weight:700;color:#C2127F\">Plantr Collab</p>"
-        f"<h1 style=\"font-size:24px\">{spec['headline']}</h1>"
-        f"<p>{spec['body']}</p>"
-        f"{button_html}"
-        f"<p>{spec['footer']}</p>"
-        "</body></html>"
-    )
-    return spec["subject"], text, html_body
+def invite_from_name() -> str:
+    return os.getenv("INVITE_FROM_NAME", "").strip() or _DEFAULT_FROM_NAME
+
+
+def invite_reply_to() -> str:
+    return os.getenv("INVITE_REPLY_TO", "").strip() or _DEFAULT_REPLY_TO
+
+
+def _from_address() -> str:
+    raw = os.getenv("RESEND_FROM", "").strip() or os.getenv("EMAIL_FROM", "").strip()
+    if "<" in raw and ">" in raw:
+        return raw[raw.rfind("<") + 1:raw.rfind(">")].strip()
+    return raw
+
+
+def invite_from_header() -> str:
+    """Display name plus the RESEND_FROM address. The address itself is unchanged."""
+    name = invite_from_name()
+    address = _from_address()
+    if not address:
+        return name
+    return f"{name} <{address}>"
+
+
+def show_test_banner() -> bool:
+    """The test-environment line stays off production. APP_ENV wins when it is set."""
+    explicit = os.getenv("APP_ENV", "").strip().lower()
+    if explicit:
+        return explicit != "production"
+    return not tracking.production()
+
+
+def _template_parts(kind: str) -> tuple[str, str, str, str]:
+    stem = INVITE_FILES[kind]
+    html_body = (_TEMPLATE_DIR / f"{stem}.html").read_text(encoding="utf-8")
+    text = (_TEMPLATE_DIR / f"{stem}.txt").read_text(encoding="utf-8")
+    title_at = html_body.find("<title>")
+    title_end = html_body.find("</title>", title_at)
+    subject = html_body[title_at + len("<title>"):title_end].strip()
+    marker = 'mso-hide:all;">'
+    pre_at = html_body.find(marker)
+    pre_end = html_body.find("<", pre_at + len(marker))
+    preheader = " ".join(html_body[pre_at + len(marker):pre_end].split("&nbsp;", 1)[0].split())
+    if not html_body.endswith("\n"):
+        html_body += "\n"
+    return subject, preheader, html_body, text
+
+
+def invite_preheader(kind: str) -> str:
+    return _template_parts(kind)[1]
+
+
+def _without_staging(html_body: str, text: str) -> tuple[str, str]:
+    start = html_body.find("<!-- STAGING ONLY:")
+    if start != -1:
+        end = html_body.find("</tr>", start)
+        if end != -1:
+            html_body = html_body[:start] + html_body[end + len("</tr>"):]
+    if text.rstrip("\n").endswith(_STAGING_LINE):
+        trimmed = text.rstrip("\n")
+        trimmed = trimmed[: -len(_STAGING_LINE)].rstrip("\n")
+        text = trimmed + ("\n" if text.endswith("\n") else "")
+    elif suffix in text:
+        text = text.replace(suffix, "")
+    return html_body, text
+
+
+def render_invite(
+    kind: str,
+    *,
+    url: str = "",
+    first_name: str = "",
+    brand_name: str = "",
+    unsubscribe_url: str = "",
+    show_banner: Optional[bool] = None,
+) -> tuple[str, str, str]:
+    """Fill the approved supplier or Creatr template. Returns subject, text, HTML."""
+    subject, _preheader, html_body, text = _template_parts(kind)
+    if show_banner is None:
+        show_banner = show_test_banner()
+    if not show_banner:
+        html_body, text = _without_staging(html_body, text)
+    name = (first_name or "").strip() or "there"
+    brand = (brand_name or "").strip() or "your shop"
+    fields = {
+        "first_name": name,
+        "brand_name": brand,
+        "invite_link": url,
+        "unsubscribe_url": unsubscribe_url,
+    }
+    for key, value in fields.items():
+        subject = subject.replace("{{" + key + "}}", value)
+        text = text.replace("{{" + key + "}}", value)
+        html_body = html_body.replace("{{" + key + "}}", html.escape(value, quote=True))
+    return subject, text, html_body
+
+
+def invite_opt_out_token(email: str) -> str:
+    payload = {
+        "purpose": "invite-opt-out",
+        "email": email.strip().lower(),
+        "exp": int(time.time()) + 180 * 24 * 3600,
+    }
+    body = auth._b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    return f"{body}.{auth._sign(body)}"
+
+
+def invite_opt_out_url(base: str, email: str) -> str:
+    return f"{base.rstrip('/')}/invite/opt-out/{invite_opt_out_token(email)}"
+
+
+def read_opt_out_token(token: str) -> str:
+    payload = auth._read_signed(token)
+    if not payload or payload.get("purpose") != "invite-opt-out":
+        return ""
+    return str(payload.get("email") or "").strip().lower()
+
+
+def invite_opted_out(email: str) -> bool:
+    wanted = email.strip().lower()
+    if not wanted:
+        return False
+    if db.configured():
+        with db.session_scope() as session:
+            if session.get(InviteOptOut, wanted) is not None:
+                return True
+    return wanted in getattr(db, "memory_invite_opt_outs", set())
+
+
+def record_invite_opt_out(email: str) -> None:
+    wanted = email.strip().lower()
+    if not wanted:
+        return
+    if not hasattr(db, "memory_invite_opt_outs"):
+        db.memory_invite_opt_outs = set()
+    db.memory_invite_opt_outs.add(wanted)
+    if db.configured():
+        with db.session_scope() as session:
+            if session.get(InviteOptOut, wanted) is None:
+                session.add(InviteOptOut(email=wanted))
 
 
 def send(template_key: str, to_email: str, **values) -> dict:
-    if template_key in INVITE_COPY:
-        subject, body, html_body = render_invite(template_key, **values)
+    sender = values.pop("_mailer", None) if "_mailer" in values else None
+    if template_key in INVITE_FILES:
+        subject, body, html_body = render_invite(
+            template_key,
+            url=str(values.get("url") or ""),
+            first_name=str(values.get("first_name") or ""),
+            brand_name=str(values.get("brand_name") or ""),
+            unsubscribe_url=str(values.get("unsubscribe_url") or ""),
+        )
     else:
         spec = TEMPLATES[template_key]
         subject = spec["subject"].format(**values)
@@ -202,10 +319,19 @@ def send(template_key: str, to_email: str, **values) -> dict:
             session.add(EmailMessage(**row))
     else:
         db.memory_emails.append(row)
-    sender = values.pop("_mailer", None) if "_mailer" in values else None
-    result = (sender or mailer.default()).send(
-        to=to_email, subject=subject, text=body, html=html_body, idempotency_key=f"{template_key}:{row['id']}"
-    )
+    send_kwargs = {
+        "to": to_email,
+        "subject": subject,
+        "text": body,
+        "html": html_body,
+        "idempotency_key": f"{template_key}:{row['id']}",
+    }
+    if template_key in INVITE_FILES:
+        send_kwargs["reply_to"] = invite_reply_to()
+        header = invite_from_header()
+        if "<" in header:
+            send_kwargs["sender"] = header
+    result = (sender or mailer.default()).send(**send_kwargs)
     sent = result.get("status") == mailer.SENT
     logger.info("email template=%s to=%s status=%s", template_key, _mask(to_email), result.get("status"))
     out = {"logged": True, "sent": sent, "status": result.get("status"), "provider_id": result.get("id"), "template": template_key}

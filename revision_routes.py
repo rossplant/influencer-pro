@@ -12,6 +12,7 @@ import auth
 import billing_config
 import brand_ui
 import db
+import emailer
 import portal
 import uat_mode
 
@@ -94,6 +95,16 @@ def _invite_flash(result: dict) -> tuple[str, bool]:
 
 
 def register(app, require_admin) -> None:
+    @app.get("/invite/opt-out/{token}")
+    def invite_opt_out(token: str):
+        address = emailer.read_opt_out_token(token)
+        if not address:
+            body = "<h1>Opt out</h1><p>That opt-out link is not valid.</p>"
+            return HTMLResponse(brand_ui.document("Opt out", body), status_code=404)
+        emailer.record_invite_opt_out(address)
+        body = "<h1>Opt out</h1><p>You've opted out of Plantr Collab invites.</p>"
+        return HTMLResponse(brand_ui.document("Opt out", body))
+
     @app.get("/seller/statements")
     def seller_statements(request: Request):
         session = portal.seller_context(request)
@@ -254,6 +265,7 @@ def register(app, require_admin) -> None:
         {banner}{problem}
         {status}
         <p>One email owns the homeware supplier and the Creatr. Audience 45,000. The catalogue is uploaded in the supplier journey, not in the invite.</p>
+        <p>Invites are sent from {html.escape(emailer.invite_from_name())}. Replies go to {html.escape(emailer.invite_reply_to())}.</p>
         {links}
         <form method="post" action="/admin/uat/create-set">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">

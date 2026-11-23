@@ -1,0 +1,35 @@
+Hi {{first_name}},
+
+You've been selected for the Plantr Collab pilot. Your products stood
+out for quality and value to Creatrs, and we'd like {{brand_name}} as
+an early partner helping shape it.
+
+Hand-picked Creatrs matched to your products. Your site, your
+customer, no cut of your sales. Start with a few hero products — you
+don't need your whole range.
+
+About 10 minutes, in three steps:
+
+1. Confirm you're 18+ and set a password
+2. Download the catalogue template
+3. Upload a handful of products
+
+Set up your catalogue:
+
+{{invite_link}}
+
+Questions? Just reply to this email and I'll get back to you.
+
+Ross Plant
+Plantr Collab
+
+Plan details are shown in the app before you commit. We only use your
+details to set up your account.
+
+This invite is for you. Please don't forward the link.
+
+If you weren't expecting this invite, you can ignore it or opt out
+here:
+{{unsubscribe_url}}
+
+Test environment — this invite is for staging only.

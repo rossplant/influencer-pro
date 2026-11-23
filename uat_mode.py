@@ -286,6 +286,15 @@ def create_set(notify_email: str) -> dict:
     return row
 
 
+def _brand_name(ids: dict) -> str:
+    import services
+
+    shop = services.fetch_shop(str(ids.get("shop_id") or ""))
+    if isinstance(shop, dict) and shop.get("name"):
+        return str(shop["name"])
+    return "your shop"
+
+
 def https_base(base_url: str = "") -> str:
     base = (os.getenv("PUBLIC_BASE_URL", "") or base_url or "").strip().rstrip("/")
     if not base.startswith("https://") or " " in base:
@@ -451,12 +460,23 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
     wanted = [role] if role in {"seller", "creator"} else ["seller", "creator"]
     import emailer
 
+    if emailer.invite_opted_out(ids["email"]):
+        return {
+            "sent": False,
+            "duplicate": False,
+            "reason": "This address has opted out of invites.",
+            "invite_sent_at": ids.get("invite_sent_at"),
+            "email": ids["email"],
+            "roles": {},
+        }
     try:
         base = https_base(base_url)
     except ValueError as exc:
         return {"sent": False, "duplicate": False, "reason": str(exc), "invite_sent_at": None, "email": ids["email"], "roles": {}}
     paths = _issue_invites(ids)
     templates = {"seller": "supplier_invite", "creator": "creatr_invite"}
+    brand_name = _brand_name(ids)
+    unsubscribe_url = emailer.invite_opt_out_url(base, ids["email"])
     roles: dict = {}
     attempted = False
     for name in wanted:
@@ -468,7 +488,14 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
             roles[name] = {"sent": True, "skipped": True, "provider_id": current["provider_id"], "sent_at": current.get("sent_at"), "status": "sent"}
             continue
         attempted = True
-        result = emailer.send(templates[name], ids["email"], url=f"{base}{paths[name]}")
+        result = emailer.send(
+            templates[name],
+            ids["email"],
+            url=f"{base}{paths[name]}",
+            first_name=str(ids.get("first_name") or ""),
+            brand_name=brand_name,
+            unsubscribe_url=unsubscribe_url,
+        )
         provider_id = str(result.get("provider_id") or "").strip()
         if provider_id:
             saved = _save_invite_result(current["id"], status="sent", provider_id=provider_id[:64], last_error="", press=press)

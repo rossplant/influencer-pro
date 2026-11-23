@@ -88,6 +88,10 @@ def main() -> None:
         sys.exit("An invite email was sent")
     if created.count("not sent yet") < 2:
         sys.exit("The page did not show a separate status for each invite")
+    if "Ross at Plantr Collab" not in created:
+        sys.exit("The From name was not Ross at Plantr Collab")
+    if "hello@plantr-collab.com" not in created:
+        sys.exit("The Reply-To was not hello@plantr-collab.com")
     print(f"UAT set created for uat-e2e+{stamp}@example.com with no email")
 
 

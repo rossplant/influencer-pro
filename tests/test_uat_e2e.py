@@ -41,6 +41,8 @@ def test_browser_journey_without_sending_email(monkeypatch):
     )
     assert created.status_code == 200
     assert "No email was sent" in created.text
+    assert "Ross at Plantr Collab" in created.text
+    assert "hello@plantr-collab.com" in created.text
     assert sent == []
     assert "Open the supplier invite" in created.text
     supplier = created.text.split('href="/uat/invite/s/', 1)[1].split('"', 1)[0]
@@ -126,10 +128,10 @@ def test_send_invite_delivers_two_emails_and_a_failed_one_retries_alone(monkeypa
 
         def send(self, **kwargs):
             calls.append(kwargs)
-            subject = kwargs.get("subject") or ""
-            if "Creatr" in subject and not Split.creatr_ok:
+            html_body = kwargs.get("html") or ""
+            if "Set up my Creatr profile" in html_body and not Split.creatr_ok:
                 return {"status": mailer.FAILED, "id": None, "reason": "HTTP 403"}
-            if "Creatr" in subject:
+            if "Set up my Creatr profile" in html_body:
                 return {"status": mailer.SENT, "id": "re_creatr"}
             return {"status": mailer.SENT, "id": "re_supplier"}
 
@@ -156,7 +158,9 @@ def test_send_invite_delivers_two_emails_and_a_failed_one_retries_alone(monkeypa
     assert "Creatr invite failed: HTTP 403" in sent_page.text
     assert "Retry the Creatr invite" in sent_page.text
     assert len(calls) == 2
-    assert all(call.get("html", "").count("<a ") == 1 for call in calls)
+    assert calls[0].get("reply_to") == "hello@plantr-collab.com"
+    assert "{{" not in (calls[0].get("html") or "")
+    assert "{{" not in (calls[0].get("text") or "")
     Split.creatr_ok = True
     before_role, after_role = sent_page.text.split('name="role" value="creator"', 1)
     retry_token = before_role.rsplit('name="csrf_token" value="', 1)[1].split('"', 1)[0]
@@ -169,4 +173,4 @@ def test_send_invite_delivers_two_emails_and_a_failed_one_retries_alone(monkeypa
     assert "Creatr invite sent" in retried.text
     assert "re_creatr" in retried.text
     assert len(calls) == 3
-    assert "Creatr" in (calls[-1].get("subject") or "")
+    assert "Set up my Creatr profile" in (calls[-1].get("html") or "")

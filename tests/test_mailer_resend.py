@@ -70,43 +70,105 @@ def test_resend_failure_logs_status_and_name_not_the_key_or_body(monkeypatch, ca
     assert "the message body" not in caplog.text
 
 
-def test_role_invites_use_the_same_template_fields_and_one_button():
+def test_approved_invites_fill_every_placeholder(monkeypatch, tmp_path):
     import emailer
 
-    for kind, label in (("supplier_invite", "Open the supplier invite"), ("creatr_invite", "Open the Creatr invite")):
-        spec = emailer.INVITE_COPY[kind]
-        assert set(spec) == {"subject", "preheader", "headline", "body", "buttons", "footer"}
-        assert len(spec["buttons"]) == 1
-        url = "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc"
-        subject, text, html_body = emailer.render_invite(kind, url=url)
-        words = spec["preheader"].split() + spec["headline"].split() + spec["body"].split() + spec["buttons"][0][0].split() + spec["footer"].split()
-        assert len(words) < 120
-        assert subject == spec["subject"]
-        assert html_body.count("<a ") == 1
-        assert f'href="{url}"' in html_body
-        assert label in html_body
-        assert f"<{url}>" in text.splitlines()
-        assert "Stoneware" not in html_body
-    assert "uat_invite" not in emailer.INVITE_COPY
-
-
-def test_uat_invite_email_is_branded_html_and_plain_links(tmp_path):
-    import emailer
-
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
     artifact_dir = __import__("pathlib").Path("/opt/cursor/artifacts")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     cases = (
-        ("supplier_invite", "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc", "supplier-invite-email.html"),
-        ("creatr_invite", "https://influencer-pro-staging.up.railway.app/uat/invite/c/def", "creatr-invite-email.html"),
+        (
+            "supplier_invite",
+            "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc",
+            "You've been selected for Plantr Collab",
+            "Hand-picked Creatrs, matched to your products. No cut of your sales.",
+            "Set up your catalogue",
+            "supplier-invite-email.html",
+        ),
+        (
+            "creatr_invite",
+            "https://influencer-pro-staging.up.railway.app/uat/invite/c/def",
+            "there, your Plantr Collab invite",
+            "Two months on us, and you start at Influencr today.",
+            "Set up my Creatr profile",
+            "creatr-invite-email.html",
+        ),
     )
-    for kind, url, filename in cases:
-        _subject, text, html_body = emailer.render_invite(kind, url=url)
-        assert html_body.count("<a ") == 1
+    for kind, url, subject, preheader, button, filename in cases:
+        unsubscribe = emailer.invite_opt_out_url("https://influencer-pro-staging.up.railway.app", "person@example.com")
+        rendered_subject, text, html_body = emailer.render_invite(
+            kind, url=url, brand_name="Homeware supplier", unsubscribe_url=unsubscribe
+        )
+        assert rendered_subject == subject
+        assert emailer.invite_preheader(kind) == preheader
+        assert preheader in html_body
+        assert "{{" not in html_body and "{{" not in text
+        assert f'class="btn-link" href="{url}"' in html_body
         assert f'href="{url}"' in html_body
+        assert html_body.count(f'href="{url}"') >= 2
+        assert f">{url}</a>" in html_body
+        assert button in html_body
+        assert url in text.splitlines()
+        assert "Hi there," in html_body
+        assert "Test environment" in html_body
+        assert "Test environment" in text
         assert "#C2127F" in html_body
-        assert f"<{url}>" in text.splitlines()
-        blob = (text + html_body).lower()
-        for banned in ("stoneware", "napkin", "oak board", "attachment", "content-disposition"):
-            assert banned not in blob
+        assert unsubscribe in html_body and unsubscribe in text
+        assert "creator" not in html_body.lower()
         (tmp_path / filename).write_text(html_body, encoding="utf-8")
         (artifact_dir / filename).write_text(html_body, encoding="utf-8")
+    monkeypatch.setenv("ENV", "production")
+    _subject, text, html_body = emailer.render_invite(
+        "supplier_invite",
+        url="https://example.com/uat/invite/s/abc",
+        brand_name="Homeware supplier",
+        unsubscribe_url="https://example.com/invite/opt-out/token",
+    )
+    assert "Test environment" not in html_body
+    assert "Test environment" not in text
+
+
+def test_invite_from_and_reply_to_go_on_the_resend_payload(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=10):
+        captured["body"] = json.loads(request.data.decode())
+        return _Body(b'{"id":"re_from"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("RESEND_API_KEY", "secret-key")
+    monkeypatch.setenv("RESEND_FROM", "noreply@send.plantr-collab.com")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    import emailer
+
+    result = emailer.send(
+        "supplier_invite",
+        "person@example.com",
+        url="https://influencer-pro-staging.up.railway.app/uat/invite/s/abc",
+        brand_name="Homeware supplier",
+        unsubscribe_url=emailer.invite_opt_out_url("https://influencer-pro-staging.up.railway.app", "person@example.com"),
+    )
+    assert result["provider_id"] == "re_from"
+    assert captured["body"]["from"] == "Ross at Plantr Collab <noreply@send.plantr-collab.com>"
+    assert captured["body"]["reply_to"] == "hello@plantr-collab.com"
+    assert "attachments" not in captured["body"]
+
+
+def test_unsubscribe_link_records_the_opt_out(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import main
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    import emailer
+
+    url = emailer.invite_opt_out_url("https://example.com", "Person@Example.com")
+    token = url.rsplit("/", 1)[1]
+    page = TestClient(main.app).get(f"/invite/opt-out/{token}", headers={"Accept": "text/html"})
+    assert page.status_code == 200
+    assert "opted out" in page.text
+    assert emailer.invite_opted_out("person@example.com") is True
+    assert emailer.invite_opted_out("other@example.com") is False

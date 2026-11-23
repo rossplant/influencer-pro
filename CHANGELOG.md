@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.1
+
+UAT invites use the approved supplier and Creatr copy. Stripe stays sandbox only. This does not merge.
+
+- Each invite is the approved HTML and text. The subject is the title and the preheader is the hidden preview line. A missing first name is "Hi there".
+- Invites are sent from Ross at Plantr Collab, using the RESEND_FROM address, with Reply-To hello@plantr-collab.com. Both names are configurable.
+- The opt-out link records the address. The test-environment line is omitted on production.
+
 ## 0.27.0
 
 UAT invites are branded HTML with short https links, and the supplier uploads the sample catalogue. Stripe stays sandbox only. This does not merge.

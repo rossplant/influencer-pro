@@ -53,8 +53,8 @@ def test_create_from_an_empty_database_is_idempotent(tmp_path, monkeypatch):
 def _deliver(monkeypatch, supplier_id="re_supplier", creatr_id="re_creatr"):
     class Ok:
         def send(self, **kwargs):
-            subject = kwargs.get("subject") or ""
-            if "Creatr" in subject:
+            html_body = kwargs.get("html") or ""
+            if "Set up my Creatr profile" in html_body:
                 return {"status": mailer.SENT, "id": creatr_id}
             return {"status": mailer.SENT, "id": supplier_id}
 
@@ -107,8 +107,8 @@ def test_a_failed_role_can_be_retried_alone(tmp_path, monkeypatch):
 
     class OneFails:
         def send(self, **kwargs):
-            subject = kwargs.get("subject") or ""
-            if "Creatr" in subject:
+            html_body = kwargs.get("html") or ""
+            if "Set up my Creatr profile" in html_body:
                 return {"status": mailer.FAILED, "id": None, "reason": "HTTP 403"}
             return {"status": mailer.SENT, "id": "re_supplier"}
 

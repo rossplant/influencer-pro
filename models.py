@@ -1121,3 +1121,12 @@ class UatInvite(Base):
     status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
     last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class InviteOptOut(Base):
+    """An address that opted out of Plantr Collab invites."""
+
+    __tablename__ = "invite_opt_outs"
+
+    email: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)

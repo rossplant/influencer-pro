@@ -115,6 +115,7 @@ memory_sample_settings: dict = {}
 memory_uat_ids: dict = {}
 memory_uat_by_email: dict = {}
 memory_uat_invites: list = []
+memory_invite_opt_outs: set = set()
 
 
 def configured() -> bool:
@@ -175,6 +176,7 @@ def reset_memory() -> None:
     memory_uat_ids.clear()
     memory_uat_by_email.clear()
     memory_uat_invites.clear()
+    memory_invite_opt_outs.clear()
 
 
 def close() -> None:
