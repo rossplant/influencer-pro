@@ -577,32 +577,86 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
 
 
 def _listing_studio_page(shop: dict, csrf: str, data: dict) -> str:
+    import listing_studio
+
     products = data.get("products") or []
-    sample = recognition.listing_studio_price(6)
+    quote = recognition.listing_studio_price(4)
+    price_line = (
+        "In the pilot, Listing Studio is free per product for up to 4 scenes plus positioning."
+        if quote["in_pilot"]
+        else "From 20 January 2027, Listing Studio is A$4.99 per product, including 4 scenes plus positioning."
+    )
+    selected = str(data.get("product_id") or "")
     rows = []
     for row in products:
-        status = recognition.listing_status(row.get("attributes"))
+        state = db.memory_listing.get(row["id"]) or {}
+        status = state.get("status") or recognition.listing_status(row.get("attributes"))
         rows.append(
-            f"<tr><td>{html.escape(row['title'])}</td><td>{html.escape(status)}</td></tr>"
+            f"<tr><td><a href='/dashboard/catalogue/listing-studio?product={html.escape(row['id'])}'>{html.escape(row['title'])}</a></td>"
+            f"<td>{html.escape(str(status))}</td></tr>"
         )
-    quote = recognition.listing_studio_price(1)
-    price_line = (
-        "Free per product in the pilot for up to 4 images and selling tips."
-        if quote["in_pilot"]
-        else "A$4.99 per product, including up to 4 images and selling tips."
-    )
+    detail = ""
+    if selected:
+        state = listing_studio.state_for(selected)
+        sheet = state.get("sheet") or {}
+        notice = state.get("message") or ("" if state.get("scenes") or state.get("angles") else listing_studio.unavailable_message())
+        angles = "".join(
+            f"<article><h2>{html.escape(row['name'])}</h2><p>{html.escape(row['insight'])}</p>"
+            f"<p>{html.escape(row['hook'])}</p><p>{html.escape(row['caption'])}</p></article>"
+            for row in state.get("angles") or []
+        )
+        scenes = []
+        for scene in state.get("scenes") or []:
+            reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in scene.get("reasons") or [])
+            check = "pass" if scene.get("status") == "ready" or scene.get("approved") else scene.get("status")
+            review = ""
+            if scene.get("status") in {"ready", "Changes requested"}:
+                review = f"""
+                <form method="post" action="/dashboard/catalogue/listing-studio/review">
+                  <input type="hidden" name="csrf_token" value="{csrf}">
+                  <input type="hidden" name="product_id" value="{html.escape(selected)}">
+                  <input type="hidden" name="scene_id" value="{html.escape(scene['id'])}">
+                  <label>Decision <select name="decision"><option>approve</option><option>reject</option><option>request changes</option></select></label>
+                  <label>Reason <select name="tag"><option></option><option>off brand</option><option>wrong positioning</option><option>product inaccurate</option><option>wrong setting or model</option><option>other</option></select></label>
+                  <label>Note <input name="note"></label>
+                  <button type="submit">Save review</button>
+                </form>
+                """
+            download = ""
+            if scene.get("approved"):
+                download = f"<p><a href='/dashboard/catalogue/listing-studio/scenes/{html.escape(scene['id'])}?product={html.escape(selected)}'>Download</a></p>"
+            scenes.append(
+                f"<article><h2>{html.escape(str(scene.get('type')))}</h2>"
+                f"<p>Product check: {html.escape(str(check))}</p><ul>{reasons}</ul>{download}{review}</article>"
+            )
+        detail = f"""
+        <h2>Attribute sheet</h2>
+        <p>{html.escape(notice)}</p>
+        <form method="post" action="/dashboard/catalogue/listing-studio/sheet">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <input type="hidden" name="product_id" value="{html.escape(selected)}">
+          <label>Colour <input name="colour" value="{html.escape(str(sheet.get('colour') or ''))}"></label>
+          <label>Piece count <input name="piece_count" value="{html.escape(str(sheet.get('piece_count') or ''))}"></label>
+          <label>Label text <input name="label_text" value="{html.escape(str(sheet.get('label_text') or ''))}"></label>
+          <label>Sleeve length, if this is apparel <input name="sleeve_length" value="{html.escape(str(sheet.get('sleeve_length') or ''))}"></label>
+          <label>Button count <input name="button_count" value="{html.escape(str(sheet.get('button_count') or ''))}"></label>
+          <button type="submit">Confirm attribute sheet</button>
+        </form>
+        <form method="post" action="/dashboard/catalogue/listing-studio/generate">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <input type="hidden" name="product_id" value="{html.escape(selected)}">
+          <button type="submit">Generate scenes</button>
+        </form>
+        <h2>Positioning</h2>
+        {angles or '<p>No angles yet.</p>'}
+        <h2>Scenes</h2>
+        {''.join(scenes) or '<p>No scenes yet.</p>'}
+        """
     return f"""
     <h1>Listing Studio</h1>
-    <p>{html.escape(price_line)} Extra images are {html.escape(sample['extra_label'])} each. No pack price.</p>
-    <p>{html.escape(recognition.LISTING_STUDIO_NOTE)}</p>
-    <table><tr><th>Product</th><th>Listing Studio</th></tr>{''.join(rows)}</table>
-    <form method="post" action="/dashboard/catalogue/listing-studio">
-      <input type="hidden" name="csrf_token" value="{csrf}">
-      <label>Product <select name="product_id">{''.join(f"<option value='{html.escape(row['id'])}'>{html.escape(row['title'])}</option>" for row in products)}</select></label>
-      <label>Selling tips <textarea name="tips"></textarea></label>
-      <label><input type="checkbox" name="approve" value="yes"> Approve for Creatrs</label>
-      <button type="submit">Save tips</button>
-    </form>
+    <p>{html.escape(price_line)} Extra images are A$1.50 each, ex GST. No pack price. Product-inaccuracy rejections are free.</p>
+    <table><tr><th>Product</th><th>Listing Studio</th></tr>{''.join(rows) or '<tr><td colspan="2">No products yet.</td></tr>'}</table>
+    {detail}
     """
 
 
@@ -1045,6 +1099,15 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                     f"<p>{html.escape(str(offer['listing_tips']))}</p>"
                     "<p>check before you post</p></section>"
                 )
+            import listing_studio
+
+            approved_scenes = listing_studio.approved_for_creatr(str(offer.get("product_id") or ""))["scenes"]
+            if approved_scenes:
+                links = "".join(
+                    f"<li><a href='/dashboard/catalogue/listing-studio/scenes/{html.escape(scene['id'])}?product={html.escape(str(offer.get('product_id') or ''))}'>Download {html.escape(str(scene.get('type')))}</a></li>"
+                    for scene in approved_scenes
+                )
+                tips += f"<section><h3>Approved scenes</h3><ul>{links}</ul><p>check before you post</p></section>"
             blocks.append(
                 f"<article>{photo}<h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"

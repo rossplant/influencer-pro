@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.23.0"
+APP_VERSION = "0.24.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -1204,7 +1204,7 @@ def listing_studio_old():
 
 
 @app.get("/dashboard/catalogue/listing-studio")
-def listing_studio_page(request: Request, _: None = Depends(rate_limit_portal)):
+def listing_studio_page(request: Request, product: str = "", _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
     return portal.render_seller(
@@ -1212,7 +1212,120 @@ def listing_studio_page(request: Request, _: None = Depends(rate_limit_portal)):
         "listing",
         base_url=billing_config.public_base_url(request),
         products=products,
+        product_id=product,
     )
+
+
+@app.post("/dashboard/catalogue/listing-studio/sheet")
+async def listing_studio_sheet(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import listing_studio
+
+    product_id = str(form.get("product_id") or "")
+    product = next((row for row in portal.seller_products(session["subject_id"]) if row["id"] == product_id), {})
+    sheet = listing_studio.draft_sheet(product)
+    sheet.update(
+        {
+            "colour": str(form.get("colour") or sheet.get("colour") or ""),
+            "piece_count": str(form.get("piece_count") or ""),
+            "label_text": str(form.get("label_text") or ""),
+            "sleeve_length": str(form.get("sleeve_length") or ""),
+            "button_count": str(form.get("button_count") or ""),
+            "category": product.get("category") or "general",
+            "title": product.get("title") or "",
+        }
+    )
+    listing_studio.lock_sheet(product_id, sheet)
+    return RedirectResponse(f"/dashboard/catalogue/listing-studio?product={product_id}", status_code=303)
+
+
+@app.post("/dashboard/catalogue/listing-studio/generate")
+async def listing_studio_generate(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import listing_studio
+
+    product_id = str(form.get("product_id") or "")
+    product = next((row for row in portal.seller_products(session["subject_id"]) if row["id"] == product_id), {"id": product_id})
+    listing_studio.generate(product, supplier_id=session["subject_id"])
+    return RedirectResponse(f"/dashboard/catalogue/listing-studio?product={product_id}", status_code=303)
+
+
+@app.post("/dashboard/catalogue/listing-studio/review")
+async def listing_studio_review(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import listing_studio
+
+    product_id = str(form.get("product_id") or "")
+    try:
+        listing_studio.review_scene(
+            product_id,
+            str(form.get("scene_id") or ""),
+            decision=str(form.get("decision") or ""),
+            tag=str(form.get("tag") or ""),
+            note=str(form.get("note") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RedirectResponse(f"/dashboard/catalogue/listing-studio?product={product_id}", status_code=303)
+
+
+@app.get("/dashboard/catalogue/listing-studio/scenes/{scene_id}")
+def listing_studio_download(scene_id: str, request: Request, product: str = ""):
+    import listing_studio
+
+    session = portal.seller_context(request) or portal.creator_context(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    approved = listing_studio.approved_for_creatr(product)
+    scene = next((row for row in approved["scenes"] if row["id"] == scene_id), None)
+    if scene is None:
+        raise HTTPException(status_code=404, detail="That scene is not approved")
+    return Response(str(scene.get("image") or "").encode(), media_type="text/plain")
+
+
+@app.get("/admin/listing-studio")
+def admin_listing_studio(request: Request, _: str = Depends(require_admin)):
+    import brand_ui
+    import listing_studio
+
+    rates = "".join(
+        f"<li>{html.escape(row['model'])} · {html.escape(row['category'])}: {row['fails']} fails, {row['passed_later']} passed later</li>"
+        for row in listing_studio.fail_rates()
+    )
+    queue = "".join(
+        f"<li>{html.escape(str(row.get('scene_id')))}: {html.escape('; '.join(row.get('reasons') or []))}</li>"
+        for row in listing_studio.holds()
+    )
+    pack = listing_studio.current_pack()
+    body = f"""
+    <h1>Listing Studio admin</h1>
+    <h2>Fail rate</h2>
+    <ul>{rates or '<li>No failures yet.</li>'}</ul>
+    <h2>Hold queue</h2>
+    <ul>{queue or '<li>Nothing held.</li>'}</ul>
+    <h2>Rule pack {html.escape(pack['name'])} v{pack['version']}</h2>
+    <form method="post" action="/admin/listing-studio/rules">
+      <label>Negatives, one per line <textarea name="negatives">{html.escape(chr(10).join(pack.get('negatives') or []))}</textarea></label>
+      <button type="submit">Save a new rule version</button>
+    </form>
+    """
+    return HTMLResponse(brand_ui.document("Listing Studio admin", body))
+
+
+@app.post("/admin/listing-studio/rules")
+async def admin_listing_rules(request: Request, _: str = Depends(require_admin)):
+    import listing_studio
+
+    form = await request.form()
+    lines = [line.strip() for line in str(form.get("negatives") or "").splitlines() if line.strip()]
+    listing_studio.save_rule_pack("core", lines)
+    return RedirectResponse("/admin/listing-studio", status_code=303)
 
 
 @app.post("/dashboard/catalogue/listing-studio")

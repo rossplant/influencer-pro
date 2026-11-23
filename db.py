@@ -105,6 +105,11 @@ memory_tracked_subjects: set = set()
 memory_tracking_retries: list = []
 memory_terms_acceptances: list = []
 memory_reminder_sends: dict = {}
+memory_listing: dict = {}
+memory_listing_failures: list = []
+memory_listing_rules: list = []
+memory_listing_holds: list = []
+memory_listing_spend: list = []
 
 
 def configured() -> bool:
@@ -155,6 +160,11 @@ def reset_memory() -> None:
     memory_tracking_retries.clear()
     memory_terms_acceptances.clear()
     memory_reminder_sends.clear()
+    memory_listing.clear()
+    memory_listing_failures.clear()
+    memory_listing_rules.clear()
+    memory_listing_holds.clear()
+    memory_listing_spend.clear()
 
 
 def close() -> None:
