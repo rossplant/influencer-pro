@@ -155,7 +155,7 @@ def current_set(email: str | None = None) -> dict | None:
         with db.session_scope() as session:
             query = select(UatSet).order_by(UatSet.created_at.desc())
             if wanted:
-                query = query.where(UatSet.email == wanted)
+                query = query.where((UatSet.email == wanted) | (UatSet.creatr_email == wanted))
             row = session.scalar(query)
             if row is None:
                 if not wanted:
@@ -167,6 +167,9 @@ def current_set(email: str | None = None) -> dict | None:
                 "shop_id": row.shop_id,
                 "creator_id": row.creator_id,
                 "audience": row.audience,
+                "first_name": row.first_name or "",
+                "brand_name": row.brand_name or "",
+                "creatr_email": row.creatr_email or row.email,
                 "invite_sent_at": None if row.invite_sent_at is None else row.invite_sent_at.isoformat(),
                 "invite_provider_id": row.invite_provider_id or "",
                 "last_press_id": row.last_press_id or "",
@@ -175,7 +178,13 @@ def current_set(email: str | None = None) -> dict | None:
         return _sync(found)
     store = getattr(db, "memory_uat_by_email", None) or {}
     if wanted:
-        return store.get(wanted)
+        found = store.get(wanted)
+        if found:
+            return found
+        for row in store.values():
+            if row.get("creatr_email") == wanted:
+                return row
+        return None
     found = getattr(db, "memory_uat_ids", None) or {}
     if not found.get("shop_id"):
         return None
@@ -194,6 +203,9 @@ def _remember(row: dict) -> None:
                     shop_id=row["shop_id"],
                     creator_id=row["creator_id"],
                     audience=row["audience"],
+                    first_name=row.get("first_name") or None,
+                    brand_name=row.get("brand_name") or None,
+                    creatr_email=row.get("creatr_email") or None,
                     invite_sent_at=None,
                     invite_provider_id=None,
                     last_press_id=None,
@@ -204,10 +216,78 @@ def _remember(row: dict) -> None:
     if not hasattr(db, "memory_uat_by_email"):
         db.memory_uat_by_email = {}
     db.memory_uat_by_email[row["email"]] = row
+    creatr_email = row.get("creatr_email") or ""
+    if creatr_email and creatr_email != row["email"]:
+        db.memory_uat_by_email[creatr_email] = row
 
 
-def create_set(notify_email: str) -> dict:
-    """Create the supplier and Creatr for this email. The same email is reused. A different email is a new set."""
+def _identity(first_name: str, brand_name: str, creatr_email: str, supplier_email: str) -> tuple[str, str, str]:
+    first = (first_name or "").strip()[:80]
+    brand = (brand_name or "").strip()[:120] or "Homeware supplier"
+    creatr = (creatr_email or "").strip().lower()
+    if creatr and "@" not in creatr:
+        raise ValueError("Enter a valid Creatr email, or leave it blank.")
+    return first, brand, creatr or supplier_email
+
+
+def _rename_shop(shop_id: str, brand: str) -> None:
+    shop = db.memory_shops.get(shop_id)
+    if shop is not None:
+        shop.name = brand
+        if hasattr(shop, "business_name"):
+            shop.business_name = brand
+    if not db.configured():
+        return
+    from models import Shop
+
+    with db.session_scope() as session:
+        row = session.get(Shop, shop_id)
+        if row is not None:
+            row.name = brand
+            row.business_name = brand
+
+
+def _rename_creator(creator_id: str, name: str) -> None:
+    stored = db.memory_creators.get(creator_id)
+    if isinstance(stored, dict):
+        stored["name"] = name
+    if not db.configured():
+        return
+    from models import Creator
+
+    with db.session_scope() as session:
+        row = session.get(Creator, creator_id)
+        if row is not None:
+            row.name = name
+
+
+def _save_identity(row: dict) -> None:
+    if not db.configured():
+        _index_set(row)
+        return
+    from models import UatSet
+
+    with db.session_scope() as session:
+        stored = session.get(UatSet, row["id"])
+        if stored is not None:
+            stored.first_name = row.get("first_name") or None
+            stored.brand_name = row.get("brand_name") or None
+            stored.creatr_email = row.get("creatr_email") or None
+    _index_set(row)
+
+
+def _index_set(row: dict) -> None:
+    if not hasattr(db, "memory_uat_by_email"):
+        db.memory_uat_by_email = {}
+    db.memory_uat_by_email[row["email"]] = row
+    creatr_email = row.get("creatr_email") or ""
+    if creatr_email and creatr_email != row["email"]:
+        db.memory_uat_by_email[creatr_email] = row
+    _sync(row)
+
+
+def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "", creatr_email: str = "") -> dict:
+    """Create the supplier and Creatr. The same supplier email is reused. A different email is a new set."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
     if os.getenv("STRIPE_SECRET_KEY", "").startswith("sk_live"):
@@ -215,9 +295,16 @@ def create_set(notify_email: str) -> dict:
     email = (notify_email or "").strip().lower()
     if "@" not in email:
         raise ValueError("Enter an email address for the password link")
+    first, brand, creatr_address = _identity(first_name, brand_name, creatr_email, email)
     existing = current_set(email)
-    if existing:
+    if existing and existing.get("email") == email:
         existing["reused"] = True
+        existing["first_name"] = first
+        existing["brand_name"] = brand
+        existing["creatr_email"] = creatr_address
+        _rename_shop(existing["shop_id"], brand)
+        _rename_creator(existing["creator_id"], first or "UAT Creatr")
+        _save_identity(existing)
         _issue_invites(existing)
         return existing
     import secrets
@@ -229,13 +316,13 @@ def create_set(notify_email: str) -> dict:
     creatr_secret = secrets.token_urlsafe(24)
     domain = f"uat-{uuid.uuid4().hex[:8]}.myshopify.com"
     shop = services.create_shop(
-        name="Homeware supplier",
+        name=brand,
         shopify_domain=domain,
         plan_tier="starter",
         plan_status="free",
         is_pilot=True,
         primary_category="home",
-        business_name="Homeware supplier",
+        business_name=brand,
     )
     shop_id = shop["id"]
     if shop_id not in db.memory_shops:
@@ -243,8 +330,8 @@ def create_set(notify_email: str) -> dict:
 
         db.memory_shops[shop_id] = SimpleNamespace(
             id=shop_id,
-            name="Homeware supplier",
-            business_name="Homeware supplier",
+            name=brand,
+            business_name=brand,
             is_pilot=True,
             shopify_domain=domain,
             primary_category="home",
@@ -254,7 +341,7 @@ def create_set(notify_email: str) -> dict:
         {
             "influencer_id": creator_id,
             "handle": f"@uat{creator_id.replace('-', '')[:8]}",
-            "name": "UAT Creatr",
+            "name": first or "UAT Creatr",
             "areas_of_interest": ["home"],
             "preferred_promotion_styles": ["educational"],
             "active_categories": ["home"],
@@ -268,10 +355,13 @@ def create_set(notify_email: str) -> dict:
     if creator_id not in db.memory_creators:
         db.memory_creators[creator_id] = {"id": creator_id, "handle": f"@uat{creator_id.replace('-', '')[:8]}", "audience": 45000}
     portal.create_login(role="seller", email=email, password=secret, password_confirm=secret, shop_id=shop_id)
-    portal.create_login(role="creator", email=email, password=creatr_secret, password_confirm=creatr_secret, creator_id=creator_id)
+    portal.create_login(role="creator", email=creatr_address, password=creatr_secret, password_confirm=creatr_secret, creator_id=creator_id)
     row = {
         "id": str(uuid.uuid4()),
         "email": email,
+        "creatr_email": creatr_address,
+        "first_name": first,
+        "brand_name": brand,
         "shop_id": shop_id,
         "creator_id": creator_id,
         "audience": 45000,
@@ -361,14 +451,24 @@ def _issue_invites(row: dict) -> dict:
     paths = {}
     expires = datetime.now(timezone.utc) + timedelta(hours=12)
     for role, slug in (("seller", "s"), ("creator", "c")):
+        role_email = row["email"] if role == "seller" else (row.get("creatr_email") or row["email"])
         found = _find_invite(row["id"], role)
+        if found is not None and found.get("status") != "sent" and found.get("email") != role_email:
+            found["email"] = role_email
+            if db.configured():
+                from models import UatInvite
+
+                with db.session_scope() as session:
+                    stored = session.get(UatInvite, found["id"])
+                    if stored is not None and stored.status != "sent":
+                        stored.email = role_email
         if found is None:
             code = secrets.token_urlsafe(6)
             record = {
                 "id": code,
                 "set_id": row["id"],
                 "role": role,
-                "email": row["email"],
+                "email": role_email,
                 "expires_at": expires,
                 "provider_id": "",
                 "sent_at": None,
@@ -380,7 +480,7 @@ def _issue_invites(row: dict) -> dict:
                 from models import UatInvite
 
                 with db.session_scope() as session:
-                    session.add(UatInvite(id=code, set_id=row["id"], role=role, email=row["email"], expires_at=expires))
+                    session.add(UatInvite(id=code, set_id=row["id"], role=role, email=role_email, expires_at=expires))
             _invite_rows().append(record)
             found = record
         paths[role] = f"/uat/invite/{slug}/{found['id']}"
@@ -460,23 +560,13 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
     wanted = [role] if role in {"seller", "creator"} else ["seller", "creator"]
     import emailer
 
-    if emailer.invite_opted_out(ids["email"]):
-        return {
-            "sent": False,
-            "duplicate": False,
-            "reason": "This address has opted out of invites.",
-            "invite_sent_at": ids.get("invite_sent_at"),
-            "email": ids["email"],
-            "roles": {},
-        }
     try:
         base = https_base(base_url)
     except ValueError as exc:
         return {"sent": False, "duplicate": False, "reason": str(exc), "invite_sent_at": None, "email": ids["email"], "roles": {}}
     paths = _issue_invites(ids)
     templates = {"seller": "supplier_invite", "creator": "creatr_invite"}
-    brand_name = _brand_name(ids)
-    unsubscribe_url = emailer.invite_opt_out_url(base, ids["email"])
+    brand_name = ids.get("brand_name") or _brand_name(ids)
     roles: dict = {}
     attempted = False
     for name in wanted:
@@ -487,14 +577,18 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
         if current.get("status") == "sent" and current.get("provider_id"):
             roles[name] = {"sent": True, "skipped": True, "provider_id": current["provider_id"], "sent_at": current.get("sent_at"), "status": "sent"}
             continue
+        recipient = ids["email"] if name == "seller" else (ids.get("creatr_email") or ids["email"])
+        if emailer.invite_opted_out(recipient):
+            roles[name] = {"sent": False, "reason": "This address has opted out of invites.", "status": "failed"}
+            continue
         attempted = True
         result = emailer.send(
             templates[name],
-            ids["email"],
+            recipient,
             url=f"{base}{paths[name]}",
             first_name=str(ids.get("first_name") or ""),
             brand_name=brand_name,
-            unsubscribe_url=unsubscribe_url,
+            unsubscribe_url=emailer.invite_opt_out_url(base, recipient),
         )
         provider_id = str(result.get("provider_id") or "").strip()
         if provider_id:
@@ -539,8 +633,8 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
     }
 
 
-def create_and_send(email: str, press_id: str, base_url: str = "") -> dict:
-    created = create_set(email)
+def create_and_send(email: str, press_id: str, base_url: str = "", *, first_name: str = "", brand_name: str = "", creatr_email: str = "") -> dict:
+    created = create_set(email, first_name=first_name, brand_name=brand_name, creatr_email=creatr_email)
     sent = send_invite(press_id, base_url, email=created["email"])
     return {**created, **sent}
 
@@ -577,13 +671,14 @@ def activate_invite(token: str, *, born, attested: bool, password: str, role: st
         ids = current_set(opened["email"]) or current_set() or {}
         opened_role = opened["role"]
         opened_email = opened["email"]
-    if opened_email != ids.get("email"):
+    allowed = {ids.get("email"), ids.get("creatr_email") or ids.get("email")}
+    if opened_email not in allowed:
         raise ValueError("That invite link is not valid or has expired.")
     subject = ids["shop_id"] if opened_role == "seller" else ids["creator_id"]
     if opened_role == "seller" and ids.get("shop_id") not in db.memory_shops and not db.configured():
         from types import SimpleNamespace
 
-        db.memory_shops[ids["shop_id"]] = SimpleNamespace(id=ids["shop_id"], name="Homeware supplier", is_pilot=True)
+        db.memory_shops[ids["shop_id"]] = SimpleNamespace(id=ids["shop_id"], name=ids.get("brand_name") or "Homeware supplier", is_pilot=True)
     if opened_role == "creator" and ids.get("creator_id") not in db.memory_creators and not db.configured():
         db.memory_creators[ids["creator_id"]] = {"id": ids["creator_id"], "handle": "@uat", "audience": 45000}
     portal.create_login(

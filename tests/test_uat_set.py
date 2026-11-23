@@ -13,7 +13,7 @@ from tests.test_persistence import use_database
 def _emails():
     with db.session_scope() as session:
         rows = session.scalars(select(EmailMessage).order_by(EmailMessage.created_at.asc())).all()
-        return [{"to_email": row.to_email, "template_key": row.template_key, "body": row.body} for row in rows]
+        return [{"to_email": row.to_email, "template_key": row.template_key, "subject": row.subject, "body": row.body} for row in rows]
 
 
 def _invites():
@@ -48,6 +48,34 @@ def test_create_from_an_empty_database_is_idempotent(tmp_path, monkeypatch):
         assert session.scalar(select(func.count()).select_from(UatSet)) == 2
         shop = session.get(Shop, first["shop_id"])
         assert shop.name == "Homeware supplier"
+
+
+def test_names_and_a_separate_creatr_email_are_used(tmp_path, monkeypatch):
+    use_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("UAT_MODE", "1")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    _deliver(monkeypatch)
+    created = uat_mode.create_set(
+        "supplier@example.com",
+        first_name="Ada",
+        brand_name="Oak & Co",
+        creatr_email="creatr@example.com",
+    )
+    with db.session_scope() as session:
+        shop = session.get(Shop, created["shop_id"])
+        assert shop.name == "Oak & Co"
+        seller = session.scalar(select(PortalAccount).where(PortalAccount.role == "seller"))
+        creatr = session.scalar(select(PortalAccount).where(PortalAccount.role == "creator"))
+        assert seller.email == "supplier@example.com"
+        assert creatr.email == "creatr@example.com"
+    sent = uat_mode.send_invite("press-names", "https://staging.example", email="supplier@example.com")
+    assert sent["sent"] is True
+    emails = {row["template_key"]: row for row in _emails()}
+    assert emails["supplier_invite"]["to_email"] == "supplier@example.com"
+    assert emails["creatr_invite"]["to_email"] == "creatr@example.com"
+    assert emails["creatr_invite"]["subject"] == "Ada, your Plantr Collab invite"
+    assert "Hi Ada," in emails["supplier_invite"]["body"]
+    assert "Oak & Co" in emails["supplier_invite"]["body"]
 
 
 def _deliver(monkeypatch, supplier_id="re_supplier", creatr_id="re_creatr"):

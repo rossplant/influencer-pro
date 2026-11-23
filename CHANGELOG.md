@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.2
+
+UAT invites take a first name, a shop name, and an optional second Creatr email. Stripe stays sandbox only. This does not merge.
+
+- The admin form has First name, Brand / shop name, and Creatr email (if different). Those values are used for the shop and both emails. One address can still own both roles.
+- A missing first name uses the greeting "Hi there" and the Creatr subject "Your Plantr Collab invite".
+- `STAGING_TEST_ADMIN_EMAIL` and `STAGING_TEST_ADMIN_PASSWORD` create or update an admin on startup when the app is not production. The password is stored hashed and is not logged. Production ignores the vars.
+- `GET /health` returns the same status and version as `/`.
+
 ## 0.27.1
 
 UAT invites use the approved supplier and Creatr copy. Stripe stays sandbox only. This does not merge.

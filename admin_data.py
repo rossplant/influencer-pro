@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -11,9 +13,13 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 
+import auth
 import db
 import services
+import tracking
 from models import AdminUser, Brief, Creator, Event, Product, Shop, Shortlist, ShortlistItem, utcnow
+
+logger = logging.getLogger("plantr.admin")
 
 
 def admin_exists(email: str) -> bool:
@@ -59,6 +65,40 @@ def create_admin(email: str, password_hash: str):
     )
     db.memory_admin_users[key] = row
     return row
+
+
+def set_admin_password(email: str, password_hash: str) -> bool:
+    key = (email or "").strip().lower()
+    if not key or not password_hash:
+        return False
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.scalar(select(AdminUser).where(AdminUser.email == key))
+            if row is None:
+                return False
+            row.password_hash = password_hash
+        return True
+    row = db.memory_admin_users.get(key)
+    if row is None:
+        return False
+    row.password_hash = password_hash
+    return True
+
+
+def ensure_staging_test_admin() -> None:
+    """Create or update the staging test admin. Production never does this, and the password is not logged."""
+    if tracking.production():
+        return
+    email = os.getenv("STAGING_TEST_ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("STAGING_TEST_ADMIN_PASSWORD", "")
+    if "@" not in email or not password:
+        return
+    digest = auth.hash_password(password)
+    if find_admin(email) is None:
+        create_admin(email, digest)
+    else:
+        set_admin_password(email, digest)
+    logger.info("staging test admin ensured")
 
 
 def mark_admin_login(email: str) -> None:

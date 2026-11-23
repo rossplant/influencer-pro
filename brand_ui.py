@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 
-STYLESHEET = "/assets/plantr.css?v=0.27.1"
+STYLESHEET = "/assets/plantr.css?v=0.27.2"
 
 LOGO = """<a class="logo" href="/"><svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="pmk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#C2127F"/><stop offset=".7" stop-color="#FF3D8B"/><stop offset="1" stop-color="#5B2EFF"/></linearGradient></defs><circle cx="12" cy="16" r="9" fill="url(#pmk)"/><circle cx="20" cy="16" r="9" fill="none" stroke="#0D0B18" stroke-width="2.4"/></svg><span>Plantr <i>Collab</i></span></a>"""
 

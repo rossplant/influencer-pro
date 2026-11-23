@@ -104,7 +104,7 @@ def test_billing_page_when_stripe_is_unset(monkeypatch):
     page = client.get("/creator/billing")
     assert page.status_code == 200
     assert "Sign in" in page.text
-    assert client.get("/").json()["version"] == "0.27.1"
+    assert client.get("/").json()["version"] == "0.27.2"
 
 
 def test_checkout_uses_lookup_key_and_refuses_live_keys(monkeypatch):

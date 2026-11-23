@@ -185,3 +185,25 @@ def test_admin_user_is_stored_in_the_database(tmp_path, monkeypatch):
         assert PASSWORD not in user.password_hash
         assert user.last_login_at is not None
         assert "admin_users" in set(__import__("sqlalchemy").inspect(db.engine).get_table_names())
+
+
+def test_staging_test_admin_is_ignored_in_production(monkeypatch):
+    import admin_data
+    import auth
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("STAGING_TEST_ADMIN_EMAIL", "stage-admin@example.com")
+    monkeypatch.setenv("STAGING_TEST_ADMIN_PASSWORD", "a-long-password-value")
+    admin_data.ensure_staging_test_admin()
+    assert admin_data.find_admin("stage-admin@example.com") is None
+    monkeypatch.setenv("ENV", "staging")
+    admin_data.ensure_staging_test_admin()
+    user = admin_data.find_admin("stage-admin@example.com")
+    assert user is not None
+    assert user.password_hash.startswith("scrypt$")
+    assert "a-long-password-value" not in user.password_hash
+    assert auth.verify_password("a-long-password-value", user.password_hash)
+    monkeypatch.setenv("STAGING_TEST_ADMIN_PASSWORD", "another-long-password")
+    admin_data.ensure_staging_test_admin()
+    updated = admin_data.find_admin("stage-admin@example.com")
+    assert auth.verify_password("another-long-password", updated.password_hash)
