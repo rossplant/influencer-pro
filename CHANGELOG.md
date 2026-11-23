@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.0
+
+Shared visual system for the portal, matched to the signed-off v10 prototype. Stripe stays sandbox only. This does not merge.
+
+- One stylesheet, self-hosted fonts, and the Plantr Collab wordmark on supplier, Creatr, landing, privacy, and admin pages.
+- Sign-in errors are plain HTML, with a show-password control. The 5-attempts-in-15-minutes limit is unchanged.
+
 ## 0.22.0
 
 Supplier notes and Listing Studio. Creatr tiers stay Creatr-only. Stripe stays sandbox only. This does not merge.

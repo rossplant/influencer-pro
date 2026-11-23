@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.22.0"
+APP_VERSION = "0.23.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -634,6 +634,18 @@ def onboarding_form_page():
 @app.get("/plantr_dashboard.html")
 def plantr_dashboard_page():
     return RedirectResponse(url="/creator", status_code=302)
+
+
+@app.get("/assets/plantr.css")
+def plantr_css():
+    return FileResponse(ROOT / "static" / "plantr.css", media_type="text/css")
+
+
+@app.get("/assets/fonts/{name}")
+def plantr_font(name: str):
+    if name not in {"bricolage.woff2", "inter.woff2"}:
+        raise HTTPException(status_code=404, detail="Font not found")
+    return FileResponse(ROOT / "static" / "fonts" / name, media_type="font/woff2")
 
 
 @app.get("/plantr_admin.html")
@@ -1261,10 +1273,13 @@ def seller_accepted(request: Request, _: None = Depends(rate_limit_portal)):
 @app.post("/seller/login")
 async def seller_login(request: Request, _: None = Depends(rate_limit_portal)):
     form = await request.form()
-    portal.check_login_csrf(str(form.get("csrf_token") or ""), "seller-login")
-    account = portal.authenticate("seller", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    try:
+        portal.check_login_csrf(str(form.get("csrf_token") or ""), "seller-login")
+        account = portal.authenticate("seller", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    except HTTPException as exc:
+        return portal.login_page("seller", portal.login_message(str(exc.detail)), status=exc.status_code)
     if account is None:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        return portal.login_page("seller", portal.login_message("Invalid email or password"), status=401)
     response = RedirectResponse("/seller/profile", status_code=303)
     portal.set_role_cookie(response, "seller", account.email, account.shop_id)
     return response
@@ -1360,10 +1375,13 @@ def creator_links_page(request: Request, _: None = Depends(rate_limit_portal)):
 @app.post("/creator/login")
 async def creator_login(request: Request, _: None = Depends(rate_limit_portal)):
     form = await request.form()
-    portal.check_login_csrf(str(form.get("csrf_token") or ""), "creator-login")
-    account = portal.authenticate("creator", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    try:
+        portal.check_login_csrf(str(form.get("csrf_token") or ""), "creator-login")
+        account = portal.authenticate("creator", str(form.get("email") or ""), str(form.get("password") or ""), client_ip(request))
+    except HTTPException as exc:
+        return portal.login_page("creator", portal.login_message(str(exc.detail)), status=exc.status_code)
     if account is None:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        return portal.login_page("creator", portal.login_message("Invalid email or password"), status=401)
     response = RedirectResponse("/creator/profile", status_code=303)
     portal.set_role_cookie(response, "creator", account.email, account.creator_id)
     return response

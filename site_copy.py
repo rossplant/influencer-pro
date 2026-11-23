@@ -121,78 +121,54 @@ def landing_html(kind: str, *, token: str = "", thanks: str = "", event_id: str 
     else:
         operator_line = ""
         form = f"<p class='panel'>{html.escape(panel)}</p><p class='soon'>{html.escape(legal.OPENING_SOON)}</p>"
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(spec['headline'])}</title>
-  <style>
-    body {{ margin: 0; font-family: system-ui, sans-serif; color: #1c1917; background: #fafaf9; }}
-    main {{ max-width: 40rem; margin: 0 auto; padding: 24px 16px 48px; }}
-    h1 {{ font-size: 1.8rem; line-height: 1.2; }}
-    .core {{ color: #44403c; }}
-    form {{ display: grid; gap: 10px; background: white; padding: 16px; border-radius: 12px; }}
-    label {{ display: grid; gap: 4px; font-size: 0.95rem; }}
-    input, textarea {{ font: inherit; padding: 10px; border: 1px solid #d6d3d1; border-radius: 8px; }}
-    button {{ font: inherit; padding: 12px; border: 0; border-radius: 8px; background: #1c1917; color: white; }}
-    .check {{ display: flex; gap: 8px; align-items: center; }}
-    a {{ color: #1c1917; }}
-  </style>
-</head>
-<body>
-  <main>
-    <p class="core"><strong>{html.escape(CORE_HEADLINE)}</strong> {html.escape(CORE_BODY)}</p>
-    <h1>{html.escape(spec['headline'])}</h1>
-    <p>{html.escape(spec['subhead'])}</p>
+    import brand_ui
+
+    hero = f"""
+    <section class="hero">
+      <p>{html.escape(CORE_HEADLINE)}</p>
+      <h1>{html.escape(spec['headline'])}</h1>
+      <p>{html.escape(spec['subhead'])}</p>
+      <p>Hand-picked Creatrs, matched to your products, category and audience. No cut of your sales.</p>
+    </section>
     <ul>{points}</ul>
     {testimonials}
     {thanks_block}
     {form}
     {operator_line}
     <p><a href="/privacy">Privacy</a></p>
-  </main>
-  <script>
-    (function () {{
-      var form = document.querySelector("form");
-      if (!form || form.dataset.started) return;
-      var sent = false;
-      form.addEventListener("focusin", function () {{
-        if (sent) return;
-        sent = true;
-        fetch("/track/apply-start", {{
-          method: "POST",
-          headers: {{"Content-Type": "application/json"}},
-          body: JSON.stringify({{role: form.dataset.role, event_id: form.querySelector("[name=event_id]").value}})
-        }});
-      }});
-    }})();
-  </script>
-</body>
-</html>"""
+    """
+    rendered = brand_ui.document(spec["headline"], hero)
+    script = """
+<script>
+(function () {
+  var form = document.querySelector("form");
+  if (!form || form.dataset.started) return;
+  var sent = false;
+  form.addEventListener("focusin", function () {
+    if (sent) return;
+    sent = true;
+    var event = form.querySelector("[name=event_id]");
+    fetch("/track/apply-start", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({role: form.dataset.role, event_id: event ? event.value : ""})
+    });
+  });
+})();
+</script>
+"""
+    return rendered.replace("</body>", script + "</body>")
 
 
 def privacy_html() -> str:
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(PRIVACY['title'])}</title>
-  <style>
-    body {{ margin: 0; font-family: system-ui, sans-serif; color: #1c1917; background: #fafaf9; }}
-    main {{ max-width: 40rem; margin: 0 auto; padding: 24px 16px 48px; }}
-    .draft {{ background: #fef3c7; padding: 12px; border-radius: 8px; }}
-  </style>
-</head>
-<body>
-  <main>
-    <p class="draft">{html.escape(PRIVACY['notice'])}</p>
+    import brand_ui
+
+    body = f"""
+    <p class="banner">{html.escape(PRIVACY['notice'])}</p>
     <h1>{html.escape(PRIVACY['title'])}</h1>
     <p>{html.escape(PRIVACY['body'])}</p>
-  </main>
-</body>
-</html>"""
+    """
+    return brand_ui.document(PRIVACY["title"], body)
 
 
 def consent_banner() -> str:
