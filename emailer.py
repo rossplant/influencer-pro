@@ -85,6 +85,13 @@ TEMPLATES = {
             "Cancel or change plan in Billing before then if you do not want that price."
         ),
     },
+    "quality_warning": {
+        "subject": "Quality standard missed for {month}",
+        "body": (
+            "Last month missed the quality standard. {standard} "
+            "One more month in a row removes earned status. You can request a review from Home."
+        ),
+    },
     "growth_step_2_days": {
         "subject": "Your Growth price changes in 2 days",
         "body": (

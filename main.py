@@ -712,6 +712,31 @@ def admin_logout():
     return response
 
 
+@app.get("/admin/api/quality/queue")
+def admin_quality_queue(_: str = Depends(require_admin)):
+    import quality_standing
+
+    return {"items": quality_standing.queue()}
+
+
+@app.post("/admin/api/quality/excuse")
+async def admin_quality_excuse(request: Request, admin_email: str = Depends(require_admin)):
+    import quality_standing
+
+    body = await request.json()
+    audit = quality_standing.excuse(
+        admin_email=admin_email,
+        subject_type=str(body.get("subject_type") or ""),
+        subject_id=str(body.get("subject_id") or ""),
+        month=str(body.get("month") or ""),
+        reason=str(body.get("reason") or ""),
+        note=str(body.get("note") or ""),
+        restore=bool(body.get("restore")),
+        review_id=str(body.get("review_id") or ""),
+    )
+    return {"ok": True, "audit": audit}
+
+
 @app.get("/admin/api/summary")
 def admin_summary(_: str = Depends(require_admin)):
     return admin_data.summary()
@@ -942,6 +967,28 @@ def _commerce_block(role: str, subject_id: str):
 @app.get("/seller")
 def seller_home(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_seller(portal.seller_context(request), "home", base_url=billing_config.public_base_url(request))
+
+
+@app.post("/seller/quality-review")
+async def seller_quality_review(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import quality_standing
+
+    quality_standing.request_review("supplier", session["subject_id"], month=str(form.get("month") or ""), note=str(form.get("note") or ""))
+    return RedirectResponse("/seller", status_code=303)
+
+
+@app.post("/creator/quality-review")
+async def creator_quality_review(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import quality_standing
+
+    quality_standing.request_review("creator", session["subject_id"], month=str(form.get("month") or ""), note=str(form.get("note") or ""))
+    return RedirectResponse("/creator", status_code=303)
 
 
 @app.get("/seller/profile")

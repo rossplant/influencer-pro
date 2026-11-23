@@ -773,10 +773,25 @@ def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) ->
 
 def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
     if page == "home":
+        import quality_standing
+
+        standing = quality_standing.standing_for("supplier", shop.get("id") or "")
+        notice = standing.get("notice") or ""
+        if standing.get("demoted"):
+            notice = "Pays on time and Top seller are paused after repeated missed quality months."
+        notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
         return f"""
         <h1>Home</h1>
         <p>Carefully selected Creatrs, matched to your products.</p>
         <p>{html.escape(recognition.momentum_line(int(data.get('confirmed_7d') or 0)))}</p>
+        <p>{html.escape(recognition.QUALITY_STANDARD_SUPPLIER)}</p>
+        {notice_html}
+        <form method="post" action="/seller/quality-review">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Month <input name="month" placeholder="2026-11" required></label>
+          <label>What happened <input name="note"></label>
+          <button type="submit">Request a review</button>
+        </form>
         <p><a href="/seller/products">Open catalogue</a></p>
         """
     if page == "profile":
@@ -866,21 +881,33 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
     if page == "home":
         sales = int(data.get("confirmed_sales") or 0)
         pilot = bool(profile.get("founding_number") or profile.get("signup_campaign") == "founding_curators")
-        status = recognition.tier_status(sales, pilot_invite=pilot)
-        progress = ""
-        if status["next_label"]:
-            progress = f"<p>{status['sales']} of {status['next_sales']} confirmed sales toward {html.escape(status['next_label'])}.</p>"
-        ladder = "".join(
-            f"<li><strong>{html.escape(row['label'])}</strong> · {row['sales']} confirmed sales. {html.escape(row['benefit'])}</li>"
-            for row in recognition.TIERS
-        )
+        shown = recognition.progression(sales, pilot_invite=pilot)
+        import quality_standing
+
+        standing = quality_standing.standing_for("creator", profile.get("id") or "", sales=sales, pilot_invite=pilot)
+        if standing.get("demoted"):
+            shown["label"] = standing["label"]
+        lines = "".join(f"<li>{html.escape(line)}</li>" for line in shown["lines"])
+        target = shown.get("next_sales") or shown["sales"] or 1
+        notice = standing.get("notice") or ""
+        if standing.get("demoted"):
+            notice = "Earned tier and early access are paused after repeated missed quality months."
+        notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
         return f"""
         <h1>Home</h1>
         <p>Find products you genuinely rate. Cultivate their story, your way.</p>
-        <p>Your tier: {html.escape(status['label'])}. Tiers are earned from confirmed sales. A plan does not buy a tier.</p>
-        {progress}
-        <ol>{ladder}</ol>
-        <p><small>{html.escape(recognition.QUALITY_BAR)}</small></p>
+        <p>Your tier: {html.escape(shown['label'])}.</p>
+        <p>{html.escape(shown['next_line'])}</p>
+        <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="{html.escape(str(target))}" aria-valuenow="{html.escape(str(shown['sales']))}" aria-label="{html.escape(shown['next_line'])}"><span style="width:{int(shown['percent'])}%"></span></div>
+        <ul>{lines}</ul>
+        <p>{html.escape(recognition.QUALITY_STANDARD_CREATR)}</p>
+        {notice_html}
+        <form method="post" action="/creator/quality-review">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Month <input name="month" placeholder="2026-11" required></label>
+          <label>What happened <input name="note"></label>
+          <button type="submit">Request a review</button>
+        </form>
         <p><a href="/creator/offers">See matches</a></p>
         """
     if page == "profile":
@@ -1121,6 +1148,8 @@ button {{ background: #C2127F; color: white; border: 0; border-radius: 999px; pa
 button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
 .tracking {{ margin-top: 8px; }}
 .banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
+.meter {{ height: 10px; background: #efeaf3; border-radius: 999px; overflow: hidden; }}
+.meter span {{ display: block; height: 100%; background: #C2127F; }}
 </style></head><body>
 <header><strong>Plantr Collab</strong>{logout_form}</header>
 <main>{body}</main>

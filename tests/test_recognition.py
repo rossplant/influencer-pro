@@ -139,6 +139,51 @@ def test_selling_fast_promo_and_listing_studio_stub():
     assert result["status"] == "disabled"
 
 
+def test_progression_is_the_reach_line_and_the_quality_standard_is_once():
+    shown = recognition.progression(12, on=date(2027, 1, 1))
+    assert shown["next_line"] == "Reach Trendsettr: 15 confirmed sales in the last 3 months"
+    assert "Reach Influencr: 5 confirmed sales in the last 3 months" in shown["lines"]
+    assert "Reach Headlinr: 40 confirmed sales in the last 3 months" in shown["lines"]
+    assert shown["percent"] == 80
+    assert all("on time" not in line for line in shown["lines"])
+    assert shown["quality_standard"] == recognition.QUALITY_STANDARD_CREATR
+    assert "Trendsettr" not in recognition.QUALITY_STANDARD_SUPPLIER
+    assert "Influencr" not in recognition.QUALITY_STANDARD_SUPPLIER
+    page = __import__("portal")._creator_body("home", {"id": "", "name": "Ada"}, "tok")
+    assert page.count(recognition.QUALITY_STANDARD_CREATR) == 1
+    assert "Reach Trendsettr: 15 confirmed sales in the last 3 months" in page
+    assert 'role="progressbar"' in page
+
+
+def test_two_failed_months_drop_earned_status_and_one_is_a_warning():
+    months = [{"month": "2026-11", "passed": False, "excused": False}]
+    warned = recognition.apply_quality(40, months, on=date(2027, 1, 15))
+    assert warned["warning"] is True
+    assert warned["demoted"] is False
+    assert warned["label"] == "Headlinr"
+    assert warned["early_access_hours"] == 48
+    failed = months + [{"month": "2026-12", "passed": False, "excused": False}]
+    dropped = recognition.apply_quality(40, failed, on=date(2027, 1, 15))
+    assert dropped["demoted"] is True
+    assert dropped["label"] == "Contributr"
+    assert dropped["early_access_hours"] == 0
+    assert dropped["badges_allowed"] is False
+    pilot = recognition.apply_quality(40, failed, pilot_invite=True, on=date(2027, 4, 20))
+    assert pilot["label"] == "Influencr"
+    later = recognition.apply_quality(40, failed, pilot_invite=True, on=date(2027, 4, 21))
+    assert later["label"] == "Contributr"
+    supplier = recognition.apply_quality(0, failed, role="supplier")
+    assert supplier["badges_allowed"] is False
+    assert supplier["quality_standard"] == recognition.QUALITY_STANDARD_SUPPLIER
+    excused = [
+        {"month": "2026-11", "passed": False, "excused": True},
+        {"month": "2026-12", "passed": False, "excused": False},
+    ]
+    held = recognition.apply_quality(40, excused, on=date(2027, 1, 15))
+    assert held["demoted"] is False
+    assert held["label"] == "Headlinr"
+
+
 def test_non_shopify_suppliers_are_hidden_and_caps_are_split():
     assert recognition.supplier_visible_to_creators({"shopify_domain": "acme.myshopify.com"}) is True
     assert recognition.supplier_visible_to_creators({"shopify_domain": ""}) is False

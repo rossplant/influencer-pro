@@ -4,6 +4,10 @@
 
 Creatr tiers, match allowances, and supplier badges. Stripe stays sandbox only. This does not merge.
 
+- The Creatr ladder shows only how to reach the next tier, with one progress bar. The quality standard is one line for every Creatr, and a separate line for every supplier. It is not repeated on each tier.
+- Two consecutive months below the quality standard (QUALITY_FAIL_MONTHS, default 2) return a Creatr to Contributr, or to Influencr until 20 April 2027 for an invited pilot participant, and remove early access, Pays on time, and Top seller. The first failed month sends an in-app warning and a transactional email when Resend is configured.
+- An admin can mark a failure as not their fault (supplier or courier delay, platform error, or other with a note). That excludes the month or restores status, and writes who, when, and the reason. A Creatr or supplier can request a review from Home, which opens an admin queue item.
+
 - Creatr ladder: Contributr, Influencr at 5, Trendsettr at 15, Headlinr at 40 confirmed refund-adjusted sales over a rolling 3 months, from 20 November 2026. Pilot invitees start at Influencr until 20 April 2027. Plans do not buy a tier. 48-hour early access is Trendsettr and Headlinr only. The plan-based first look is removed.
 - The elite plan's name on screen is Curatr Pro. The id and Stripe lookup keys stay `elite`.
 - Match allowances refresh monthly with no rollover. Membr 4 matches and 3 active collabs. Curatr 12 matches, 4 offers, 6 collabs. Curatr Pro sees every qualifying category match, 12 offers, and 12 collabs. Trendsettr adds 2 active collabs and Headlinr adds 4. Five attributed sales in a month add 3 matches.

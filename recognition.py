@@ -49,10 +49,17 @@ TIERS = (
     },
 )
 
-QUALITY_BAR = (
-    "Quality bar for Trendsettr and Headlinr, over the last 3 months: "
-    "90% or more agreed posts on time, no upheld claims or disclosure breaches, "
-    "and a 4.5 or higher supplier rating once you have 3 or more ratings."
+# Shown once. Not a per-tier condition.
+QUALITY_STANDARD_CREATR = (
+    "Quality standard for every Creatr: agreed posts on time, no upheld claims or disclosure breaches, and ratings from suppliers."
+)
+QUALITY_STANDARD_SUPPLIER = (
+    "Quality standard for every supplier: commission paid on time, and samples sent on time."
+)
+QUALITY_BAR = QUALITY_STANDARD_CREATR
+EXCUSE_REASONS = ("supplier_or_courier_delay", "platform_error", "other")
+QUALITY_WARNING = (
+    "Last month missed the quality standard. One more month in a row removes earned status."
 )
 
 # Plans buy matches and collab slots. Tiers do not buy matches.
@@ -190,8 +197,94 @@ def tier_status(sales: int, *, pilot_invite: bool = False, on: Optional[date] = 
         "next_label": "" if nxt is None else nxt["label"],
         "next_sales": None if nxt is None else nxt["sales"],
         "early_access_hours": EARLY_ACCESS_HOURS if key in EARLY_ACCESS_TIERS else 0,
-        "quality_bar": QUALITY_BAR if key in {"trendsettr", "headlinr"} or (nxt and nxt["key"] in EARLY_ACCESS_TIERS) else "",
         "pilot_floor": bool(pilot_invite and on <= PILOT_FLOOR_UNTIL),
+    }
+
+
+def reach_line(label: str, sales: int) -> str:
+    return f"Reach {label}: {sales} confirmed sales in the last 3 months"
+
+
+def progression(sales: int, *, pilot_invite: bool = False, on: Optional[date] = None) -> dict:
+    """Ladder copy is only how you reach the next tier, plus one progress bar."""
+    status = tier_status(sales, pilot_invite=pilot_invite, on=on)
+    lines = ["Contributr: where you start"]
+    lines.extend(reach_line(row["label"], row["sales"]) for row in TIERS if row["sales"] > 0)
+    target = status["next_sales"]
+    if target:
+        percent = min(100, int(round(100 * status["sales"] / target)))
+        next_line = reach_line(status["next_label"], target)
+    else:
+        percent = 100
+        next_line = reach_line("Headlinr", 40)
+    return {
+        **status,
+        "lines": lines,
+        "next_line": next_line,
+        "percent": percent,
+        "quality_standard": QUALITY_STANDARD_CREATR,
+    }
+
+
+def failing_months_limit() -> int:
+    return max(1, _int_env("QUALITY_FAIL_MONTHS", 2))
+
+
+def consecutive_failures(months: list) -> int:
+    """Unexcused failed months at the end of the record. A pass resets. An excuse is skipped."""
+    ordered = sorted(months or [], key=lambda row: str(row.get("month") or ""))
+    streak = 0
+    for row in reversed(ordered):
+        if row.get("excused"):
+            continue
+        if row.get("passed"):
+            break
+        streak += 1
+    return streak
+
+
+def floor_tier(pilot_invite: bool, on: Optional[date] = None) -> str:
+    on = on or datetime.now(timezone.utc).date()
+    if pilot_invite and on <= PILOT_FLOOR_UNTIL:
+        return "influencr"
+    return "contributr"
+
+
+def apply_quality(sales: int, months: list, *, pilot_invite: bool = False, on: Optional[date] = None, role: str = "creator") -> dict:
+    """N consecutive failed months drop earned tier and badges. The first failure is a warning."""
+    on = on or datetime.now(timezone.utc).date()
+    streak = consecutive_failures(months)
+    limit = failing_months_limit()
+    demoted = streak >= limit
+    warning = streak == 1
+    if role == "supplier":
+        return {
+            "role": "supplier",
+            "demoted": demoted,
+            "warning": warning,
+            "consecutive_failures": streak,
+            "badges_allowed": not demoted,
+            "early_access_hours": 0,
+            "notice": QUALITY_WARNING if warning else "",
+            "quality_standard": QUALITY_STANDARD_SUPPLIER,
+        }
+    if demoted:
+        key = floor_tier(pilot_invite, on)
+        early = 0
+    else:
+        key = tier_key_for(sales, pilot_invite=pilot_invite, on=on)
+        early = EARLY_ACCESS_HOURS if key in EARLY_ACCESS_TIERS else 0
+    return {
+        "role": "creator",
+        "demoted": demoted,
+        "warning": warning,
+        "consecutive_failures": streak,
+        "key": key,
+        "label": tier_label(key),
+        "early_access_hours": early,
+        "badges_allowed": not demoted,
+        "notice": QUALITY_WARNING if warning else "",
+        "quality_standard": QUALITY_STANDARD_CREATR,
     }
 
 
