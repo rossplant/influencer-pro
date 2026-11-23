@@ -89,6 +89,14 @@ TEMPLATES = {
         "subject": "A note on your Plantr Collab profile",
         "body": "{notice}",
     },
+    "sample_due_7": {
+        "subject": "Your post about {product} is due in 7 days",
+        "body": "The post for {product} is due on {due}. Add the link in Samples, and label the post #Ad or gifted.",
+    },
+    "sample_due_2": {
+        "subject": "Your post about {product} is due in 2 days",
+        "body": "The post for {product} is due on {due}. Add the link in Samples, and label the post #Ad or gifted.",
+    },
     "quality_warning": {
         "subject": "Quality standard missed for {month}",
         "body": (

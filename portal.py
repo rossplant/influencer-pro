@@ -194,6 +194,7 @@ def save_product(
     fact_what: str = "",
     fact_who: str = "",
     selling_fast: bool = False,
+    samples_enabled: bool = False,
 ) -> str:
     title = (title or "").strip()
     if not title:
@@ -236,6 +237,7 @@ def save_product(
         if (fact_what or "").strip() or (fact_who or "").strip():
             attributes["key_facts"] = {"what": (fact_what or "").strip(), "who": (fact_who or "").strip()}
         attributes["selling_fast"] = bool(selling_fast)
+        attributes["samples_enabled"] = bool(samples_enabled)
         if (promo_rate or "").strip():
             from datetime import date as _date
 
@@ -519,6 +521,7 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
       <a href="/seller/products">Catalogue</a>
       <a href="/dashboard/catalogue/listing-studio">Listing Studio</a>
       <a href="/seller/find">Collabs</a>
+      <a href="/seller/samples">Samples</a>
       <a href="/seller/profile">Settings</a>
     </nav>
     <p class="pills"><a href="/seller/badges">Pays on time</a> <a href="/seller/badges">Top seller</a></p>
@@ -708,6 +711,7 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
           <label>What it is <input name="fact_what" value=""></label>
           <label>Who it is for <input name="fact_who" value=""></label>
           <label><input type="checkbox" name="selling_fast" value="yes"> Selling fast</label>
+          <label><input type="checkbox" name="samples_enabled" value="yes"> Samples are available for this product</label>
           <label>Description <textarea name="description">{html.escape(edit.get('description') or '')}</textarea></label>
           <button type="submit">Save product</button>
         </form>
@@ -893,6 +897,51 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
           <button type="submit">Request a review</button>
         </form>
         <p><a href="/seller/products">Open catalogue</a></p>
+        """
+    if page == "samples":
+        import samples as sample_flow
+
+        cards = []
+        for row in data.get("samples") or []:
+            status = sample_flow.effective_status(row)
+            address = sample_flow.address_for(row, viewer="supplier")
+            address_html = f"<p>Ship to: {html.escape(address)}</p>" if address else "<p>The address stays hidden until you approve.</p>"
+            actions = ""
+            if status == "requested":
+                actions = f"""
+                <form method="post" action="/seller/samples/{html.escape(row['id'])}/approve">
+                  <input type="hidden" name="csrf_token" value="{csrf}"><button type="submit">Approve</button>
+                </form>
+                <form method="post" action="/seller/samples/{html.escape(row['id'])}/decline">
+                  <input type="hidden" name="csrf_token" value="{csrf}">
+                  <label>Reason <input name="reason"></label>
+                  <button class="secondary" type="submit">Decline</button>
+                </form>
+                """
+            if status == "approved":
+                actions = f"""
+                <form method="post" action="/seller/samples/{html.escape(row['id'])}/ship">
+                  <input type="hidden" name="csrf_token" value="{csrf}">
+                  <label>Tracking number or link <input name="tracking"></label>
+                  <button type="submit">Mark shipped</button>
+                </form>
+                """
+            cards.append(
+                f"<article><h2>{html.escape(row.get('product_title') or 'Sample')}</h2>"
+                f"<p>Status: {html.escape(status)}</p><p>{html.escape(row.get('note') or '')}</p>"
+                f"{address_html}{actions}</article>"
+            )
+        settings = data.get("sample_settings") or {}
+        return f"""
+        <h1>Sample requests</h1>
+        {''.join(cards) or '<p>No sample requests yet.</p>'}
+        <h2>Sample settings</h2>
+        <form method="post" action="/seller/samples/settings">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <label>Maximum samples a month <input name="max_per_month" inputmode="numeric" value="{html.escape(str(settings.get('max_per_month') or 5))}"></label>
+          <label>Days after delivery for the post (7 to 30) <input name="post_due_days" inputmode="numeric" value="{html.escape(str(settings.get('post_due_days') or 14))}"></label>
+          <button type="submit">Save sample settings</button>
+        </form>
         """
     if page == "badges":
         return f"""
@@ -1115,9 +1164,81 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
+                f"<p><a href='/creator/samples/request?product={html.escape(str(offer.get('product_id') or ''))}'>Request a sample</a></p>"
                 f"{_tracking_block(offer.get('discount_code'), offer.get('tracking_path'), base_url, offer.get('platform_links'), offer.get('direct_url'))}</article>"
             )
         return f"<h1>Matches</h1>{''.join(blocks) or '<p>No matches yet.</p>'}"
+    if page == "sample-request":
+        import samples as sample_flow
+
+        product = data.get("product") or {}
+        return f"""
+        <h1>Request a sample</h1>
+        <p>{html.escape(str(product.get('title') or 'This product'))}</p>
+        <form method="post" action="/creator/samples">
+          <input type="hidden" name="csrf_token" value="{csrf}">
+          <input type="hidden" name="product_id" value="{html.escape(str(product.get('id') or ''))}">
+          <label>How you plan to feature it <textarea name="note" required></textarea></label>
+          <label>Address line <input name="address_line" autocomplete="address-line1" required></label>
+          <label>Suburb <input name="suburb" autocomplete="address-level2"></label>
+          <label>State <input name="region" autocomplete="address-level1"></label>
+          <label>Postcode <input name="postcode" autocomplete="postal-code" required></label>
+          <button type="submit">Request a sample</button>
+        </form>
+        """
+    if page == "sample":
+        import listing_studio
+        import samples as sample_flow
+
+        row = data.get("sample") or {}
+        status = sample_flow.effective_status(row)
+        kind = sample_flow.reminder_kind(row)
+        reminder = ""
+        if kind == "7":
+            reminder = "<p class='banner'>Your post is due within 7 days.</p>"
+        elif kind == "2":
+            reminder = "<p class='banner'>Your post is due within 2 days.</p>"
+        if status == "overdue":
+            reminder = "<p class='error'>This post is overdue.</p>"
+        kit = data.get("kit") or {}
+        hooks = "".join(f"<li>{html.escape(item.get('hook') or '')} {html.escape(item.get('caption') or '')}</li>" for item in kit.get("angles") or [])
+        scenes = "".join(
+            f"<li><a href='/dashboard/catalogue/listing-studio/scenes/{html.escape(scene['id'])}?product={html.escape(str(row.get('product_id') or ''))}'>Download {html.escape(str(scene.get('type')))}</a></li>"
+            for scene in kit.get("scenes") or []
+        )
+        code = html.escape(str(data.get("code") or ""))
+        link = html.escape(str(data.get("link") or ""))
+        post_form = ""
+        if status in {"delivered", "overdue"}:
+            post_form = f"""
+            <form method="post" action="/creator/samples/{html.escape(row['id'])}/post">
+              <input type="hidden" name="csrf_token" value="{csrf}">
+              <label>Post link <input name="links" type="url" required></label>
+              <label><input type="checkbox" name="disclosure" value="yes"> This post is clearly labelled #Ad or gifted</label>
+              <p><small>{html.escape(sample_flow.DISCLOSURE_HELP)}</small></p>
+              <button type="submit">Submit the post</button>
+            </form>
+            """
+        delivered = ""
+        if status == "shipped":
+            delivered = f"""
+            <form method="post" action="/creator/samples/{html.escape(row['id'])}/delivered">
+              <input type="hidden" name="csrf_token" value="{csrf}">
+              <button type="submit">Mark delivered</button>
+            </form>
+            """
+        return f"""
+        <h1>Sample</h1>
+        {reminder}
+        <p>Status: {html.escape(status)}</p>
+        <p>{html.escape(row.get('note') or '')}</p>
+        <h2>Content kit</h2>
+        <ul>{hooks or '<li>No approved positioning yet.</li>'}</ul>
+        <ul>{scenes}</ul>
+        <p>Link or code: {link} {code}</p>
+        {delivered}
+        {post_form}
+        """
     items = "".join(
         "<li>"
         f"{html.escape(str(row.get('link_url') or ''))}"

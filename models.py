@@ -127,6 +127,8 @@ class Shop(Base):
     first_paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_match_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_campaign_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sample_max_per_month: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
+    sample_post_due_days: Mapped[int] = mapped_column(Integer, nullable=False, default=14, server_default="14")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
     products: Mapped[list["Product"]] = relationship(back_populates="shop")
@@ -1035,3 +1037,38 @@ class CollabSparkAd(Base):
     consented_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+
+
+class SampleRequest(Base):
+    """A Creatr's request for a product sample. The address is hidden until approval."""
+
+    __tablename__ = "sample_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('requested', 'approved', 'declined', 'shipped', 'delivered', 'posted', 'overdue')",
+            name="ck_sample_requests_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    shop_id: Mapped[str] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("creators.id"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="requested", server_default="requested")
+    decline_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    address_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    suburb: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    region: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    postcode: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    tracking: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    shipped_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    post_due_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    posted_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    post_links: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    disclosure_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    reminder_7_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    reminder_2_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    address_redacted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sql_false())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
