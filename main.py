@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.21.0"
+APP_VERSION = "0.22.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -1162,10 +1162,59 @@ async def seller_import_save(request: Request, _: None = Depends(rate_limit_port
 
 
 @app.get("/seller/find")
-def seller_find(request: Request, _: None = Depends(rate_limit_portal)):
+def seller_find(request: Request, tier: str = "", _: None = Depends(rate_limit_portal)):
     session = portal.seller_context(request)
     products = portal.seller_products(session["subject_id"]) if session else []
-    return portal.render_seller(session, "find", base_url=billing_config.public_base_url(request), products=products, matches=[])
+    chosen = "trendsettr_or_headlinr" if tier == "trendsettr_or_headlinr" else ""
+    return portal.render_seller(
+        session,
+        "find",
+        base_url=billing_config.public_base_url(request),
+        products=products,
+        matches=[],
+        tier_filter=chosen,
+    )
+
+
+@app.get("/seller/badges")
+def seller_badges(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_seller(portal.seller_context(request), "badges", base_url=billing_config.public_base_url(request))
+
+
+@app.get("/seller/creatr-tiers")
+def seller_creatr_tiers(request: Request, _: None = Depends(rate_limit_portal)):
+    return portal.render_seller(portal.seller_context(request), "creatr-tiers", base_url=billing_config.public_base_url(request))
+
+
+@app.get("/dashboard/catalogue/enhance")
+def listing_studio_old():
+    return RedirectResponse("/dashboard/catalogue/listing-studio", status_code=302)
+
+
+@app.get("/dashboard/catalogue/listing-studio")
+def listing_studio_page(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    products = portal.seller_products(session["subject_id"]) if session else []
+    return portal.render_seller(
+        session,
+        "listing",
+        base_url=billing_config.public_base_url(request),
+        products=products,
+    )
+
+
+@app.post("/dashboard/catalogue/listing-studio")
+async def listing_studio_save(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    portal.save_listing_tips(
+        session["subject_id"],
+        str(form.get("product_id") or ""),
+        str(form.get("tips") or ""),
+        approved=str(form.get("approve") or "") == "yes",
+    )
+    return RedirectResponse("/dashboard/catalogue/listing-studio", status_code=303)
 
 
 @app.post("/seller/find")

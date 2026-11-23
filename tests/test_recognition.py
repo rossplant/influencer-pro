@@ -83,8 +83,8 @@ def test_reliability_badge_is_plain_and_has_no_tier_name():
 
 def test_top_seller_is_a_badge_and_does_not_change_rank():
     earned = recognition.top_seller_status(
-        confirmed_sales=8,
-        distinct_creators=2,
+        confirmed_sales=20,
+        distinct_creators=5,
         pay_on_time=4,
         pay_total=4,
         samples_on_time=3,
@@ -96,8 +96,8 @@ def test_top_seller_is_a_badge_and_does_not_change_rank():
     assert earned["changes_rank"] is False
     assert "tier" not in earned["explanation"].lower()
     short = recognition.top_seller_status(
-        confirmed_sales=8,
-        distinct_creators=1,
+        confirmed_sales=20,
+        distinct_creators=4,
         pay_on_time=4,
         pay_total=4,
         samples_on_time=3,
@@ -131,9 +131,21 @@ def test_selling_fast_promo_and_listing_studio_stub():
     assert "left" not in line.lower()
     with pytest.raises(ValueError):
         recognition.promo_end(date(2026, 11, 23), 6)
-    assert recognition.listing_quota("contributr")["free_images"] == 0
-    assert recognition.listing_quota("influencr")["free_images"] == 4
-    result = recognition.clean_listing_image("photo.jpg", earned_key="influencr")
+    pilot = recognition.listing_studio_price(6, on=date(2026, 12, 1))
+    assert pilot["in_pilot"] is True
+    assert pilot["base_cents"] == 0
+    assert pilot["included_images"] == 4
+    assert pilot["extra_images"] == 2
+    assert pilot["total_cents"] == 300
+    assert pilot["extra_label"] == "A$1.50"
+    later = recognition.listing_studio_price(4, on=date(2027, 1, 20))
+    assert later["in_pilot"] is False
+    assert later["base_cents"] == 499
+    assert later["extra_images"] == 0
+    assert later["total_cents"] == 499
+    assert recognition.tips_problem("This is the best serum") 
+    assert recognition.tips_problem("A short hook for the brief") == ""
+    result = recognition.clean_listing_image("photo.jpg")
     assert result["called_api"] is False
     assert result["watermark"] is False
     assert result["status"] == "disabled"

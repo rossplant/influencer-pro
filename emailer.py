@@ -85,6 +85,10 @@ TEMPLATES = {
             "Cancel or change plan in Billing before then if you do not want that price."
         ),
     },
+    "supplier_badge_notice": {
+        "subject": "A note on your Plantr Collab profile",
+        "body": "{notice}",
+    },
     "quality_warning": {
         "subject": "Quality standard missed for {month}",
         "body": (
