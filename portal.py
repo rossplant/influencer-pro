@@ -722,7 +722,7 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
           <label>URL <input name="url" type="url" value="{html.escape(edit.get('url') or '')}"></label>
           <label>Image URL (optional) <input name="image_url" type="url" value="{html.escape(edit.get('image_url') or '')}"></label>
           <label>Why you chose it <textarea name="why_chosen" required>{html.escape(edit.get('why_chosen') or '')}</textarea></label>
-          <label>Value for creators <textarea name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea></label>
+          <label>Value for Creatrs <textarea name="value_to_creators" required>{html.escape(edit.get('value_to_creators') or '')}</textarea></label>
           <label>Commission percent <input name="commission" value="{html.escape(commission_value)}" required></label>
           <label>Promo commission % for 7 to 30 days (optional) <input name="promo_rate" value=""></label>
           <label>Promo length in days <input name="promo_days" inputmode="numeric" placeholder="14"></label>
@@ -734,13 +734,14 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
           <button type="submit">Save product</button>
         </form>
         <h2>Add from a CSV</h2>
-        <p>Upload a spreadsheet, tick the rows you want, and leave the rest. Nothing is ticked to start with. Drafts are not used for matching until you add why you chose them, the value for creators, and a commission.</p>
-        <p><a href="/seller/products/csv-template">Download the template</a></p>
+        <p>Upload a CSV, tick the rows you want, and leave the rest. Nothing is ticked to start with. Drafts are not used for matching until you add why you chose them, the value for Creatrs, and a commission. Excel files are not accepted.</p>
+        <p><a href="/seller/products/csv-template">Download the CSV template</a></p>
         <form method="post" action="/seller/products/import" enctype="multipart/form-data">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Products CSV <input type="file" name="file" accept=".csv,text/csv" required></label>
           <button type="submit">Preview CSV</button>
         </form>
+        {f"<p class='error'>{html.escape(data.get('import_error') or '')}</p>" if data.get('import_error') else ""}
         """
     return f"""
     <h1>Products</h1>
@@ -1115,7 +1116,9 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         desired = ", ".join(profile.get("desired_categories") or [])
         number = profile.get("founding_number")
         badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
-        return badge + f"""
+        audience = profile.get("audience")
+        audience_html = f"<p>Audience: {int(audience):,}</p>" if audience else ""
+        return badge + audience_html + f"""
         <h1>{html.escape(profile.get('handle') or '')}</h1>
         <form method="post" action="/creator/profile">
           <input type="hidden" name="csrf_token" value="{csrf}">

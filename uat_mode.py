@@ -124,16 +124,19 @@ def reset() -> None:
     if db.configured():
         from sqlalchemy import delete, select
 
-        from models import PortalAccount, UatFeedback, UatSet
+        from models import PortalAccount, UatFeedback, UatInvite, UatSet
 
         with db.session_scope() as session:
             session.execute(delete(UatFeedback))
             row = session.scalar(select(UatSet))
             if row is not None:
                 session.execute(delete(PortalAccount).where(PortalAccount.email == row.email))
+            session.execute(delete(UatInvite))
             session.execute(delete(UatSet))
     db.memory_uat_feedback = []
     db.memory_uat_ids = {}
+    db.memory_uat_by_email = {}
+    db.memory_uat_invites = []
     db.memory_uat_sales = []
 
 
@@ -142,16 +145,21 @@ def _sync(row: dict) -> dict:
     return row
 
 
-def current_set() -> dict | None:
+def current_set(email: str | None = None) -> dict | None:
+    wanted = (email or "").strip().lower()
     if db.configured():
         from sqlalchemy import select
 
         from models import UatSet
 
         with db.session_scope() as session:
-            row = session.scalar(select(UatSet).order_by(UatSet.created_at.asc()))
+            query = select(UatSet).order_by(UatSet.created_at.desc())
+            if wanted:
+                query = query.where(UatSet.email == wanted)
+            row = session.scalar(query)
             if row is None:
-                db.memory_uat_ids = {}
+                if not wanted:
+                    db.memory_uat_ids = {}
                 return None
             found = {
                 "id": row.id,
@@ -165,6 +173,9 @@ def current_set() -> dict | None:
                 "billing": "sandbox",
             }
         return _sync(found)
+    store = getattr(db, "memory_uat_by_email", None) or {}
+    if wanted:
+        return store.get(wanted)
     found = getattr(db, "memory_uat_ids", None) or {}
     if not found.get("shop_id"):
         return None
@@ -190,43 +201,13 @@ def _remember(row: dict) -> None:
                 )
             )
     _sync(row)
-
-
-def _catalogue(shop_id: str) -> list[dict]:
-    import portal
-
-    made = []
-    for title, price, url in (
-        ("Stoneware bowl", "42", "https://example.com/bowl"),
-        ("Linen napkin", "18", "https://example.com/napkin"),
-        ("Oak board", "64", "https://example.com/board"),
-    ):
-        product_id = portal.save_product(
-            shop_id,
-            product_id="",
-            title=title,
-            category="home",
-            price=price,
-            url=url,
-            description="A sample homeware piece for the test journey.",
-            image_url=f"{url}.jpg",
-            source="manual",
-            as_draft=True,
-            samples_enabled=True,
-        )
-        made.append({"id": product_id, "title": title, "shop_id": shop_id})
-        import listing_studio
-
-        listing_studio.lock_sheet(product_id, {"title": title, "category": "home", "confirmed": True, "piece_count": "1"})
-        state = listing_studio.state_for(product_id)
-        state["scenes"] = [{"id": str(uuid.uuid4()), "type": "in a home", "status": "Approved", "approved": True, "image": "placeholder", "reasons": []}]
-        state["angles"] = [{"name": "Tuesday place", "hook": "Ready when you are.", "caption": f"#Ad {title} for an ordinary night.", "approved": True}]
-        state["status"] = "Approved"
-    return made
+    if not hasattr(db, "memory_uat_by_email"):
+        db.memory_uat_by_email = {}
+    db.memory_uat_by_email[row["email"]] = row
 
 
 def create_set(notify_email: str) -> dict:
-    """Create the supplier, catalogue, and Creatr. Reuse the set when one already exists."""
+    """Create the supplier and Creatr for this email. The same email is reused. A different email is a new set."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
     if os.getenv("STRIPE_SECRET_KEY", "").startswith("sk_live"):
@@ -234,9 +215,10 @@ def create_set(notify_email: str) -> dict:
     email = (notify_email or "").strip().lower()
     if "@" not in email:
         raise ValueError("Enter an email address for the password link")
-    existing = current_set()
+    existing = current_set(email)
     if existing:
         existing["reused"] = True
+        _issue_invites(existing)
         return existing
     import secrets
 
@@ -285,7 +267,6 @@ def create_set(notify_email: str) -> dict:
     )
     if creator_id not in db.memory_creators:
         db.memory_creators[creator_id] = {"id": creator_id, "handle": f"@uat{creator_id.replace('-', '')[:8]}", "audience": 45000}
-    products = _catalogue(shop_id)
     portal.create_login(role="seller", email=email, password=secret, password_confirm=secret, shop_id=shop_id)
     portal.create_login(role="creator", email=email, password=creatr_secret, password_confirm=creatr_secret, creator_id=creator_id)
     row = {
@@ -294,64 +275,273 @@ def create_set(notify_email: str) -> dict:
         "shop_id": shop_id,
         "creator_id": creator_id,
         "audience": 45000,
-        "products": products,
+        "products": [],
         "billing": "sandbox",
         "invite_sent_at": None,
         "last_press_id": "",
         "reused": False,
     }
     _remember(row)
+    _issue_invites(row)
     return row
 
 
-def send_invite(press_id: str = "", base_url: str = "") -> dict:
-    """Email the two labelled links once for this press. No password is included."""
+def _brand_name(ids: dict) -> str:
+    import services
+
+    shop = services.fetch_shop(str(ids.get("shop_id") or ""))
+    if isinstance(shop, dict) and shop.get("name"):
+        return str(shop["name"])
+    return "your shop"
+
+
+def https_base(base_url: str = "") -> str:
+    base = (os.getenv("PUBLIC_BASE_URL", "") or base_url or "").strip().rstrip("/")
+    if not base.startswith("https://") or " " in base:
+        raise ValueError("The site address must be an absolute https URL")
+    return base
+
+
+def _invite_rows() -> list:
+    if not hasattr(db, "memory_uat_invites"):
+        db.memory_uat_invites = []
+    return db.memory_uat_invites
+
+
+def _find_invite(set_id: str, role: str) -> dict | None:
+    now = datetime.now(timezone.utc)
+    if db.configured():
+        from sqlalchemy import select
+
+        from models import UatInvite
+
+        with db.session_scope() as session:
+            row = session.scalar(
+                select(UatInvite).where(UatInvite.set_id == set_id, UatInvite.role == role).order_by(UatInvite.expires_at.desc())
+            )
+            if row is None:
+                return None
+            expires = row.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < now:
+                return None
+            return _invite_view(row)
+    for row in reversed(_invite_rows()):
+        if row["set_id"] == set_id and row["role"] == role and row["expires_at"] >= now:
+            return row
+    return None
+
+
+def invite_by_code(code: str, role: str) -> dict | None:
+    now = datetime.now(timezone.utc)
+    if db.configured():
+        from models import UatInvite
+
+        with db.session_scope() as session:
+            row = session.get(UatInvite, code)
+            if row is None or row.role != role:
+                return None
+            expires = row.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < now:
+                return None
+            return _invite_view(row)
+    for row in _invite_rows():
+        if row["id"] == code and row["role"] == role and row["expires_at"] >= now:
+            return row
+    return None
+
+
+def _issue_invites(row: dict) -> dict:
+    import secrets
+    from datetime import timedelta
+
+    paths = {}
+    expires = datetime.now(timezone.utc) + timedelta(hours=12)
+    for role, slug in (("seller", "s"), ("creator", "c")):
+        found = _find_invite(row["id"], role)
+        if found is None:
+            code = secrets.token_urlsafe(6)
+            record = {
+                "id": code,
+                "set_id": row["id"],
+                "role": role,
+                "email": row["email"],
+                "expires_at": expires,
+                "provider_id": "",
+                "sent_at": None,
+                "status": "",
+                "last_error": "",
+                "last_press_id": "",
+            }
+            if db.configured():
+                from models import UatInvite
+
+                with db.session_scope() as session:
+                    session.add(UatInvite(id=code, set_id=row["id"], role=role, email=row["email"], expires_at=expires))
+            _invite_rows().append(record)
+            found = record
+        paths[role] = f"/uat/invite/{slug}/{found['id']}"
+    row["supplier_path"] = paths["seller"]
+    row["creatr_path"] = paths["creator"]
+    return paths
+
+
+def _invite_view(row) -> dict:
+    sent_at = getattr(row, "sent_at", None)
+    if sent_at is not None and not isinstance(sent_at, str):
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        sent_at = sent_at.isoformat()
+    expires = row.expires_at if not isinstance(row, dict) else row["expires_at"]
+    if not isinstance(row, dict) and expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    source = row if isinstance(row, dict) else row
+    def pick(name, default=""):
+        if isinstance(source, dict):
+            return source.get(name, default)
+        return getattr(source, name, default)
+    return {
+        "id": pick("id"),
+        "set_id": pick("set_id"),
+        "role": pick("role"),
+        "email": pick("email"),
+        "expires_at": expires,
+        "provider_id": pick("provider_id") or "",
+        "sent_at": sent_at if not isinstance(row, dict) else row.get("sent_at"),
+        "status": pick("status") or "",
+        "last_error": pick("last_error") or "",
+        "last_press_id": pick("last_press_id") or "",
+    }
+
+
+def invite_states(set_id: str) -> dict:
+    return {role: found for role in ("seller", "creator") if (found := _find_invite(set_id, role))}
+
+
+def _save_invite_result(code: str, *, status: str, provider_id: str, last_error: str, press: str) -> dict:
+    when = datetime.now(timezone.utc) if status == "sent" else None
+    if db.configured():
+        from models import UatInvite
+
+        with db.session_scope() as session:
+            row = session.get(UatInvite, code)
+            if row is not None:
+                row.status = status
+                row.provider_id = (provider_id or "")[:64] or None
+                row.sent_at = when
+                row.last_error = (last_error or "")[:160] or None
+                row.last_press_id = press or None
+    saved = {
+        "status": status,
+        "provider_id": provider_id,
+        "sent_at": when.isoformat() if when else None,
+        "last_error": last_error,
+        "last_press_id": press,
+    }
+    for record in _invite_rows():
+        if record["id"] == code:
+            record.update(saved)
+    return saved
+
+
+def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: str = "") -> dict:
+    """Send the supplier invite and the Creatr invite. Pass role to retry one of them."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
-    ids = current_set()
+    ids = current_set(email) or current_set()
     if not ids or "@" not in str(ids.get("email") or ""):
         raise ValueError("Create a UAT set before sending the invite.")
     press = (press_id or "").strip()
     if press and press == (ids.get("last_press_id") or ""):
-        return {"sent": False, "duplicate": True, "invite_sent_at": ids.get("invite_sent_at"), "email": ids["email"]}
-    import auth
+        return {"sent": False, "duplicate": True, "invite_sent_at": ids.get("invite_sent_at"), "email": ids["email"], "roles": {}}
+    wanted = [role] if role in {"seller", "creator"} else ["seller", "creator"]
     import emailer
 
-    base = (base_url or os.getenv("PUBLIC_BASE_URL", "")).rstrip("/")
-    email = ids["email"]
-    supplier_token = auth.issue_form_token(f"uat-set:seller:{email}")
-    creatr_token = auth.issue_form_token(f"uat-set:creator:{email}")
-    result = emailer.send(
-        "uat_invite",
-        email,
-        supplier_url=f"{base}/uat/invite/{supplier_token}",
-        creatr_url=f"{base}/uat/invite/{creatr_token}",
-    )
-    provider_id = str(result.get("provider_id") or "").strip()
-    if not provider_id:
-        reason = str(result.get("reason") or "the mail service did not accept it")
-        return {"sent": False, "duplicate": False, "reason": reason, "invite_sent_at": None, "email": email}
-    sent_at = datetime.now(timezone.utc).isoformat()
-    logger.info("uat_invite resend_id=%s", provider_id)
-    if db.configured():
-        from models import UatSet
+    if emailer.invite_opted_out(ids["email"]):
+        return {
+            "sent": False,
+            "duplicate": False,
+            "reason": "This address has opted out of invites.",
+            "invite_sent_at": ids.get("invite_sent_at"),
+            "email": ids["email"],
+            "roles": {},
+        }
+    try:
+        base = https_base(base_url)
+    except ValueError as exc:
+        return {"sent": False, "duplicate": False, "reason": str(exc), "invite_sent_at": None, "email": ids["email"], "roles": {}}
+    paths = _issue_invites(ids)
+    templates = {"seller": "supplier_invite", "creator": "creatr_invite"}
+    brand_name = _brand_name(ids)
+    unsubscribe_url = emailer.invite_opt_out_url(base, ids["email"])
+    roles: dict = {}
+    attempted = False
+    for name in wanted:
+        current = _find_invite(ids["id"], name) or {}
+        if not current.get("id"):
+            roles[name] = {"sent": False, "reason": "That invite could not be prepared", "status": "failed"}
+            continue
+        if current.get("status") == "sent" and current.get("provider_id"):
+            roles[name] = {"sent": True, "skipped": True, "provider_id": current["provider_id"], "sent_at": current.get("sent_at"), "status": "sent"}
+            continue
+        attempted = True
+        result = emailer.send(
+            templates[name],
+            ids["email"],
+            url=f"{base}{paths[name]}",
+            first_name=str(ids.get("first_name") or ""),
+            brand_name=brand_name,
+            unsubscribe_url=unsubscribe_url,
+        )
+        provider_id = str(result.get("provider_id") or "").strip()
+        if provider_id:
+            saved = _save_invite_result(current["id"], status="sent", provider_id=provider_id[:64], last_error="", press=press)
+            logger.info("uat_invite role=%s resend_id=%s", name, provider_id)
+            roles[name] = {"sent": True, "provider_id": provider_id, "sent_at": saved["sent_at"], "status": "sent"}
+        else:
+            reason = str(result.get("reason") or "the mail service did not accept it")[:160]
+            _save_invite_result(current["id"], status="failed", provider_id="", last_error=reason, press=press)
+            logger.info("uat_invite role=%s failed", name)
+            roles[name] = {"sent": False, "reason": reason, "status": "failed"}
+    both = invite_states(ids["id"])
+    both_sent = both.get("seller", {}).get("status") == "sent" and both.get("creator", {}).get("status") == "sent"
+    sent_at = None
+    if both_sent:
+        sent_at = both["creator"].get("sent_at") or both["seller"].get("sent_at")
+    if attempted or both_sent:
+        ids["last_press_id"] = press
+        ids["invite_sent_at"] = sent_at
+        if db.configured():
+            from models import UatSet
 
-        with db.session_scope() as session:
-            row = session.get(UatSet, ids["id"])
-            if row is not None:
-                row.invite_sent_at = datetime.now(timezone.utc)
-                row.invite_provider_id = provider_id[:64]
-                row.last_press_id = press or None
-    ids["invite_sent_at"] = sent_at
-    ids["invite_provider_id"] = provider_id
-    ids["last_press_id"] = press
-    _sync(ids)
-    return {"sent": True, "duplicate": False, "invite_sent_at": sent_at, "invite_provider_id": provider_id, "email": email}
+            with db.session_scope() as session:
+                row = session.get(UatSet, ids["id"])
+                if row is not None:
+                    row.last_press_id = press or None
+                    if both_sent and row.invite_sent_at is None:
+                        row.invite_sent_at = datetime.now(timezone.utc)
+                        ids["invite_sent_at"] = row.invite_sent_at.isoformat()
+        _sync(ids)
+    failures = [row.get("reason") for row in roles.values() if not row.get("sent")]
+    distinct = list(dict.fromkeys(reason for reason in failures if reason))
+    sent_flag = all(row.get("sent") for row in roles.values()) and bool(roles)
+    return {
+        "sent": sent_flag,
+        "duplicate": False,
+        "already": not attempted and sent_flag,
+        "reason": distinct[0] if len(distinct) == 1 else "; ".join(distinct),
+        "invite_sent_at": ids.get("invite_sent_at"),
+        "email": ids["email"],
+        "roles": roles,
+    }
 
 
 def create_and_send(email: str, press_id: str, base_url: str = "") -> dict:
     created = create_set(email)
-    sent = send_invite(press_id, base_url)
+    sent = send_invite(press_id, base_url, email=created["email"])
     return {**created, **sent}
 
 
@@ -368,33 +558,43 @@ def open_invite(token: str) -> dict:
     return {"role": role, "email": email, "token": token}
 
 
-def activate_invite(token: str, *, born, attested: bool, password: str) -> dict:
+def activate_invite(token: str, *, born, attested: bool, password: str, role: str = "") -> dict:
     import creatr_age
     import portal
 
-    opened = open_invite(token)
     blocked = creatr_age.check_signup(born=born, attested=attested)
     if blocked:
         raise ValueError(blocked)
-    ids = current_set() or {}
-    if opened["email"] != ids.get("email"):
-        raise ValueError("That invite link is not valid")
-    subject = ids["shop_id"] if opened["role"] == "seller" else ids["creator_id"]
-    if opened["role"] == "seller" and ids.get("shop_id") not in db.memory_shops and not db.configured():
+    if role:
+        record = invite_by_code(token, role)
+        if record is None:
+            raise ValueError("That invite link is not valid or has expired.")
+        ids = current_set(record["email"]) or {}
+        opened_role = role
+        opened_email = record["email"]
+    else:
+        opened = open_invite(token)
+        ids = current_set(opened["email"]) or current_set() or {}
+        opened_role = opened["role"]
+        opened_email = opened["email"]
+    if opened_email != ids.get("email"):
+        raise ValueError("That invite link is not valid or has expired.")
+    subject = ids["shop_id"] if opened_role == "seller" else ids["creator_id"]
+    if opened_role == "seller" and ids.get("shop_id") not in db.memory_shops and not db.configured():
         from types import SimpleNamespace
 
         db.memory_shops[ids["shop_id"]] = SimpleNamespace(id=ids["shop_id"], name="Homeware supplier", is_pilot=True)
-    if opened["role"] == "creator" and ids.get("creator_id") not in db.memory_creators and not db.configured():
-        db.memory_creators[ids["creator_id"]] = {"id": ids["creator_id"], "handle": "@uat"}
+    if opened_role == "creator" and ids.get("creator_id") not in db.memory_creators and not db.configured():
+        db.memory_creators[ids["creator_id"]] = {"id": ids["creator_id"], "handle": "@uat", "audience": 45000}
     portal.create_login(
-        role=opened["role"],
-        email=opened["email"],
+        role=opened_role,
+        email=opened_email,
         password=password,
         password_confirm=password,
-        shop_id=ids["shop_id"] if opened["role"] == "seller" else None,
-        creator_id=ids["creator_id"] if opened["role"] == "creator" else None,
+        shop_id=ids["shop_id"] if opened_role == "seller" else None,
+        creator_id=ids["creator_id"] if opened_role == "creator" else None,
     )
-    return {"role": opened["role"], "email": opened["email"], "subject_id": subject}
+    return {"role": opened_role, "email": opened_email, "subject_id": subject}
 
 
 def simulate_sale(code: str = "UAT") -> dict:

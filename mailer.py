@@ -1,7 +1,8 @@
 """Mail sending interface with a Resend adapter.
 
 Transactional mail only. RESEND_API_KEY and RESEND_FROM turn sending on.
-EMAIL_FROM is accepted only when RESEND_FROM is unset. There is no reply-to.
+EMAIL_FROM is accepted only when RESEND_FROM is unset.
+Invite sends pass a Reply-To. Other templates leave it unset.
 When the key or From address is missing the adapter sends nothing, logs a
 warning, and returns status "no_provider" so callers can retry later.
 """
@@ -26,7 +27,17 @@ _warned = False
 
 
 class Mailer(Protocol):
-    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict: ...
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        sender: Optional[str] = None,
+    ) -> dict: ...
 
 
 class ResendMailer:
@@ -47,7 +58,17 @@ class ResendMailer:
     def ready(self) -> bool:
         return bool(self.api_key and self.sender)
 
-    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict:
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        sender: Optional[str] = None,
+    ) -> dict:
         global _warned
         if not self.ready:
             if not _warned:
@@ -55,7 +76,11 @@ class ResendMailer:
                 logger.warning("%s is not set. Email is logged only and NOTHING IS SENT.", missing)
                 _warned = True
             return {"status": NO_PROVIDER, "id": None}
-        payload = {"from": self.sender, "to": [to], "subject": subject, "text": text}
+        payload = {"from": sender or self.sender, "to": [to], "subject": subject, "text": text}
+        if html:
+            payload["html"] = html
+        if reply_to:
+            payload["reply_to"] = reply_to
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

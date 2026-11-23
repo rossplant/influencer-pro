@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.27.1
+
+UAT invites use the approved supplier and Creatr copy. Stripe stays sandbox only. This does not merge.
+
+- Each invite is the approved HTML and text. The subject is the title and the preheader is the hidden preview line. A missing first name is "Hi there".
+- Invites are sent from Ross at Plantr Collab, using the RESEND_FROM address, with Reply-To hello@plantr-collab.com. Both names are configurable.
+- The opt-out link records the address. The test-environment line is omitted on production.
+
+## 0.27.0
+
+UAT invites are branded HTML with short https links, and the supplier uploads the sample catalogue. Stripe stays sandbox only. This does not merge.
+
+- The invite copy sits in one template (subject, preheader, headline, body, button labels, footer). Send invite delivers two emails, a supplier invite and a Creatr invite, each with one button. Each email keeps its own Resend id and status. A failed one can be retried on its own.
+- Invite paths are short, expire, and need an absolute https site address. A bad link is a branded page.
+- The CSV template is the three homeware rows. A UAT set does not insert those products. A signed-out template request shows sign-in. Excel uploads get a page error, not raw JSON.
+- Old journey paths redirect. Browser 404s are branded. The UAT Creatr profile shows audience 45,000.
+- Admin can create a set without sending email. A different email starts a new set. Plantr and Alembic logs go to stdout.
+
 ## 0.26.3
 
 UAT invites are marked sent only when Resend accepts them. Stripe stays sandbox only. This does not merge.

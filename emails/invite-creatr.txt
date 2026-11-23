@@ -1,0 +1,46 @@
+Hi {{first_name}},
+
+You're invited as a Foundr Creatr to help shape Plantr Collab.
+Products you'd genuinely rate, matched to you. No cut of your
+sales.
+
+Your first two months are on us, then your Foundr plan starts on
+20 January. Details are in the app before you commit. You skip
+Contributr and start at Influencr, a tier other Creatrs earn after
+5 confirmed sales. Today: shown higher to suppliers, with priority
+sample requests (suppliers still decide).
+
+1. Contributr — on joining
+2. Influencr — YOU ARE HERE
+3. Trendsettr — 15 sales. Everything in Influencr, plus 48-hour
+   early access to new products, 'Selling fast' flag and insights
+   on fast- and high-selling goods
+4. Headlinr — 40 sales. Everything below, at the top of the bill
+
+Each step gives you more, earned through confirmed sales, never
+bought — the point of the pilot. Targets reviewed in January.
+
+A few minutes:
+
+1. Confirm you're 18+ and set a password
+2. Add your Creatr profile
+3. See your Matches, request a sample and content kit
+
+Set up my Creatr profile:
+
+{{invite_link}}
+
+Questions? Reply to this email.
+
+Ross Plant
+Plantr Collab
+
+We only use your details to set up your account.
+
+This invite is for you. Please don't forward the link.
+
+If you weren't expecting this invite, you can ignore it or opt out
+here:
+{{unsubscribe_url}}
+
+Test environment — this invite is for staging only.

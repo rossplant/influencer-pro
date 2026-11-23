@@ -1104,3 +1104,29 @@ class UatSet(Base):
     invite_provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class UatInvite(Base):
+    """A short UAT invite path. It expires and is not a long signed token."""
+
+    __tablename__ = "uat_invites"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    set_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class InviteOptOut(Base):
+    """An address that opted out of Plantr Collab invites."""
+
+    __tablename__ = "invite_opt_outs"
+
+    email: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
