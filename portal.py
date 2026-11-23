@@ -24,6 +24,7 @@ import auth
 import billing_config
 import catalogue
 import recognition
+import supplier_copy
 import db
 import events
 import scoring
@@ -456,6 +457,7 @@ def creator_offers(creator_id: str) -> list[dict]:
         item["tracking_path"] = link.get("tracking_path") if link else None
         item["direct_url"] = link.get("direct_url") if link else None
         item["platform_links"] = link.get("platform_links") if link else None
+        item["listing_tips"] = _approved_listing_tips(item.get("product_id"))
         if not recognition.supplier_visible_to_creators({"shopify_domain": item.get("shopify_domain")}):
             continue
         offers.append(item)
@@ -495,9 +497,11 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
     <nav>
       <a href="/seller">Home</a>
       <a href="/seller/products">Catalogue</a>
+      <a href="/dashboard/catalogue/listing-studio">Listing Studio</a>
       <a href="/seller/find">Collabs</a>
       <a href="/seller/profile">Settings</a>
     </nav>
+    <p class="pills"><a href="/seller/badges">Pays on time</a> <a href="/seller/badges">Top seller</a></p>
     """
     content = banner + nav + _seller_body(page, shop, csrf, base_url=base_url, **data)
     return HTMLResponse(_layout(shop["name"], content, "/seller/logout", session["csrf"]))
@@ -547,6 +551,7 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
     banner = f"<p class='banner'>{html.escape(error)}</p>" if error else ""
     return f"""
     <h1>{html.escape(shop['name'])}</h1>
+    <p><a href="/seller/badges">Notes Creatrs may see</a> · <a href="/seller/creatr-tiers">What Creatr tiers mean</a></p>
     <p>The account name above is the name from your invite. The business name is the trading name, and you can change it here.</p>
     {banner}
     <form method="post" action="/seller/profile">
@@ -559,6 +564,36 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
       <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
       <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
       <button type="submit">Save profile</button>
+    </form>
+    """
+
+
+def _listing_studio_page(shop: dict, csrf: str, data: dict) -> str:
+    products = data.get("products") or []
+    sample = recognition.listing_studio_price(6)
+    rows = []
+    for row in products:
+        status = recognition.listing_status(row.get("attributes"))
+        rows.append(
+            f"<tr><td>{html.escape(row['title'])}</td><td>{html.escape(status)}</td></tr>"
+        )
+    quote = recognition.listing_studio_price(1)
+    price_line = (
+        "Free per product in the pilot for up to 4 images and selling tips."
+        if quote["in_pilot"]
+        else "A$4.99 per product, including up to 4 images and selling tips."
+    )
+    return f"""
+    <h1>Listing Studio</h1>
+    <p>{html.escape(price_line)} Extra images are {html.escape(sample['extra_label'])} each. No pack price.</p>
+    <p>{html.escape(recognition.LISTING_STUDIO_NOTE)}</p>
+    <table><tr><th>Product</th><th>Listing Studio</th></tr>{''.join(rows)}</table>
+    <form method="post" action="/dashboard/catalogue/listing-studio">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <label>Product <select name="product_id">{''.join(f"<option value='{html.escape(row['id'])}'>{html.escape(row['title'])}</option>" for row in products)}</select></label>
+      <label>Selling tips <textarea name="tips"></textarea></label>
+      <label><input type="checkbox" name="approve" value="yes"> Approve for Creatrs</label>
+      <button type="submit">Save tips</button>
     </form>
     """
 
@@ -578,6 +613,7 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
             "<li>"
             f"{html.escape(row['title'])} · {html.escape(row.get('category') or '')} · "
             f"{'' if row.get('price') is None else row.get('price')} · {html.escape(row.get('url') or '')}"
+            f" · {html.escape(recognition.listing_status(row.get('attributes')))}"
             f" <a href='/seller/products?edit={html.escape(row['id'])}'>Edit</a>"
             f"{prompt}"
             "</li>"
@@ -625,6 +661,7 @@ def _products_page(shop: dict, csrf: str, data: dict) -> str:
     return f"""
     <h1>Products</h1>
     <p class="curation">{html.escape(catalogue.PRODUCTS_COPY)}</p>
+    <p>{html.escape(supplier_copy.PRODUCT_CAP)}</p>
     <p id="product-count">{count} {noun}</p>
     {warning_html}
     {first}
@@ -782,7 +819,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
         return f"""
         <h1>Home</h1>
-        <p>Carefully selected Creatrs, matched to your products.</p>
+        <p>{html.escape(supplier_copy.HOME_LINE)}</p>
         <p>{html.escape(recognition.momentum_line(int(data.get('confirmed_7d') or 0)))}</p>
         <p>{html.escape(recognition.QUALITY_STANDARD_SUPPLIER)}</p>
         {notice_html}
@@ -790,10 +827,26 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Month <input name="month" placeholder="2026-11" required></label>
           <label>What happened <input name="note"></label>
+          <p>{html.escape(supplier_copy.REVIEW_NOTE)}</p>
           <button type="submit">Request a review</button>
         </form>
         <p><a href="/seller/products">Open catalogue</a></p>
         """
+    if page == "badges":
+        return f"""
+        <h1>{html.escape(supplier_copy.BADGE_PAGE_TITLE)}</h1>
+        <p>{html.escape(supplier_copy.PAYS_ON_TIME_NOTE)}</p>
+        <p>{html.escape(supplier_copy.TOP_SELLER_NOTE)}</p>
+        """
+    if page == "creatr-tiers":
+        items = "".join(f"<li>{html.escape(line)}</li>" for line in supplier_copy.GLOSSARY)
+        return f"""
+        <h1>What Creatr tiers mean</h1>
+        <p>{html.escape(supplier_copy.GLOSSARY_LEAD)}</p>
+        <ul>{items}</ul>
+        """
+    if page == "listing":
+        return _listing_studio_page(shop, csrf, data)
     if page == "profile":
         return _profile_form(shop, csrf, data.get("profile_error") or "")
     if page == "products":
@@ -816,7 +869,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
                 pilot_invite=bool(creator.get("founding_number") or creator.get("signup_campaign") == "founding_curators"),
             )
             handle = html.escape(str(creator.get("handle") or creator.get("influencer_id") or ""))
-            handle = f"{handle} · {html.escape(earned['label'])}"
+            handle = f"{handle} · <a href='/seller/creatr-tiers'>{html.escape(earned['label'])}</a>"
             reasons = "".join(f"<li>{html.escape(str(reason))}</li>" for reason in match.get("reasons") or [])
             estimates = html.escape(json.dumps(match.get("estimates") or {}, default=str))
             item_id = html.escape(str(match.get("shortlist_item_id") or ""))
@@ -839,8 +892,14 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         waiting = ""
         if not ready:
             waiting = "<p>Complete a product before it can be matched. It needs a reason, the value for Creatrs, and a commission.</p>"
+        tier_filter = data.get("tier_filter") or ""
+        if tier_filter == "trendsettr_or_headlinr":
+            cards = [card for card in cards if "Trendsettr" in card or "Headlinr" in card]
         return f"""
         <h1>Collabs</h1>
+        <p>{html.escape(supplier_copy.SHORTLIST_INTRO)}</p>
+        <p><a href="/seller/find?tier=trendsettr_or_headlinr">{html.escape(supplier_copy.FILTER_LABEL)}</a></p>
+        <p><a href="/seller/creatr-tiers">What Creatr tiers mean</a></p>
         <p><a href="/seller/accepted">Accepted</a> · <a href="/seller/campaigns">Campaigns</a></p>
         {waiting}
         {match_form}
@@ -874,7 +933,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         """
     if page == "billing":
         return _billing_body("seller", data.get("billing") or {}, csrf, "/seller/billing")
-    return f"<h1>Accepted Creatrs</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul>"
+    return f"<h1>Accepted Creatrs</h1><ul>{''.join(rows) or '<li>None yet.</li>'}</ul><p>{html.escape(supplier_copy.ATTRIBUTION_NOTE)}</p>"
 
 
 def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
@@ -896,6 +955,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         return f"""
         <h1>Home</h1>
         <p>Find products you genuinely rate. Cultivate their story, your way.</p>
+        <h2>How you move up</h2>
         <p>Your tier: {html.escape(shown['label'])}.</p>
         <p>{html.escape(shown['next_line'])}</p>
         <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="{html.escape(str(target))}" aria-valuenow="{html.escape(str(shown['sales']))}" aria-label="{html.escape(shown['next_line'])}"><span style="width:{int(shown['percent'])}%"></span></div>
@@ -922,6 +982,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
           <label>Active categories <input name="active_categories" value="{html.escape(active)}"></label>
           <label>Desired categories <input name="desired_categories" value="{html.escape(desired)}"></label>
           <label><input type="checkbox" name="leaderboard_opt_in" value="yes"> Show me on the leaderboard</label>
+          <p><small>{html.escape(supplier_copy.LEADERBOARD_HELP)}</small></p>
           <button type="submit">Save profile</button>
         </form>
         """
@@ -968,10 +1029,18 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
             top_note = ""
             if offer.get("top_seller"):
                 top_note = f"<p><small>{html.escape(recognition.TOP_SELLER_EXPLANATION)}</small></p>"
+            tips = ""
+            if offer.get("listing_tips"):
+                tips = (
+                    "<section><h3>Listing Studio · selling tips</h3>"
+                    "<p>Example suggestions</p>"
+                    f"<p>{html.escape(str(offer['listing_tips']))}</p>"
+                    "<p>check before you post</p></section>"
+                )
             blocks.append(
                 f"<article>{photo}<h2>{html.escape(str(offer.get('product_title') or 'Product'))}</h2>"
                 f"<p>{html.escape(str(offer.get('shop_name') or ''))}</p>"
-                f"{badge_html}{promo}{fact_html}{top_note}"
+                f"{badge_html}{promo}{fact_html}{top_note}{tips}"
                 f"<p>Commission: {html.escape(rate_text)} Plantr does not pay this.</p>"
                 f"<ul>{points or '<li>No talking points yet.</li>'}</ul>"
                 f"{accept}"
@@ -994,6 +1063,8 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
 
 def _billing_body(role: str, billing: dict, csrf: str, action: str) -> str:
     notice = "" if billing.get("configured") else "<p>Stripe is not configured.</p>"
+    if role == "seller":
+        notice += f"<p>{html.escape(supplier_copy.BILLING_TIP)}</p>"
     tier = billing.get("plan_tier") or ("starter" if role == "seller" else "member")
     label = billing_config.tier_label(role, str(tier))
     plans = []
@@ -1150,6 +1221,7 @@ button.copy {{ background: #e7eeea; color: #16352b; margin-left: 8px; }}
 .banner {{ background: #fff4d6; padding: 8px 12px; border-radius: 8px; }}
 .meter {{ height: 10px; background: #efeaf3; border-radius: 999px; overflow: hidden; }}
 .meter span {{ display: block; height: 100%; background: #C2127F; }}
+.pills a {{ display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: #f6f5fb; color: #0D0B18; font-size: 12px; }}
 </style></head><body>
 <header><strong>Plantr Collab</strong>{logout_form}</header>
 <main>{body}</main>
@@ -1169,6 +1241,42 @@ document.querySelectorAll("button.copy").forEach((button) => {{
 </body></html>"""
 
 
+def _approved_listing_tips(product_id: Optional[str]) -> str:
+    if not product_id:
+        return ""
+    product = db.memory_products.get(product_id) if not db.configured() else None
+    if db.configured():
+        with db.session_scope() as session:
+            product = session.get(Product, product_id)
+            attrs = dict(getattr(product, "attributes", None) or {}) if product is not None else {}
+    else:
+        attrs = dict(getattr(product, "attributes", None) or {})
+    if recognition.listing_status(attrs) != "Approved":
+        return ""
+    return str(attrs.get("listing_tips") or "")
+
+
+def save_listing_tips(shop_id: str, product_id: str, tips: str, *, approved: bool) -> None:
+    problem = recognition.tips_problem(tips)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+    status = "Approved" if approved else "Awaiting your approval"
+
+    def _apply(product):
+        if product is None or getattr(product, "shop_id", None) != shop_id:
+            raise HTTPException(status_code=404, detail="Product not found")
+        attrs = dict(getattr(product, "attributes", None) or {})
+        attrs["listing_tips"] = (tips or "").strip()
+        attrs["listing_studio_status"] = status
+        product.attributes = attrs
+
+    if db.configured():
+        with db.session_scope() as session:
+            _apply(session.get(Product, product_id))
+        return
+    _apply(db.memory_products.get(product_id))
+
+
 def _product_row(row) -> dict:
     price = getattr(row, "price", None)
     rate = getattr(row, "commission_rate", None)
@@ -1184,6 +1292,7 @@ def _product_row(row) -> dict:
         "description": getattr(row, "description_short", None) or "",
         "commission_rate": float(rate) if rate is not None else None,
         "source": getattr(row, "source", None),
+        "attributes": dict(getattr(row, "attributes", None) or {}),
         "ready": catalogue.product_is_complete(row),
         "needs_completion": catalogue.needs_completion_prompt(row),
     }

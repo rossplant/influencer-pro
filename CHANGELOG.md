@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0
+
+Supplier notes and Listing Studio. Creatr tiers stay Creatr-only. Stripe stays sandbox only. This does not merge.
+
+- Top seller is 20 or more confirmed sales through 5 or more Creatrs in the last 3 months, and Pays on time. It is a badge only.
+- Suppliers have no tier screens. Header pills link to "Notes Creatrs may see" and a glossary, "What Creatr tiers mean".
+- Listing Studio is priced per product: free in the pilot for up to 4 images and selling tips, then A$4.99 from 20 January 2027. Extra images are A$1.50. The image API stays off.
+
 ## 0.21.0
 
 Creatr tiers, match allowances, and supplier badges. Stripe stays sandbox only. This does not merge.

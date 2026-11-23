@@ -39,7 +39,7 @@ When a shop is already at a cap, the API writes `usage_limit_hit`. A non-pilot s
 - No monthly match cap in this version
 
 ### Scale — US$149 / month, or US$1,490 / year
-- Unlimited products
+- No product cap in the pilot
 - Unlimited matches in this version
 - Shopify sync when it ships
 - API access

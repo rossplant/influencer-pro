@@ -23,7 +23,7 @@ SELLER_PANEL = (
     "Plantr Collab is a paid subscription service. Plans: Starter A$29, Growth A$79 or Scale A$229 per month "
     "(or 10 times the monthly price per year). Prices exclude GST. We are not yet registered for GST, so no GST "
     "is charged now. If we register, we will give you 30 days' notice before adding GST. Plans renew automatically "
-    "until you cancel. Plantr charges no transaction fee on sales. You pay Creatrs' commission directly. "
+    "until you cancel. Plantr takes no cut of your sales. You pay Creatrs' commission directly. "
     "Pilot suppliers are at no charge until 20 January 2027 unless cancelled, then A$39.50 a month "
     "for 3 months, then A$79 a month, but only if they choose to subscribe."
 )
@@ -40,7 +40,7 @@ SELLER_APPLY = (
     "Privacy Policy and agree that Plantr may use these details to assess my application. Applying does not create "
     "a contract or commit me to pay."
 )
-SELLER_AUTHORITY = "I am 18 or older and authorised to act for this business."
+SELLER_AUTHORITY = "You must be 18+ and authorised to apply for this business."
 CREATOR_AGE = "I am 18 or older."
 CREATOR_APPLY = (
     "I understand Creatr plans are paid (from A$15 a month ex GST), and that Foundrs are at no charge only until 20 January "

@@ -76,10 +76,9 @@ SALES_UNLOCK_MATCHES = 3
 RELIABILITY_BADGE = "Pays on time"
 TOP_SELLER_BADGE = "Top seller"
 TOP_SELLER_EXPLANATION = (
-    "Top seller is free and earned over the last 3 months. "
-    "It takes confirmed sales through Creatrs above the set level, "
-    "sales through more than one Creatr, commission paid on time, and samples sent on time. "
-    "It is not bought, and it does not change the order of your matches."
+    "Top seller is a note Creatrs may see. It takes 20 or more confirmed sales "
+    "through 5 or more Creatrs in the last 3 months, and Pays on time. "
+    "It is not bought, and it does not change match order."
 )
 
 LISTING_STUDIO_NOTE = "Listing Studio is off. No image service is called, and nothing is watermarked."
@@ -389,8 +388,8 @@ def top_seller_status(
     sample_total: int,
 ) -> dict:
     """Earned supplier status. Not a tier, and not a ranking input."""
-    min_sales = _int_env("TOP_SELLER_MIN_SALES", 8)
-    min_creators = _int_env("TOP_SELLER_MIN_CREATRS", 2)
+    min_sales = _int_env("TOP_SELLER_MIN_SALES", 20)
+    min_creators = _int_env("TOP_SELLER_MIN_CREATRS", 5)
     reliable = reliability_met(pay_on_time, pay_total, samples_on_time, sample_total)
     earned = int(confirmed_sales) >= min_sales and int(distinct_creators) >= min_creators and reliable
     return {
@@ -442,22 +441,56 @@ def listing_studio_enabled() -> bool:
     return os.getenv("LISTING_STUDIO_ENABLED", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
-def listing_quota(earned_key: str) -> dict:
-    """Free clean-up images. Trendsettr and Headlinr defaults are placeholders."""
-    defaults = {"contributr": 0, "influencr": 4, "trendsettr": 10, "headlinr": 25}
-    key = (earned_key or "contributr").strip().lower()
-    free = _int_env(f"LISTING_QUOTA_{key.upper()}", defaults.get(key, 0))
-    return {"free_images": free, "extra_price": os.getenv("LISTING_EXTRA_PRICE", "A$0.99").strip() or "A$0.99"}
+INCLUDED_IMAGES = 4
+EXTRA_IMAGE_CENTS = 150
+POST_PILOT_PRODUCT_CENTS = 499
+LISTING_STATUSES = ("Not started", "Awaiting your approval", "Approved")
 
 
-def clean_listing_image(image_ref: str, *, earned_key: str = "contributr") -> dict:
+def listing_studio_price(image_count: int, *, on: Optional[date] = None) -> dict:
+    """Per product. Pilot includes 4 images and tips at no charge. Extras are A$1.50. Not a tier perk."""
+    import billing_config
+    from zoneinfo import ZoneInfo
+
+    moment = on or datetime.now(timezone.utc).date()
+    end = billing_config.pilot_end().astimezone(ZoneInfo(billing_config.PILOT_TIMEZONE)).date()
+    in_pilot = moment < end
+    extra = max(0, int(image_count) - INCLUDED_IMAGES)
+    base = 0 if in_pilot else _int_env("LISTING_PRODUCT_CENTS", POST_PILOT_PRODUCT_CENTS)
+    extra_each = _int_env("LISTING_EXTRA_IMAGE_CENTS", EXTRA_IMAGE_CENTS)
+    return {
+        "in_pilot": in_pilot,
+        "included_images": INCLUDED_IMAGES,
+        "extra_images": extra,
+        "base_cents": base,
+        "extra_each_cents": extra_each,
+        "total_cents": base + extra * extra_each,
+        "tips_included": True,
+        "extra_label": "A$1.50",
+    }
+
+
+def listing_status(attributes: Optional[dict]) -> str:
+    raw = str((attributes or {}).get("listing_studio_status") or "")
+    if raw in LISTING_STATUSES:
+        return raw
+    return "Not started"
+
+
+def tips_problem(text: str) -> str:
+    """Tips stay inside the brief. No invented health, safety, eco, or best claims."""
+    lowered = (text or "").lower()
+    for phrase in ("clinically", "eco-friendly", "the best", "safest", "guaranteed"):
+        if phrase in lowered:
+            return "Keep tips to the approved brief. Remove health, safety, eco, or best claims."
+    return ""
+
+
+def clean_listing_image(image_ref: str) -> dict:
     """Stub. The paid image API is not called while the flag is off."""
     if not listing_studio_enabled():
         logger.info("Listing Studio is off. No image API was called.")
         return {"status": "disabled", "called_api": False, "watermark": False, "note": LISTING_STUDIO_NOTE}
-    quota = listing_quota(earned_key)
-    if quota["free_images"] < 1 and earned_key == "contributr":
-        return {"status": "none_on_this_tier", "called_api": False, "watermark": False}
     logger.info("Listing Studio flag is on, but no image provider is wired. Nothing was sent.")
     return {"status": "stub", "called_api": False, "watermark": False, "image_ref": image_ref}
 

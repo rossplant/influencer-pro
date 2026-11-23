@@ -188,8 +188,8 @@
     function shopEditor(shop) {
       return `<form id="shop-flags">
         <label><input name="is_pilot" type="checkbox" ${shop.is_pilot ? "checked" : ""}> Pilot</label>
-        <label><input name="is_underserved" type="checkbox" ${shop.is_underserved ? "checked" : ""}> Underserved</label>
-        <label for="underserved_reason">Reason</label>
+        <label><input name="is_underserved" type="checkbox" ${shop.is_underserved ? "checked" : ""}> Category need</label>
+        <label for="underserved_reason">Why this category needs more Creatrs</label>
         <input id="underserved_reason" name="underserved_reason" value="${shop.underserved_reason || ""}">
         <button type="submit">Save flags</button>
       </form>`;

@@ -52,12 +52,21 @@ def note_month(subject_type: str, subject_id: str, month: str, *, passed: bool, 
     )
     standing = standing_for(subject_type, subject_id)
     if standing["warning"] and email:
-        emailer.send(
-            "quality_warning",
-            email,
-            month=month,
-            standard=standing["quality_standard"],
-        )
+        if subject_type == "supplier":
+            import supplier_copy
+
+            emailer.send(
+                "supplier_badge_notice",
+                email,
+                notice=supplier_copy.badge_notice("Pays on time", False),
+            )
+        else:
+            emailer.send(
+                "quality_warning",
+                email,
+                month=month,
+                standard=standing["quality_standard"],
+            )
     return standing
 
 

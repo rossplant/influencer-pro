@@ -45,8 +45,10 @@ SUPPLIER_PAGE = {
     "cta": "Apply for a pilot place",
     "points": (
         "Plantr Collab carefully selects suppliers and Creatrs, using criteria designed to match the right Creatrs to your products.",
-        "Hand-reviewed Creatr shortlists.",
-        "Sales through your Creatrs' tracking links and codes are reported to you.",
+        "Track sales and pay Creatrs.",
+        "Headlinr means 40+ confirmed sales in the last 3 months.",
+        "Add a card at sign-up. There is no charge before 20 January 2027. We send reminders, and you can cancel any time.",
+        "No product cap in the pilot.",
         "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
         "Growth is at no charge from 20 November 2026 until 20 January 2027 unless cancelled, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
         "Starter is A$29 a month ex GST. Growth is A$79 ex GST. Scale is A$229 ex GST.",
