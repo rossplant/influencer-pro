@@ -1104,3 +1104,15 @@ class UatSet(Base):
     invite_provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class UatInvite(Base):
+    """A short UAT invite path. It expires and is not a long signed token."""
+
+    __tablename__ = "uat_invites"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    set_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)

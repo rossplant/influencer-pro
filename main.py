@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -17,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import admin_data
 import attribution
@@ -37,12 +39,27 @@ INFLUENCERS: Dict[str, Dict[str, Any]] = db.memory_creators
 _rate_buckets: Dict[str, deque] = defaultdict(deque)
 _rate_lock = threading.Lock()
 
+def configure_logging() -> None:
+    """Send Plantr and Alembic INFO logs to stdout. Uvicorn's root level would hide them."""
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    handler.setLevel(logging.INFO)
+    for name in ("plantr", "alembic"):
+        log = logging.getLogger(name)
+        log.setLevel(logging.INFO)
+        if not any(getattr(item, "_plantr_stdout", False) for item in log.handlers):
+            handler._plantr_stdout = True
+            log.addHandler(handler)
+
+
+configure_logging()
 ROOT = Path(__file__).resolve().parent
 HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.26.3"
+APP_VERSION = "0.27.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -574,6 +591,7 @@ async def _closed_receive():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    configure_logging()
     init_storage()
     import asyncio
 
@@ -627,6 +645,54 @@ class StagingRobotsMiddleware:
 
 
 app.add_middleware(StagingRobotsMiddleware)
+
+
+class HttpsRedirectMiddleware:
+    """http:// on the public Railway host becomes https. Local tests stay on http."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers") or []}
+            proto = headers.get("x-forwarded-proto") or scope.get("scheme") or ""
+            host = headers.get("host", "")
+            if proto == "http" and host.endswith("railway.app"):
+                path = scope.get("path") or "/"
+                query = scope.get("query_string") or b""
+                target = f"https://{host}{path}"
+                if query:
+                    target += "?" + query.decode("latin1")
+                response = RedirectResponse(target, status_code=301)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(HttpsRedirectMiddleware)
+
+
+def _browser_page(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return True
+    return False
+
+
+@app.exception_handler(StarletteHTTPException)
+async def branded_http_error(request: Request, exc: StarletteHTTPException):
+    if _browser_page(request) and exc.status_code in {401, 404, 422}:
+        import brand_ui
+
+        title = {401: "Sign in", 404: "Page not found", 422: "Try again"}[exc.status_code]
+        detail = exc.detail if isinstance(exc.detail, str) else "That page is not available."
+        body = f"<h1>{html.escape(title)}</h1><p>{html.escape(detail)}</p>"
+        if exc.status_code == 401:
+            body += "<p><a href=\"/admin\">Admin sign in</a> · <a href=\"/seller\">Supplier sign in</a> · <a href=\"/creator\">Creatr sign in</a></p>"
+        return HTMLResponse(brand_ui.document(title, body), status_code=exc.status_code)
+    headers = getattr(exc, "headers", None)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers or None)
 
 
 def _html(name: str) -> FileResponse:
@@ -1092,6 +1158,16 @@ async def admin_view_creator(creator_id: str, request: Request, admin: str = Dep
     return response
 
 
+def _catalogue_block(subject_id: str):
+    block = _commerce_block("seller", subject_id)
+    if block is None:
+        return None
+    shop = services.fetch_shop(subject_id) or {}
+    if shop.get("is_pilot"):
+        return None
+    return block
+
+
 def _commerce_block(role: str, subject_id: str):
     if stripe_billing.commerce_open(role, subject_id):
         return None
@@ -1102,6 +1178,33 @@ def _commerce_block(role: str, subject_id: str):
 @app.get("/seller")
 def seller_home(request: Request, _: None = Depends(rate_limit_portal)):
     return portal.render_seller(portal.seller_context(request), "home", base_url=billing_config.public_base_url(request))
+
+
+@app.get("/seller/onboarding")
+def seller_onboarding():
+    return RedirectResponse("/seller", status_code=302)
+
+
+@app.get("/seller/catalogue")
+@app.get("/seller/listings")
+def seller_catalogue_alias():
+    return RedirectResponse("/seller/products", status_code=302)
+
+
+@app.get("/seller/payouts")
+def seller_payouts():
+    return RedirectResponse("/seller/billing", status_code=302)
+
+
+@app.get("/creator/onboarding")
+def creator_onboarding():
+    return RedirectResponse("/creator", status_code=302)
+
+
+@app.get("/creator/matches")
+@app.get("/creator/browse")
+def creator_matches_alias():
+    return RedirectResponse("/creator/offers", status_code=302)
 
 
 @app.post("/seller/quality-review")
@@ -1205,8 +1308,10 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
 
 @app.get("/seller/products/csv-template")
 def seller_csv_template(request: Request, _: None = Depends(rate_limit_portal)):
-    session = portal.require_seller(request)
-    blocked = _commerce_block("seller", session["subject_id"])
+    session = portal.seller_context(request)
+    if session is None:
+        return portal.login_page("seller")
+    blocked = _catalogue_block(session["subject_id"])
     if blocked is not None:
         return blocked
     import catalogue
@@ -1223,16 +1328,35 @@ async def seller_import_csv(request: Request, _: None = Depends(rate_limit_porta
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    blocked = _commerce_block("seller", session["subject_id"])
+    blocked = _catalogue_block(session["subject_id"])
     if blocked is not None:
         return blocked
     upload = form.get("file")
-    if not hasattr(upload, "read"):
-        raise HTTPException(status_code=422, detail="Choose a CSV file")
-    payload = await upload.read()
+    payload = await upload.read() if hasattr(upload, "read") else b""
+    name = str(getattr(upload, "filename", "") or "").lower()
     import catalogue
 
-    rows = catalogue.parse_product_csv(payload)
+    def _import_error(detail: str):
+        if "text/html" not in request.headers.get("accept", ""):
+            raise HTTPException(status_code=422, detail=detail)
+        page = portal.render_seller(
+            session,
+            "products",
+            base_url=billing_config.public_base_url(request),
+            products=portal.seller_products(session["subject_id"]),
+            import_error=detail,
+        )
+        page.status_code = 422
+        return page
+
+    if not hasattr(upload, "read"):
+        return _import_error("Choose a CSV file. Excel files are not accepted.")
+    if name.endswith((".xlsx", ".xls")) or payload.startswith(b"PK"):
+        return _import_error("Upload a CSV file. Excel files are not accepted.")
+    try:
+        rows = catalogue.parse_product_csv(payload)
+    except HTTPException as exc:
+        return _import_error(str(exc.detail))
     return portal.render_seller(
         session,
         "csv_preview",
@@ -1246,7 +1370,7 @@ async def seller_import_drafts(request: Request, _: None = Depends(rate_limit_po
     session = portal.require_seller(request)
     form = await request.form()
     portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
-    blocked = _commerce_block("seller", session["subject_id"])
+    blocked = _catalogue_block(session["subject_id"])
     if blocked is not None:
         return blocked
     rows = portal._picked_rows(form)

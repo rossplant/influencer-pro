@@ -115,11 +115,7 @@ TEMPLATES = {
     },
     "uat_invite": {
         "subject": "Your Plantr Collab test invites",
-        "body": (
-            "Supplier invite (homeware supplier): {supplier_url}. "
-            "Creatr invite (45,000 audience): {creatr_url}. "
-            "All users must be 18 or over. Set a password on each link. These are test accounts."
-        ),
+        "body": "These are test accounts. There are two journeys. All users must be 18 or over.",
     },
     "quality_warning": {
         "subject": "Quality standard missed for {month}",
@@ -138,10 +134,37 @@ TEMPLATES = {
 }
 
 
+def uat_invite_parts(supplier_url: str, creatr_url: str) -> tuple[str, str]:
+    """Plain text keeps each URL on its own line. HTML uses button links. No catalogue."""
+    text = (
+        "These are test accounts. There are two journeys. All users must be 18 or over.\n"
+        "\n"
+        "Open the supplier invite\n"
+        f"<{supplier_url}>\n"
+        "\n"
+        "Open the Creatr invite\n"
+        f"<{creatr_url}>\n"
+    )
+    html_body = (
+        "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;font-family:Inter,Arial,sans-serif;color:#17211c;background:#ffffff\">"
+        "<p style=\"margin:0 0 8px;font-weight:700;color:#C2127F\">Plantr Collab</p>"
+        "<h1 style=\"font-size:24px\">Your test invites</h1>"
+        "<p>These are test accounts. There are two journeys. All users must be 18 or over.</p>"
+        f"<p><a href=\"{supplier_url}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">Open the supplier invite</a></p>"
+        f"<p><a href=\"{creatr_url}\" style=\"background:#C2127F;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block\">Open the Creatr invite</a></p>"
+        "<p>No cut of your sales.</p>"
+        "</body></html>"
+    )
+    return text, html_body
+
+
 def send(template_key: str, to_email: str, **values) -> dict:
     spec = TEMPLATES[template_key]
     subject = spec["subject"].format(**values)
     body = spec["body"].format(**values)
+    html_body = None
+    if template_key == "uat_invite":
+        body, html_body = uat_invite_parts(str(values.get("supplier_url") or ""), str(values.get("creatr_url") or ""))
     row = {
         "id": str(uuid.uuid4()),
         "template_key": template_key,
@@ -157,7 +180,7 @@ def send(template_key: str, to_email: str, **values) -> dict:
         db.memory_emails.append(row)
     sender = values.pop("_mailer", None) if "_mailer" in values else None
     result = (sender or mailer.default()).send(
-        to=to_email, subject=subject, text=body, idempotency_key=f"{template_key}:{row['id']}"
+        to=to_email, subject=subject, text=body, html=html_body, idempotency_key=f"{template_key}:{row['id']}"
     )
     sent = result.get("status") == mailer.SENT
     logger.info("email template=%s to=%s status=%s", template_key, _mask(to_email), result.get("status"))

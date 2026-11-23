@@ -26,7 +26,7 @@ _warned = False
 
 
 class Mailer(Protocol):
-    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict: ...
+    def send(self, *, to: str, subject: str, text: str, html: Optional[str] = None, idempotency_key: Optional[str] = None) -> dict: ...
 
 
 class ResendMailer:
@@ -47,7 +47,7 @@ class ResendMailer:
     def ready(self) -> bool:
         return bool(self.api_key and self.sender)
 
-    def send(self, *, to: str, subject: str, text: str, idempotency_key: Optional[str] = None) -> dict:
+    def send(self, *, to: str, subject: str, text: str, html: Optional[str] = None, idempotency_key: Optional[str] = None) -> dict:
         global _warned
         if not self.ready:
             if not _warned:
@@ -56,6 +56,8 @@ class ResendMailer:
                 _warned = True
             return {"status": NO_PROVIDER, "id": None}
         payload = {"from": self.sender, "to": [to], "subject": subject, "text": text}
+        if html:
+            payload["html"] = html
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.27.0
+
+UAT invites are branded HTML with short https links, and the supplier uploads the sample catalogue. Stripe stays sandbox only. This does not merge.
+
+- The invite email has two button links and a text version with each URL on its own line. No attachment and no product list.
+- Invite paths are short, expire, and need an absolute https site address. A bad link is a branded page.
+- The CSV template is the three homeware rows. A UAT set does not insert those products. A signed-out template request shows sign-in. Excel uploads get a page error, not raw JSON.
+- Old journey paths redirect. Browser 404s are branded. The UAT Creatr profile shows audience 45,000.
+- Admin can create a set without sending email. A different email starts a new set. Plantr and Alembic logs go to stdout.
+
 ## 0.26.3
 
 UAT invites are marked sent only when Resend accepts them. Stripe stays sandbox only. This does not merge.

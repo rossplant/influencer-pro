@@ -1,6 +1,7 @@
 """Resend requests identify the app, and a failed send is not treated as delivered."""
 
 import io
+import json
 import logging
 import urllib.error
 import urllib.request
@@ -29,15 +30,18 @@ def test_resend_request_sets_a_user_agent_and_json_content_type(monkeypatch):
     def fake_urlopen(request, timeout=10):
         captured["ua"] = request.get_header("User-agent")
         captured["type"] = request.get_header("Content-type")
+        captured["body"] = json.loads(request.data.decode())
         return _Body(b'{"id":"re_abc"}')
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     result = mailer.ResendMailer(api_key="secret-key", sender="Plantr <noreply@example.com>").send(
-        to="person@example.com", subject="Hello", text="the message body"
+        to="person@example.com", subject="Hello", text="the message body", html="<p>Open the supplier invite</p>"
     )
     assert result == {"status": mailer.SENT, "id": "re_abc"}
     assert captured["ua"] == f"PlantrCollab/{APP_VERSION}"
     assert captured["type"] == "application/json"
+    assert captured["body"]["html"] == "<p>Open the supplier invite</p>"
+    assert "attachments" not in captured["body"]
     assert "secret-key" not in captured["ua"]
 
 
@@ -64,3 +68,26 @@ def test_resend_failure_logs_status_and_name_not_the_key_or_body(monkeypatch, ca
     assert "browser_signature_banned" in caplog.text
     assert "secret-key" not in caplog.text
     assert "the message body" not in caplog.text
+
+
+def test_uat_invite_email_is_branded_html_and_plain_links(tmp_path):
+    import emailer
+
+    supplier = "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc"
+    creatr = "https://influencer-pro-staging.up.railway.app/uat/invite/c/def"
+    text, html_body = emailer.uat_invite_parts(supplier, creatr)
+    assert "Open the supplier invite" in html_body
+    assert "Open the Creatr invite" in html_body
+    assert f'href="{supplier}"' in html_body
+    assert f'href="{creatr}"' in html_body
+    assert "#C2127F" in html_body
+    assert "<https://influencer-pro-staging.up.railway.app/uat/invite/s/abc>" in text.splitlines()
+    assert "<https://influencer-pro-staging.up.railway.app/uat/invite/c/def>" in text.splitlines()
+    blob = (text + html_body).lower()
+    for banned in ("stoneware", "napkin", "oak board", "attachment", "content-disposition"):
+        assert banned not in blob
+    path = tmp_path / "uat-invite-email.html"
+    path.write_text(html_body, encoding="utf-8")
+    artifact = __import__("pathlib").Path("/opt/cursor/artifacts/uat-invite-email.html")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(html_body, encoding="utf-8")

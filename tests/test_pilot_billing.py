@@ -253,8 +253,8 @@ class RecordingMailer:
         self.status = status
         self.sent = []
 
-    def send(self, *, to, subject, text, idempotency_key=None):
-        self.sent.append({"to": to, "subject": subject, "text": text})
+    def send(self, *, to, subject, text, html=None, idempotency_key=None):
+        self.sent.append({"to": to, "subject": subject, "text": text, "html": html})
         return {"status": self.status, "id": f"re_{len(self.sent)}" if self.status == mailer.SENT else None}
 
 

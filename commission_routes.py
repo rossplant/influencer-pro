@@ -148,8 +148,20 @@ def register(app) -> None:
         )
 
     @app.get("/seller/shopify/install")
-    def seller_shopify_install(shop: str, request: Request, _: None = portal_limit):
-        session = _seller(request)
+    def seller_shopify_install(request: Request, shop: str = ""):
+        session = portal.seller_context(request)
+        if session is None:
+            return portal.login_page("seller")
+        if not (shop or "").strip():
+            import brand_ui
+
+            body = (
+                "<h1>Connect Shopify</h1>"
+                "<p>Add the Shopify domain in Settings before connecting the store. "
+                "Use a domain such as the-store.myshopify.com.</p>"
+                "<p><a href=\"/seller/profile\">Open Settings</a></p>"
+            )
+            return HTMLResponse(brand_ui.document("Connect Shopify", body))
         redirect_uri = billing_config.public_base_url(request) + "/shopify/oauth/callback"
         return RedirectResponse(shopify_sync.begin_oauth(session["subject_id"], shop, redirect_uri=redirect_uri), status_code=303)
 

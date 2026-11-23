@@ -23,15 +23,15 @@ def test_create_from_an_empty_database_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
     first = uat_mode.create_set("partner@example.com")
     second = uat_mode.create_set("other@example.com")
-    assert second["shop_id"] == first["shop_id"]
-    assert second["reused"] is True
+    assert second["shop_id"] != first["shop_id"]
+    assert second["reused"] is False
+    again = uat_mode.create_set("partner@example.com")
+    assert again["shop_id"] == first["shop_id"]
+    assert again["reused"] is True
     with db.session_scope() as session:
-        shops = session.scalars(select(Shop)).all()
-        assert len(shops) == 1
-        assert shops[0].name == "Homeware supplier"
-        assert shops[0].business_name == "Homeware supplier"
-        titles = set(session.scalars(select(Product.title).where(Product.shop_id == shops[0].id)).all())
-        assert titles == {"Stoneware bowl", "Linen napkin", "Oak board"}
+        assert session.scalar(select(func.count()).select_from(Shop)) == 2
+        products = session.scalars(select(Product).where(Product.shop_id == first["shop_id"])).all()
+        assert products == []
         roles = set(
             session.scalars(select(PortalAccount.role).where(PortalAccount.email == "partner@example.com")).all()
         )
@@ -39,7 +39,9 @@ def test_create_from_an_empty_database_is_idempotent(tmp_path, monkeypatch):
         creator = session.get(Creator, first["creator_id"])
         assert creator.avg_views == 45000
         assert creator.profile["audience"] == 45000
-        assert session.scalar(select(func.count()).select_from(UatSet)) == 1
+        assert session.scalar(select(func.count()).select_from(UatSet)) == 2
+        shop = session.get(Shop, first["shop_id"])
+        assert shop.name == "Homeware supplier"
 
 
 def _deliver(monkeypatch, provider_id="re_test_123"):

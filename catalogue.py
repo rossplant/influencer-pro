@@ -25,16 +25,18 @@ MAX_CSV_ROWS = 500
 CSV_COLUMNS = ("title", "url", "price", "category", "image_url", "commission")
 TEMPLATE_CSV = (
     "title,url,price,category,image_url,commission\n"
-    "Ceramic pourer,https://example.com/pourer,42,home,https://example.com/pourer.jpg,15\n"
+    "Stoneware bowl,https://example.com/bowl,42,home,https://example.com/bowl.jpg,15\n"
+    "Linen napkin,https://example.com/napkin,18,home,https://example.com/napkin.jpg,10\n"
+    "Oak board,https://example.com/board,64,home,https://example.com/board.jpg,12\n"
 )
 
 PRODUCTS_COPY = (
-    "List the products you actually want a creator to talk about. "
+    "List the products you actually want a Creatr to talk about. "
     "A short list, with a plain reason for each one, is what we use. You do not need to add the whole shop."
 )
 FIRST_PRODUCT_COPY = (
     "Start with one product you have chosen on purpose. "
-    "Say why it is on the list and what a creator's audience gets from it."
+    "Say why it is on the list and what a Creatr's audience gets from it."
 )
 COMPLETE_PROMPT = "Complete this product"
 
