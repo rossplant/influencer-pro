@@ -124,13 +124,14 @@ def reset() -> None:
     if db.configured():
         from sqlalchemy import delete, select
 
-        from models import PortalAccount, UatFeedback, UatSet
+        from models import PortalAccount, UatFeedback, UatInvite, UatSet
 
         with db.session_scope() as session:
             session.execute(delete(UatFeedback))
             row = session.scalar(select(UatSet))
             if row is not None:
                 session.execute(delete(PortalAccount).where(PortalAccount.email == row.email))
+            session.execute(delete(UatInvite))
             session.execute(delete(UatSet))
     db.memory_uat_feedback = []
     db.memory_uat_ids = {}
@@ -316,7 +317,7 @@ def _find_invite(set_id: str, role: str) -> dict | None:
                 expires = expires.replace(tzinfo=timezone.utc)
             if expires < now:
                 return None
-            return {"id": row.id, "set_id": row.set_id, "role": row.role, "email": row.email, "expires_at": expires}
+            return _invite_view(row)
     for row in reversed(_invite_rows()):
         if row["set_id"] == set_id and row["role"] == role and row["expires_at"] >= now:
             return row
@@ -337,7 +338,7 @@ def invite_by_code(code: str, role: str) -> dict | None:
                 expires = expires.replace(tzinfo=timezone.utc)
             if expires < now:
                 return None
-            return {"id": row.id, "set_id": row.set_id, "role": row.role, "email": row.email}
+            return _invite_view(row)
     for row in _invite_rows():
         if row["id"] == code and row["role"] == role and row["expires_at"] >= now:
             return row
@@ -354,7 +355,18 @@ def _issue_invites(row: dict) -> dict:
         found = _find_invite(row["id"], role)
         if found is None:
             code = secrets.token_urlsafe(6)
-            record = {"id": code, "set_id": row["id"], "role": role, "email": row["email"], "expires_at": expires}
+            record = {
+                "id": code,
+                "set_id": row["id"],
+                "role": role,
+                "email": row["email"],
+                "expires_at": expires,
+                "provider_id": "",
+                "sent_at": None,
+                "status": "",
+                "last_error": "",
+                "last_press_id": "",
+            }
             if db.configured():
                 from models import UatInvite
 
@@ -368,8 +380,66 @@ def _issue_invites(row: dict) -> dict:
     return paths
 
 
-def send_invite(press_id: str = "", base_url: str = "", email: str = "") -> dict:
-    """Email the two labelled links once for this press. No password is included."""
+def _invite_view(row) -> dict:
+    sent_at = getattr(row, "sent_at", None)
+    if sent_at is not None and not isinstance(sent_at, str):
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        sent_at = sent_at.isoformat()
+    expires = row.expires_at if not isinstance(row, dict) else row["expires_at"]
+    if not isinstance(row, dict) and expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    source = row if isinstance(row, dict) else row
+    def pick(name, default=""):
+        if isinstance(source, dict):
+            return source.get(name, default)
+        return getattr(source, name, default)
+    return {
+        "id": pick("id"),
+        "set_id": pick("set_id"),
+        "role": pick("role"),
+        "email": pick("email"),
+        "expires_at": expires,
+        "provider_id": pick("provider_id") or "",
+        "sent_at": sent_at if not isinstance(row, dict) else row.get("sent_at"),
+        "status": pick("status") or "",
+        "last_error": pick("last_error") or "",
+        "last_press_id": pick("last_press_id") or "",
+    }
+
+
+def invite_states(set_id: str) -> dict:
+    return {role: found for role in ("seller", "creator") if (found := _find_invite(set_id, role))}
+
+
+def _save_invite_result(code: str, *, status: str, provider_id: str, last_error: str, press: str) -> dict:
+    when = datetime.now(timezone.utc) if status == "sent" else None
+    if db.configured():
+        from models import UatInvite
+
+        with db.session_scope() as session:
+            row = session.get(UatInvite, code)
+            if row is not None:
+                row.status = status
+                row.provider_id = (provider_id or "")[:64] or None
+                row.sent_at = when
+                row.last_error = (last_error or "")[:160] or None
+                row.last_press_id = press or None
+    saved = {
+        "status": status,
+        "provider_id": provider_id,
+        "sent_at": when.isoformat() if when else None,
+        "last_error": last_error,
+        "last_press_id": press,
+    }
+    for record in _invite_rows():
+        if record["id"] == code:
+            record.update(saved)
+    return saved
+
+
+def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: str = "") -> dict:
+    """Send the supplier invite and the Creatr invite. Pass role to retry one of them."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
     ids = current_set(email) or current_set()
@@ -377,40 +447,69 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "") -> dict
         raise ValueError("Create a UAT set before sending the invite.")
     press = (press_id or "").strip()
     if press and press == (ids.get("last_press_id") or ""):
-        return {"sent": False, "duplicate": True, "invite_sent_at": ids.get("invite_sent_at"), "email": ids["email"]}
+        return {"sent": False, "duplicate": True, "invite_sent_at": ids.get("invite_sent_at"), "email": ids["email"], "roles": {}}
+    wanted = [role] if role in {"seller", "creator"} else ["seller", "creator"]
     import emailer
 
     try:
         base = https_base(base_url)
     except ValueError as exc:
-        return {"sent": False, "duplicate": False, "reason": str(exc), "invite_sent_at": None, "email": ids["email"]}
+        return {"sent": False, "duplicate": False, "reason": str(exc), "invite_sent_at": None, "email": ids["email"], "roles": {}}
     paths = _issue_invites(ids)
-    result = emailer.send(
-        "uat_invite",
-        ids["email"],
-        supplier_url=f"{base}{paths['seller']}",
-        creatr_url=f"{base}{paths['creator']}",
-    )
-    provider_id = str(result.get("provider_id") or "").strip()
-    if not provider_id:
-        reason = str(result.get("reason") or "the mail service did not accept it")
-        return {"sent": False, "duplicate": False, "reason": reason, "invite_sent_at": None, "email": email}
-    sent_at = datetime.now(timezone.utc).isoformat()
-    logger.info("uat_invite resend_id=%s", provider_id)
-    if db.configured():
-        from models import UatSet
+    templates = {"seller": "supplier_invite", "creator": "creatr_invite"}
+    roles: dict = {}
+    attempted = False
+    for name in wanted:
+        current = _find_invite(ids["id"], name) or {}
+        if not current.get("id"):
+            roles[name] = {"sent": False, "reason": "That invite could not be prepared", "status": "failed"}
+            continue
+        if current.get("status") == "sent" and current.get("provider_id"):
+            roles[name] = {"sent": True, "skipped": True, "provider_id": current["provider_id"], "sent_at": current.get("sent_at"), "status": "sent"}
+            continue
+        attempted = True
+        result = emailer.send(templates[name], ids["email"], url=f"{base}{paths[name]}")
+        provider_id = str(result.get("provider_id") or "").strip()
+        if provider_id:
+            saved = _save_invite_result(current["id"], status="sent", provider_id=provider_id[:64], last_error="", press=press)
+            logger.info("uat_invite role=%s resend_id=%s", name, provider_id)
+            roles[name] = {"sent": True, "provider_id": provider_id, "sent_at": saved["sent_at"], "status": "sent"}
+        else:
+            reason = str(result.get("reason") or "the mail service did not accept it")[:160]
+            _save_invite_result(current["id"], status="failed", provider_id="", last_error=reason, press=press)
+            logger.info("uat_invite role=%s failed", name)
+            roles[name] = {"sent": False, "reason": reason, "status": "failed"}
+    both = invite_states(ids["id"])
+    both_sent = both.get("seller", {}).get("status") == "sent" and both.get("creator", {}).get("status") == "sent"
+    sent_at = None
+    if both_sent:
+        sent_at = both["creator"].get("sent_at") or both["seller"].get("sent_at")
+    if attempted or both_sent:
+        ids["last_press_id"] = press
+        ids["invite_sent_at"] = sent_at
+        if db.configured():
+            from models import UatSet
 
-        with db.session_scope() as session:
-            row = session.get(UatSet, ids["id"])
-            if row is not None:
-                row.invite_sent_at = datetime.now(timezone.utc)
-                row.invite_provider_id = provider_id[:64]
-                row.last_press_id = press or None
-    ids["invite_sent_at"] = sent_at
-    ids["invite_provider_id"] = provider_id
-    ids["last_press_id"] = press
-    _sync(ids)
-    return {"sent": True, "duplicate": False, "invite_sent_at": sent_at, "invite_provider_id": provider_id, "email": email}
+            with db.session_scope() as session:
+                row = session.get(UatSet, ids["id"])
+                if row is not None:
+                    row.last_press_id = press or None
+                    if both_sent and row.invite_sent_at is None:
+                        row.invite_sent_at = datetime.now(timezone.utc)
+                        ids["invite_sent_at"] = row.invite_sent_at.isoformat()
+        _sync(ids)
+    failures = [row.get("reason") for row in roles.values() if not row.get("sent")]
+    distinct = list(dict.fromkeys(reason for reason in failures if reason))
+    sent_flag = all(row.get("sent") for row in roles.values()) and bool(roles)
+    return {
+        "sent": sent_flag,
+        "duplicate": False,
+        "already": not attempted and sent_flag,
+        "reason": distinct[0] if len(distinct) == 1 else "; ".join(distinct),
+        "invite_sent_at": ids.get("invite_sent_at"),
+        "email": ids["email"],
+        "roles": roles,
+    }
 
 
 def create_and_send(email: str, press_id: str, base_url: str = "") -> dict:

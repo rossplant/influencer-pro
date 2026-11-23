@@ -113,3 +113,60 @@ def test_browser_journey_without_sending_email(monkeypatch):
     assert unknown.status_code == 404
     assert "text/html" in unknown.headers["content-type"]
     assert sent == []
+
+
+def test_send_invite_delivers_two_emails_and_a_failed_one_retries_alone(monkeypatch):
+    _setup(monkeypatch)
+    monkeypatch.setenv("UAT_MODE", "1")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://influencer-pro-staging.up.railway.app")
+    calls = []
+
+    class Split:
+        creatr_ok = False
+
+        def send(self, **kwargs):
+            calls.append(kwargs)
+            subject = kwargs.get("subject") or ""
+            if "Creatr" in subject and not Split.creatr_ok:
+                return {"status": mailer.FAILED, "id": None, "reason": "HTTP 403"}
+            if "Creatr" in subject:
+                return {"status": mailer.SENT, "id": "re_creatr"}
+            return {"status": mailer.SENT, "id": "re_supplier"}
+
+    monkeypatch.setattr(mailer, "default", lambda: Split())
+    admin = _cookie_header(_login())
+    page = client.get("/admin/uat", headers={**admin, **HTML})
+    token = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    created = client.post(
+        "/admin/uat/create-set",
+        data={"csrf_token": token, "email": "uat-two@example.com"},
+        headers={**admin, **HTML},
+    )
+    assert "not sent yet" in created.text
+    send_token = created.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    press = created.text.split('name="press_id" value="', 1)[1].split('"', 1)[0]
+    sent_page = client.post(
+        "/admin/uat/send",
+        data={"csrf_token": send_token, "email": "uat-two@example.com", "press_id": press},
+        headers={**admin, **HTML},
+    )
+    assert sent_page.status_code == 200
+    assert "Supplier invite sent" in sent_page.text
+    assert "re_supplier" in sent_page.text
+    assert "Creatr invite failed: HTTP 403" in sent_page.text
+    assert "Retry the Creatr invite" in sent_page.text
+    assert len(calls) == 2
+    assert all(call.get("html", "").count("<a ") == 1 for call in calls)
+    Split.creatr_ok = True
+    before_role, after_role = sent_page.text.split('name="role" value="creator"', 1)
+    retry_token = before_role.rsplit('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    retry_press = after_role.split('name="press_id" value="', 1)[1].split('"', 1)[0]
+    retried = client.post(
+        "/admin/uat/send",
+        data={"csrf_token": retry_token, "email": "uat-two@example.com", "press_id": retry_press, "role": "creator"},
+        headers={**admin, **HTML},
+    )
+    assert "Creatr invite sent" in retried.text
+    assert "re_creatr" in retried.text
+    assert len(calls) == 3
+    assert "Creatr" in (calls[-1].get("subject") or "")

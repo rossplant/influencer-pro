@@ -131,7 +131,7 @@ TEMPLATES = {
 
 
 # Placeholder invite copy. Marketing replaces these fields. Keep each email under about 120 words.
-# Per-role emails have one button. The combined UAT email carries both journeys.
+# Each email has one button. Send invite delivers both of these. There is no combined email.
 INVITE_COPY = {
     "supplier_invite": {
         "subject": "Your Plantr Collab supplier test invite",
@@ -147,17 +147,6 @@ INVITE_COPY = {
         "headline": "Creatr test invite",
         "body": "This is a test account for the Creatr journey. Set a password to continue. All users must be 18 or over.",
         "buttons": (("Open the Creatr invite", "url"),),
-        "footer": "Plantr Collab. No cut of your sales.",
-    },
-    "uat_invite": {
-        "subject": "Your Plantr Collab test invites",
-        "preheader": "Test accounts for two journeys. All users must be 18 or over.",
-        "headline": "Your test invites",
-        "body": "These are test accounts. There are two journeys. All users must be 18 or over.",
-        "buttons": (
-            ("Open the supplier invite", "supplier_url"),
-            ("Open the Creatr invite", "creatr_url"),
-        ),
         "footer": "Plantr Collab. No cut of your sales.",
     },
 }
@@ -190,12 +179,6 @@ def render_invite(kind: str, **urls: str) -> tuple[str, str, str]:
         "</body></html>"
     )
     return spec["subject"], text, html_body
-
-
-def uat_invite_parts(supplier_url: str, creatr_url: str) -> tuple[str, str]:
-    """Plain text and HTML for the combined UAT invite. Copy lives in INVITE_COPY."""
-    _subject, text, html_body = render_invite("uat_invite", supplier_url=supplier_url, creatr_url=creatr_url)
-    return text, html_body
 
 
 def send(template_key: str, to_email: str, **values) -> dict:

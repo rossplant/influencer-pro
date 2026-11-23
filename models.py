@@ -1116,3 +1116,8 @@ class UatInvite(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

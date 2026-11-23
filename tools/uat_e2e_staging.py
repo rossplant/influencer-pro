@@ -84,8 +84,10 @@ def main() -> None:
     )
     if status != 200 or "No email was sent" not in created:
         sys.exit("Create set sent mail or failed")
-    if "Invite sent" in created:
+    if "Invite sent" in created or "Resend id" in created:
         sys.exit("An invite email was sent")
+    if created.count("not sent yet") < 2:
+        sys.exit("The page did not show a separate status for each invite")
     print(f"UAT set created for uat-e2e+{stamp}@example.com with no email")
 
 

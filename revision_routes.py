@@ -34,6 +34,65 @@ def _detail(role: str, subject_id: str, statement_id: str) -> dict:
     return commission.statement_detail(statement_id, viewer="creator", creator_id=subject_id)
 
 
+def _invite_status_html(states: dict) -> str:
+    lines = []
+    for role, label in (("seller", "Supplier"), ("creator", "Creatr")):
+        row = states.get(role) or {}
+        if row.get("status") == "sent" and row.get("provider_id"):
+            lines.append(f"<p>{label} invite: sent at {html.escape(str(row.get('sent_at') or ''))}. Resend id {html.escape(str(row.get('provider_id')))}.</p>")
+        elif row.get("status") == "failed":
+            reason = row.get("last_error") or "the mail service did not accept it"
+            lines.append(f"<p>{label} invite: failed. {html.escape(str(reason))}.</p>")
+        else:
+            lines.append(f"<p>{label} invite: not sent yet.</p>")
+    return "".join(lines)
+
+
+def _retry_forms(current: dict, email_value: str) -> str:
+    if not current:
+        return ""
+    states = uat_mode.invite_states(current["id"])
+    forms = []
+    for role, label in (("seller", "supplier"), ("creator", "Creatr")):
+        row = states.get(role) or {}
+        if row.get("status") != "failed":
+            continue
+        forms.append(
+            f"""
+        <form method="post" action="/admin/uat/send">
+          <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
+          <input type="hidden" name="email" value="{email_value}">
+          <input type="hidden" name="role" value="{role}">
+          <input type="hidden" name="press_id" value="{html.escape(str(__import__('uuid').uuid4()))}">
+          <button type="submit">Retry the {label} invite</button>
+        </form>"""
+        )
+    return "".join(forms)
+
+
+def _invite_flash(result: dict) -> tuple[str, bool]:
+    if result.get("duplicate"):
+        return "This press already sent the invites. Nothing else was emailed.", False
+    roles = result.get("roles") or {}
+    if not roles and result.get("reason"):
+        return f"Invite failed: {result['reason']}, try again", True
+    bits = []
+    failed = False
+    for key, label in (("seller", "Supplier"), ("creator", "Creatr")):
+        row = roles.get(key)
+        if not row:
+            continue
+        if row.get("sent"):
+            bits.append(f"{label} invite sent at {row.get('sent_at') or ''}. Resend id {row.get('provider_id') or ''}.")
+        else:
+            failed = True
+            reason = row.get("reason") or "the mail service did not accept it"
+            bits.append(f"{label} invite failed: {reason}. Retry that invite alone.")
+    if not failed and result.get("already"):
+        return "Both invites were already sent. Nothing else was emailed.", False
+    return " ".join(bits), failed
+
+
 def register(app, require_admin) -> None:
     @app.get("/seller/statements")
     def seller_statements(request: Request):
@@ -174,13 +233,11 @@ def register(app, require_admin) -> None:
 
     def _uat_admin_body(rows: str, *, notice: str, error: str) -> str:
         current = uat_mode.current_set() or {}
-        sent_at = current.get("invite_sent_at")
-        if sent_at:
-            status = f"Invite status: sent at {html.escape(str(sent_at))}."
-        elif current:
-            status = "Invite status: not sent yet."
+        if current:
+            states = uat_mode.invite_states(current["id"])
+            status = _invite_status_html(states)
         else:
-            status = "Invite status: no UAT set yet."
+            status = "<p>Invite status: no UAT set yet.</p>"
         banner = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
         problem = f"<p class='error'>{html.escape(error)}</p>" if error else ""
         email_value = html.escape(str(current.get("email") or ""))
@@ -195,7 +252,7 @@ def register(app, require_admin) -> None:
         return f"""
         <h1>UAT</h1>
         {banner}{problem}
-        <p>{status}</p>
+        {status}
         <p>One email owns the homeware supplier and the Creatr. Audience 45,000. The catalogue is uploaded in the supplier journey, not in the invite.</p>
         {links}
         <form method="post" action="/admin/uat/create-set">
@@ -209,6 +266,7 @@ def register(app, require_admin) -> None:
           <input type="hidden" name="press_id" value="{html.escape(str(__import__('uuid').uuid4()))}">
           <button type="submit"{send_disabled}>Send invite</button>
         </form>
+        {_retry_forms(current, email_value)}
         <p><a href="/uat/homeware.csv">Sample homeware CSV</a></p>
         <form method="post" action="/admin/uat/reset">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
@@ -255,13 +313,8 @@ def register(app, require_admin) -> None:
             if text == "Shop not found":
                 text = "The supplier shop could not be created. Nothing was emailed."
             return _uat_message(text)
-        if result.get("duplicate"):
-            return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
-        if not result.get("sent"):
-            reason = result.get("reason") or "the mail service did not accept it"
-            return _uat_message(f"Invite failed: {reason}, try again")
-        when = result.get("invite_sent_at") or ""
-        return _uat_message(f"Invite sent at {when}.", error=False)
+        text, failed = _invite_flash(result)
+        return _uat_message(text, error=failed)
 
     def _uat_message(text: str, *, error: bool = True):
         rows = "".join(
@@ -286,15 +339,12 @@ def register(app, require_admin) -> None:
                 str(form.get("press_id") or ""),
                 billing_config.public_base_url(request),
                 email=str(form.get("email") or ""),
+                role=str(form.get("role") or ""),
             )
         except Exception as exc:
             return _uat_message(str(getattr(exc, "detail", None) or exc))
-        if result.get("duplicate"):
-            return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
-        if not result.get("sent"):
-            reason = result.get("reason") or "the mail service did not accept it"
-            return _uat_message(f"Invite failed: {reason}, try again")
-        return _uat_message(f"Invite sent at {result.get('invite_sent_at')}.", error=False)
+        text, failed = _invite_flash(result)
+        return _uat_message(text, error=failed)
 
     def _invite_problem(text: str) -> HTMLResponse:
         body = f"<h1>Invite link</h1><p>{html.escape(text)}</p>"

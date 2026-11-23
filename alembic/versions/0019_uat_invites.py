@@ -23,6 +23,11 @@ def upgrade() -> None:
         sa.Column("role", sa.String(length=16), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("provider_id", sa.String(length=64), nullable=True),
+        sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("status", sa.String(length=16), nullable=True),
+        sa.Column("last_error", sa.String(length=160), nullable=True),
+        sa.Column("last_press_id", sa.String(length=64), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_uat_invites_set_id", "uat_invites", ["set_id"])

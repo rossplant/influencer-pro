@@ -87,29 +87,26 @@ def test_role_invites_use_the_same_template_fields_and_one_button():
         assert label in html_body
         assert f"<{url}>" in text.splitlines()
         assert "Stoneware" not in html_body
-    combined = emailer.INVITE_COPY["uat_invite"]
-    assert combined["subject"] == "Your Plantr Collab test invites"
-    assert len(combined["buttons"]) == 2
+    assert "uat_invite" not in emailer.INVITE_COPY
 
 
 def test_uat_invite_email_is_branded_html_and_plain_links(tmp_path):
     import emailer
 
-    supplier = "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc"
-    creatr = "https://influencer-pro-staging.up.railway.app/uat/invite/c/def"
-    text, html_body = emailer.uat_invite_parts(supplier, creatr)
-    assert "Open the supplier invite" in html_body
-    assert "Open the Creatr invite" in html_body
-    assert f'href="{supplier}"' in html_body
-    assert f'href="{creatr}"' in html_body
-    assert "#C2127F" in html_body
-    assert "<https://influencer-pro-staging.up.railway.app/uat/invite/s/abc>" in text.splitlines()
-    assert "<https://influencer-pro-staging.up.railway.app/uat/invite/c/def>" in text.splitlines()
-    blob = (text + html_body).lower()
-    for banned in ("stoneware", "napkin", "oak board", "attachment", "content-disposition"):
-        assert banned not in blob
-    path = tmp_path / "uat-invite-email.html"
-    path.write_text(html_body, encoding="utf-8")
-    artifact = __import__("pathlib").Path("/opt/cursor/artifacts/uat-invite-email.html")
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text(html_body, encoding="utf-8")
+    artifact_dir = __import__("pathlib").Path("/opt/cursor/artifacts")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    cases = (
+        ("supplier_invite", "https://influencer-pro-staging.up.railway.app/uat/invite/s/abc", "supplier-invite-email.html"),
+        ("creatr_invite", "https://influencer-pro-staging.up.railway.app/uat/invite/c/def", "creatr-invite-email.html"),
+    )
+    for kind, url, filename in cases:
+        _subject, text, html_body = emailer.render_invite(kind, url=url)
+        assert html_body.count("<a ") == 1
+        assert f'href="{url}"' in html_body
+        assert "#C2127F" in html_body
+        assert f"<{url}>" in text.splitlines()
+        blob = (text + html_body).lower()
+        for banned in ("stoneware", "napkin", "oak board", "attachment", "content-disposition"):
+            assert banned not in blob
+        (tmp_path / filename).write_text(html_body, encoding="utf-8")
+        (artifact_dir / filename).write_text(html_body, encoding="utf-8")
