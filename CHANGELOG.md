@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.1
+
+Admin sign-in can send a single-use password reset. Stripe stays sandbox only. This does not merge.
+
+- Forgot password on /admin emails a 30-minute link when the address is an admin account, and shows the same message either way.
+- The new password uses the existing rules, then the link and older admin sessions stop working.
+- After sign-in there is a UAT link. A signed-out visit to /admin/uat returns to /admin.
+
 ## 0.26.0
 
 Terms pages, commission statements, transactional match and sample emails, story frames, content kits, an 18 or over check for every account, and a staging-only UAT walkthrough. Stripe stays sandbox only. This does not merge.

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="__CSRF__">
   <title>Plantr Collab admin</title>
-  <link rel="stylesheet" href="/assets/plantr.css?v=0.26.0">
+  <link rel="stylesheet" href="/assets/plantr.css?v=0.26.1">
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #f3f6f4; color: #17211c; }
     header { background: #16352b; color: white; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
@@ -18,6 +18,7 @@
     input, select { padding: 8px; font: inherit; }
     button { background: #1f6b4a; color: white; border: 0; border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; }
     button.secondary { background: #e7eeea; color: #16352b; }
+    a { color: #C2127F; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #e4ebe7; font-size: 14px; vertical-align: top; }
     .hidden { display: none; }
@@ -41,6 +42,7 @@
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
         <button type="submit">Log in</button>
+        <p><a href="/admin/forgot">Forgot password?</a></p>
         <p id="login-error" class="error"></p>
       </form>
     </section>
@@ -49,13 +51,14 @@
       <div class="card">
         <div class="nav">
           <button type="button" data-list="shops">Shops</button>
-          <button type="button" data-list="creators">Creators</button>
+          <button type="button" data-list="creators">Creatrs</button>
           <button type="button" data-list="products">Products</button>
           <button type="button" data-list="shortlists">Shortlists</button>
           <button type="button" data-list="events">Events</button>
           <button type="button" data-list="links">Links</button>
           <button type="button" data-list="orders">Orders</button>
           <a href="/admin/pilots">Pilots</a>
+          <a href="/admin/uat">UAT</a>
         </div>
         <form id="search">
           <input id="q" name="q" type="search" placeholder="Search">

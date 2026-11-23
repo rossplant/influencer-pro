@@ -160,7 +160,10 @@ def register(app, require_admin) -> None:
         return RedirectResponse("/uat", status_code=303)
 
     @app.get("/admin/uat")
-    def admin_uat(request: Request, _: str = Depends(require_admin)):
+    def admin_uat(request: Request):
+        if auth.session_email(request) is None:
+            return RedirectResponse("/admin", status_code=303)
+        require_admin(request)
         if not uat_mode.enabled():
             raise HTTPException(status_code=404, detail="Not available")
         rows = "".join(

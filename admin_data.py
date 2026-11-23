@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -50,6 +53,9 @@ def create_admin(email: str, password_hash: str):
         password_hash=password_hash,
         created_at=now,
         last_login_at=None,
+        session_epoch=0,
+        reset_token_hash=None,
+        reset_expires_at=None,
     )
     db.memory_admin_users[key] = row
     return row
@@ -76,7 +82,88 @@ def _admin_copy(row: AdminUser):
         password_hash=row.password_hash,
         created_at=row.created_at,
         last_login_at=row.last_login_at,
+        session_epoch=int(getattr(row, "session_epoch", 0) or 0),
+        reset_token_hash=getattr(row, "reset_token_hash", None),
+        reset_expires_at=getattr(row, "reset_expires_at", None),
     )
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def store_admin_reset(email: str, token: str, *, minutes: int = 30) -> bool:
+    key = (email or "").strip().lower()
+    user = find_admin(key)
+    if user is None:
+        return False
+    digest = _token_hash(token)
+    expires = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.scalar(select(AdminUser).where(AdminUser.email == key))
+            if row is None:
+                return False
+            row.reset_token_hash = digest
+            row.reset_expires_at = expires
+        return True
+    stored = db.memory_admin_users.get(key)
+    if stored is None:
+        return False
+    stored.reset_token_hash = digest
+    stored.reset_expires_at = expires
+    return True
+
+
+def admin_for_reset_token(token: str):
+    digest = _token_hash(token or "")
+    now = datetime.now(timezone.utc)
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.scalar(select(AdminUser).where(AdminUser.reset_token_hash == digest))
+            if row is None or row.reset_expires_at is None:
+                return None
+            expires = row.reset_expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < now or not hmac.compare_digest(row.reset_token_hash or "", digest):
+                return None
+            return _admin_copy(row)
+    for row in db.memory_admin_users.values():
+        stored = getattr(row, "reset_token_hash", None) or ""
+        expires = getattr(row, "reset_expires_at", None)
+        if not stored or expires is None:
+            continue
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if hmac.compare_digest(stored, digest) and expires >= now:
+            return row
+    return None
+
+
+def complete_admin_reset(token: str, password_hash: str) -> bool:
+    user = admin_for_reset_token(token)
+    if user is None:
+        return False
+    key = user.email
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.scalar(select(AdminUser).where(AdminUser.email == key))
+            if row is None or not hmac.compare_digest(row.reset_token_hash or "", _token_hash(token)):
+                return False
+            row.password_hash = password_hash
+            row.session_epoch = int(row.session_epoch or 0) + 1
+            row.reset_token_hash = None
+            row.reset_expires_at = None
+        return True
+    stored = db.memory_admin_users.get(key)
+    if stored is None or not hmac.compare_digest(getattr(stored, "reset_token_hash", "") or "", _token_hash(token)):
+        return False
+    stored.password_hash = password_hash
+    stored.session_epoch = int(getattr(stored, "session_epoch", 0) or 0) + 1
+    stored.reset_token_hash = None
+    stored.reset_expires_at = None
+    return True
 
 
 def summary() -> dict:

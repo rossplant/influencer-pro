@@ -71,6 +71,10 @@ TEMPLATES = {
         "subject": "Reset your Plantr Collab password",
         "body": "Reset your password by opening {url}. This link expires. If you did not ask for this, you can ignore this message.",
     },
+    "admin_password_reset": {
+        "subject": "Reset your Plantr Collab admin password",
+        "body": "Set a new admin password: {url}. This link works once and expires in 30 minutes. If you did not ask for this, you can ignore this message.",
+    },
     "first_charge_2_days": {
         "subject": "Your Plantr Collab charge is in 2 days",
         "body": (
