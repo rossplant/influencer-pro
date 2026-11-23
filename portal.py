@@ -417,7 +417,7 @@ def creator_profile(creator_id: str) -> dict:
         "active_categories": list(profile.get("active_categories") or []),
         "desired_categories": list(profile.get("desired_categories") or []),
         "founding_number": number,
-        "audience": None if stored is None else getattr(stored, "audience", None),
+        "audience": profile.get("audience") if stored is None else getattr(stored, "audience", None) or profile.get("audience"),
     }
 
 

@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.26.1"
+APP_VERSION = "0.26.2"
 
 PromotionStyle = Literal[
     "educational",

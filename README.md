@@ -4,7 +4,7 @@ Plantr is the company. Plantr Collab is the product: brand–creator collaborati
 
 ## What's in this repo
 
-- `main.py` — FastAPI app (`uvicorn main:app`), version 0.26.1
+- `main.py` — FastAPI app (`uvicorn main:app`), version 0.26.2
 - `grok_helper.py` — xAI enrichment with a local fallback
 - `models.py`, `db.py`, `events.py`, `services.py` — SQLAlchemy persistence, `events.emit`, and plan limits
 - `alembic/` — schema migrations. `0001_initial` is the current head
@@ -66,7 +66,7 @@ Each request writes a JSON line to stdout (`ts`, `route`, `method`, `status`, `l
 
 ## Endpoints
 
-- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.26.1`.
+- `GET /` — public status. The status text is `Plantr Collab API running`. `version` is `0.26.2`.
 - `/seller/profile` — edit the trading name, optional ABN, primary category, website, and Shopify domain. Joining with an invite copies the pilot application's business name, ABN, first category, and website onto the shop. The account name stays the name from the invite.
 - `/seller/products` — a short curated list. Each product needs why it was chosen, the value for creators, and a commission before it can be matched. A CSV upload previews rows with nothing ticked; ticked rows can be saved as drafts (`source=csv`) or finished one by one. Drafts are not matched. Template: `GET /seller/products/csv-template`.
 - `/seller/billing` creates or reuses a Stripe Customer. `POST /stripe/webhook` verifies the signature and stores events once.

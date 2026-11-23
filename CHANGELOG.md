@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.2
+
+Creating a UAT set no longer needs a shop that already exists. Stripe stays sandbox only. This does not merge.
+
+- One email creates the homeware supplier, the sample catalogue, the supplier login, and the Creatr (audience 45,000). The set is stored in the database and reused.
+- The UAT screen has one button, Create and send invite. A second press of the same form does not send a second email. The page shows when the invite was sent, in words rather than a raw error.
+
 ## 0.26.1
 
 Admin sign-in can send a single-use password reset. Stripe stays sandbox only. This does not merge.

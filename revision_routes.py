@@ -170,18 +170,37 @@ def register(app, require_admin) -> None:
             f"<li>{html.escape(row['step'])}: {html.escape(row['result'])} {html.escape(row['comment'])}</li>"
             for row in uat_mode.feedback_rows()
         )
-        body = f"""
-        <h1>UAT feedback</h1>
+        return HTMLResponse(brand_ui.document("UAT feedback", _uat_admin_body(rows, notice="", error="")))
+
+    def _uat_admin_body(rows: str, *, notice: str, error: str) -> str:
+        current = uat_mode.current_set() or {}
+        sent_at = current.get("invite_sent_at")
+        if sent_at:
+            status = f"Invite status: sent at {html.escape(str(sent_at))}."
+        elif current:
+            status = "Invite status: not sent yet."
+        else:
+            status = "Invite status: no UAT set yet."
+        banner = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
+        problem = f"<p class='error'>{html.escape(error)}</p>" if error else ""
+        email_value = html.escape(str(current.get("email") or ""))
+        send_disabled = "" if current else " disabled"
+        return f"""
+        <h1>UAT</h1>
+        {banner}{problem}
+        <p>{status}</p>
+        <p>One email owns the homeware supplier and the Creatr. Audience 45,000.</p>
         <form method="post" action="/admin/uat/create">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
-          <label>Email for both UAT accounts <input name="email" type="email" required></label>
-          <button type="submit">Create a fresh UAT set</button>
+          <input type="hidden" name="press_id" value="{html.escape(str(__import__('uuid').uuid4()))}">
+          <label>Email <input name="email" type="email" value="{email_value}" required></label>
+          <button type="submit">Create and send invite</button>
         </form>
         <form method="post" action="/admin/uat/send">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
-          <button type="submit">Send invite</button>
+          <input type="hidden" name="press_id" value="{html.escape(str(__import__('uuid').uuid4()))}">
+          <button type="submit"{send_disabled}>Send invite</button>
         </form>
-        <p>One email owns the supplier account and the Creatr account. The invite has two labelled links. Nothing is emailed until Send invite.</p>
         <p><a href="/uat/homeware.csv">Sample homeware CSV</a></p>
         <form method="post" action="/admin/uat/reset">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
@@ -190,33 +209,56 @@ def register(app, require_admin) -> None:
         <p><a href="/admin/uat.csv">Download CSV</a></p>
         <ul>{rows or '<li>No feedback yet.</li>'}</ul>
         """
-        return HTMLResponse(brand_ui.document("UAT feedback", body))
 
     @app.post("/admin/uat/create")
     async def admin_uat_create(request: Request, _: str = Depends(require_admin)):
         if not uat_mode.enabled():
-            raise HTTPException(status_code=404, detail="Not available")
+            return _uat_message("UAT mode is off.")
         form = await request.form()
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
-            raise HTTPException(status_code=403, detail="CSRF check failed")
+            return _uat_message("The form expired. Open the UAT screen and try again.")
         try:
-            uat_mode.create_set(str(form.get("email") or ""))
-        except (RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from None
-        return RedirectResponse("/admin/uat", status_code=303)
+            result = uat_mode.create_and_send(
+                str(form.get("email") or ""),
+                str(form.get("press_id") or ""),
+                billing_config.public_base_url(request),
+            )
+        except Exception as exc:
+            detail = getattr(exc, "detail", None) or str(exc)
+            text = str(detail)
+            if text == "Shop not found":
+                text = "The supplier shop could not be created. Nothing was emailed."
+            return _uat_message(text)
+        if result.get("duplicate"):
+            return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
+        when = result.get("invite_sent_at") or ""
+        return _uat_message(f"Invite sent at {when}.", error=False)
+
+    def _uat_message(text: str, *, error: bool = True):
+        rows = "".join(
+            f"<li>{html.escape(row['step'])}: {html.escape(row['result'])} {html.escape(row['comment'])}</li>"
+            for row in uat_mode.feedback_rows()
+        )
+        notice = "" if error else text
+        problem = text if error else ""
+        return HTMLResponse(brand_ui.document("UAT", _uat_admin_body(rows, notice=notice, error=problem)))
 
     @app.post("/admin/uat/send")
     async def admin_uat_send(request: Request, _: str = Depends(require_admin)):
         if not uat_mode.enabled():
-            raise HTTPException(status_code=404, detail="Not available")
+            return _uat_message("UAT mode is off.")
         form = await request.form()
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
-            raise HTTPException(status_code=403, detail="CSRF check failed")
+            return _uat_message("The form expired. Open the UAT screen and try again.")
+        if uat_mode.current_set() is None:
+            return _uat_message("Create a UAT set before sending the invite. Nothing was emailed.")
         try:
-            uat_mode.send_invite()
-        except (RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from None
-        return RedirectResponse("/admin/uat", status_code=303)
+            result = uat_mode.send_invite(str(form.get("press_id") or ""), billing_config.public_base_url(request))
+        except Exception as exc:
+            return _uat_message(str(getattr(exc, "detail", None) or exc))
+        if result.get("duplicate"):
+            return _uat_message("This press already sent the invite. Nothing else was emailed.", error=False)
+        return _uat_message(f"Invite sent at {result.get('invite_sent_at')}.", error=False)
 
     @app.get("/uat/invite/{token}")
     def uat_invite_page(token: str):

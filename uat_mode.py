@@ -119,19 +119,109 @@ def reset() -> None:
         db.memory_creators.pop(creator_id, None)
         db.memory_creator_objects.pop(creator_id, None)
     if db.configured():
-        from sqlalchemy import delete
+        from sqlalchemy import delete, select
 
-        from models import UatFeedback
+        from models import PortalAccount, UatFeedback, UatSet
 
         with db.session_scope() as session:
             session.execute(delete(UatFeedback))
+            row = session.scalar(select(UatSet))
+            if row is not None:
+                session.execute(delete(PortalAccount).where(PortalAccount.email == row.email))
+            session.execute(delete(UatSet))
     db.memory_uat_feedback = []
     db.memory_uat_ids = {}
     db.memory_uat_sales = []
 
 
+def _sync(row: dict) -> dict:
+    db.memory_uat_ids = row
+    return row
+
+
+def current_set() -> dict | None:
+    if db.configured():
+        from sqlalchemy import select
+
+        from models import UatSet
+
+        with db.session_scope() as session:
+            row = session.scalar(select(UatSet).order_by(UatSet.created_at.asc()))
+            if row is None:
+                db.memory_uat_ids = {}
+                return None
+            found = {
+                "id": row.id,
+                "email": row.email,
+                "shop_id": row.shop_id,
+                "creator_id": row.creator_id,
+                "audience": row.audience,
+                "invite_sent_at": None if row.invite_sent_at is None else row.invite_sent_at.isoformat(),
+                "last_press_id": row.last_press_id or "",
+                "billing": "sandbox",
+            }
+        return _sync(found)
+    found = getattr(db, "memory_uat_ids", None) or {}
+    if not found.get("shop_id"):
+        return None
+    return found
+
+
+def _remember(row: dict) -> None:
+    if db.configured():
+        from models import UatSet, utcnow
+
+        with db.session_scope() as session:
+            session.add(
+                UatSet(
+                    id=row["id"],
+                    email=row["email"],
+                    shop_id=row["shop_id"],
+                    creator_id=row["creator_id"],
+                    audience=row["audience"],
+                    invite_sent_at=None,
+                    last_press_id=None,
+                    created_at=utcnow(),
+                )
+            )
+    _sync(row)
+
+
+def _catalogue(shop_id: str) -> list[dict]:
+    import portal
+
+    made = []
+    for title, price, url in (
+        ("Stoneware bowl", "42", "https://example.com/bowl"),
+        ("Linen napkin", "18", "https://example.com/napkin"),
+        ("Oak board", "64", "https://example.com/board"),
+    ):
+        product_id = portal.save_product(
+            shop_id,
+            product_id="",
+            title=title,
+            category="home",
+            price=price,
+            url=url,
+            description="A sample homeware piece for the test journey.",
+            image_url=f"{url}.jpg",
+            source="manual",
+            as_draft=True,
+            samples_enabled=True,
+        )
+        made.append({"id": product_id, "title": title, "shop_id": shop_id})
+        import listing_studio
+
+        listing_studio.lock_sheet(product_id, {"title": title, "category": "home", "confirmed": True, "piece_count": "1"})
+        state = listing_studio.state_for(product_id)
+        state["scenes"] = [{"id": str(uuid.uuid4()), "type": "in a home", "status": "Approved", "approved": True, "image": "placeholder", "reasons": []}]
+        state["angles"] = [{"name": "Tuesday place", "hook": "Ready when you are.", "caption": f"#Ad {title} for an ordinary night.", "approved": True}]
+        state["status"] = "Approved"
+    return made
+
+
 def create_set(notify_email: str) -> dict:
-    """Isolated supplier, products, placeholder scenes, and a Creatr. No password is returned or logged."""
+    """Create the supplier, catalogue, and Creatr. Reuse the set when one already exists."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
     if os.getenv("STRIPE_SECRET_KEY", "").startswith("sk_live"):
@@ -139,81 +229,91 @@ def create_set(notify_email: str) -> dict:
     email = (notify_email or "").strip().lower()
     if "@" not in email:
         raise ValueError("Enter an email address for the password link")
-    shop_id = str(uuid.uuid4())
-    creator_id = str(uuid.uuid4())
-    products = []
+    existing = current_set()
+    if existing:
+        existing["reused"] = True
+        return existing
     import secrets
 
-    import account_mail
-    import auth
-    import emailer
-    import listing_studio
     import portal
+    import services
 
     secret = secrets.token_urlsafe(24)
     creatr_secret = secrets.token_urlsafe(24)
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-
-    now = datetime.now(timezone.utc)
-    db.memory_shops[shop_id] = SimpleNamespace(
-        id=shop_id,
+    domain = f"uat-{uuid.uuid4().hex[:8]}.myshopify.com"
+    shop = services.create_shop(
         name="Homeware supplier",
-        business_name="Homeware supplier",
-        is_pilot=True,
-        shopify_domain=f"uat-{shop_id[:8]}.myshopify.com",
-        subscription_status=None,
+        shopify_domain=domain,
         plan_tier="starter",
+        plan_status="free",
+        is_pilot=True,
+        primary_category="home",
+        business_name="Homeware supplier",
     )
-    db.memory_creators[creator_id] = {"id": creator_id, "handle": "@uat"}
-    db.memory_creator_objects[creator_id] = SimpleNamespace(
-        id=creator_id, handle="@uat", founding_number=None, signup_campaign="founding_curators", audience=45000
+    shop_id = shop["id"]
+    if shop_id not in db.memory_shops:
+        from types import SimpleNamespace
+
+        db.memory_shops[shop_id] = SimpleNamespace(
+            id=shop_id,
+            name="Homeware supplier",
+            business_name="Homeware supplier",
+            is_pilot=True,
+            shopify_domain=domain,
+            primary_category="home",
+        )
+    creator_id = str(uuid.uuid4())
+    services.persist_creator(
+        {
+            "influencer_id": creator_id,
+            "handle": f"@uat{creator_id.replace('-', '')[:8]}",
+            "name": "UAT Creatr",
+            "areas_of_interest": ["home"],
+            "preferred_promotion_styles": ["educational"],
+            "active_categories": ["home"],
+            "platforms": ["instagram"],
+            "availability": "open",
+            "metrics_source": "self_reported",
+            "avg_views": 45000,
+            "audience": 45000,
+        }
     )
+    if creator_id not in db.memory_creators:
+        db.memory_creators[creator_id] = {"id": creator_id, "handle": f"@uat{creator_id.replace('-', '')[:8]}", "audience": 45000}
+    products = _catalogue(shop_id)
     portal.create_login(role="seller", email=email, password=secret, password_confirm=secret, shop_id=shop_id)
     portal.create_login(role="creator", email=email, password=creatr_secret, password_confirm=creatr_secret, creator_id=creator_id)
-    for title in ("Stoneware bowl", "Ribbed knit", "Pump bottle"):
-        product_id = str(uuid.uuid4())
-        product = {"id": product_id, "title": title, "shop_id": shop_id, "samples_enabled": True}
-        products.append(product)
-        if not hasattr(db, "memory_products") or not isinstance(db.memory_products, dict):
-            db.memory_products = {}
-        db.memory_products[product_id] = SimpleNamespace(
-            id=product_id, title=title, shop_id=shop_id, samples_enabled=True, commission_rate=10, image_url=None
-        )
-        listing_studio.lock_sheet(product_id, {"title": title, "category": "home", "confirmed": True, "piece_count": "1"})
-        state = listing_studio.state_for(product_id)
-        state["scenes"] = [{"id": str(uuid.uuid4()), "type": "in a home", "status": "Approved", "approved": True, "image": "placeholder", "reasons": []}]
-        state["angles"] = [{"name": "Tuesday place", "hook": "Ready when you are.", "caption": f"#Ad {title} for an ordinary night.", "approved": True}]
-        state["status"] = "Approved"
-    shortlist_id = str(uuid.uuid4())
-    db.memory_shortlists.append(SimpleNamespace(id=shortlist_id, shop_id=shop_id, product_id=products[0]["id"]))
-    db.memory_shortlist_items.append(
-        SimpleNamespace(id=str(uuid.uuid4()), shortlist_id=shortlist_id, creator_id=creator_id, accepted_at=now, creator=None)
-    )
-    db.memory_uat_ids = {
+    row = {
+        "id": str(uuid.uuid4()),
+        "email": email,
         "shop_id": shop_id,
         "creator_id": creator_id,
-        "email": email,
+        "audience": 45000,
         "products": products,
         "billing": "sandbox",
-        "audience": 45000,
-        "invite_sent": False,
+        "invite_sent_at": None,
+        "last_press_id": "",
+        "reused": False,
     }
-    return {"shop_id": shop_id, "creator_id": creator_id, "products": len(products), "password_sent": False, "billing": "sandbox"}
+    _remember(row)
+    return row
 
 
-def send_invite() -> dict:
-    """Email the two labelled links only after an admin asks. No password is included."""
+def send_invite(press_id: str = "", base_url: str = "") -> dict:
+    """Email the two labelled links once for this press. No password is included."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
-    ids = getattr(db, "memory_uat_ids", None) or {}
-    email = str(ids.get("email") or "")
-    if "@" not in email:
-        raise ValueError("Create a UAT set before sending the invite")
+    ids = current_set()
+    if not ids or "@" not in str(ids.get("email") or ""):
+        raise ValueError("Create a UAT set before sending the invite.")
+    press = (press_id or "").strip()
+    if press and press == (ids.get("last_press_id") or ""):
+        return {"sent": False, "duplicate": True, "invite_sent_at": ids.get("invite_sent_at"), "email": ids["email"]}
     import auth
     import emailer
 
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    base = (base_url or os.getenv("PUBLIC_BASE_URL", "")).rstrip("/")
+    email = ids["email"]
     supplier_token = auth.issue_form_token(f"uat-set:seller:{email}")
     creatr_token = auth.issue_form_token(f"uat-set:creator:{email}")
     emailer.send(
@@ -222,8 +322,25 @@ def send_invite() -> dict:
         supplier_url=f"{base}/uat/invite/{supplier_token}",
         creatr_url=f"{base}/uat/invite/{creatr_token}",
     )
-    ids["invite_sent"] = True
-    return {"sent": True}
+    sent_at = datetime.now(timezone.utc).isoformat()
+    if db.configured():
+        from models import UatSet
+
+        with db.session_scope() as session:
+            row = session.get(UatSet, ids["id"])
+            if row is not None:
+                row.invite_sent_at = datetime.now(timezone.utc)
+                row.last_press_id = press or None
+    ids["invite_sent_at"] = sent_at
+    ids["last_press_id"] = press
+    _sync(ids)
+    return {"sent": True, "duplicate": False, "invite_sent_at": sent_at, "email": email}
+
+
+def create_and_send(email: str, press_id: str, base_url: str = "") -> dict:
+    created = create_set(email)
+    sent = send_invite(press_id, base_url)
+    return {**created, **sent}
 
 
 def open_invite(token: str) -> dict:
@@ -247,10 +364,16 @@ def activate_invite(token: str, *, born, attested: bool, password: str) -> dict:
     blocked = creatr_age.check_signup(born=born, attested=attested)
     if blocked:
         raise ValueError(blocked)
-    ids = getattr(db, "memory_uat_ids", None) or {}
+    ids = current_set() or {}
     if opened["email"] != ids.get("email"):
         raise ValueError("That invite link is not valid")
     subject = ids["shop_id"] if opened["role"] == "seller" else ids["creator_id"]
+    if opened["role"] == "seller" and ids.get("shop_id") not in db.memory_shops and not db.configured():
+        from types import SimpleNamespace
+
+        db.memory_shops[ids["shop_id"]] = SimpleNamespace(id=ids["shop_id"], name="Homeware supplier", is_pilot=True)
+    if opened["role"] == "creator" and ids.get("creator_id") not in db.memory_creators and not db.configured():
+        db.memory_creators[ids["creator_id"]] = {"id": ids["creator_id"], "handle": "@uat"}
     portal.create_login(
         role=opened["role"],
         email=opened["email"],
