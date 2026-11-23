@@ -207,3 +207,29 @@ def test_staging_test_admin_is_ignored_in_production(monkeypatch):
     admin_data.ensure_staging_test_admin()
     updated = admin_data.find_admin("stage-admin@example.com")
     assert auth.verify_password("another-long-password", updated.password_hash)
+
+
+def test_staging_test_admin_signs_in_and_opens_uat(monkeypatch):
+    import admin_data
+    from tools import uat_e2e_staging
+
+    _setup(monkeypatch)
+    monkeypatch.setenv("ENV", "staging")
+    monkeypatch.setenv("UAT_MODE", "1")
+    monkeypatch.setenv("STAGING_TEST_ADMIN_EMAIL", "Stage-Admin@Example.com")
+    monkeypatch.setenv("STAGING_TEST_ADMIN_PASSWORD", "staging-admin-pass")
+    admin_data.ensure_staging_test_admin()
+    logged_in = client.post("/admin/login", json=uat_e2e_staging.login_json("Stage-Admin@Example.com", "staging-admin-pass"))
+    assert logged_in.status_code == 200
+    cookie = {"Cookie": uat_e2e_staging.cookie_pair(logged_in.headers["set-cookie"])}
+    page = client.get("/admin/uat", headers={**cookie, "Accept": "text/html"})
+    assert page.status_code == 200
+    assert "Create set (no email)" in page.text
+    wrong = client.post("/admin/login", json=uat_e2e_staging.login_json("stage-admin@example.com", "not-the-password"))
+    assert wrong.status_code == 401
+    monkeypatch.setenv("ENV", "production")
+    blocked = client.post("/admin/login", json=uat_e2e_staging.login_json("stage-admin@example.com", "staging-admin-pass"))
+    assert blocked.status_code == 401
+    monkeypatch.setenv("ENV", "staging")
+    ross = client.post("/admin/login", json=uat_e2e_staging.login_json(EMAIL, PASSWORD))
+    assert ross.status_code == 200

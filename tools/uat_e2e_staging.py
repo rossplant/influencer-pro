@@ -48,17 +48,25 @@ def _hidden(html: str, name: str) -> str:
     return html[start:end]
 
 
+def login_json(email: str, password: str) -> dict:
+    return {"email": email, "password": password}
+
+
+def cookie_pair(set_cookie: str) -> str:
+    return (set_cookie or "").split(";", 1)[0]
+
+
 def _json_login(base: str, email: str, password: str) -> str:
     request = urllib.request.Request(
         f"{base}/admin/login",
-        data=json.dumps({"email": email, "password": password}).encode(),
+        data=json.dumps(login_json(email, password)).encode(),
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             status = response.status
-            cookie = response.headers.get("set-cookie", "").split(";", 1)[0]
+            cookie = cookie_pair(response.headers.get("set-cookie", ""))
     except urllib.error.HTTPError as exc:
         print(f"Admin sign-in failed ({exc.code})")
         sys.exit(1)

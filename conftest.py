@@ -54,6 +54,8 @@ def _isolated(monkeypatch):
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     monkeypatch.delenv("ADMIN_SETUP_TOKEN", raising=False)
     monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("STAGING_TEST_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("STAGING_TEST_ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
     monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("STRIPE_PUBLISHABLE_KEY", raising=False)
