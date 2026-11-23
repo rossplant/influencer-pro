@@ -170,6 +170,10 @@ def checkout(
     the pilot it is attached at Checkout. Customers cannot type codes on the
     Stripe page, because Stripe cannot limit a code to one interval.
     """
+    if not billing_config.operator_legal_name():
+        import legal
+
+        raise HTTPException(status_code=503, detail=legal.OPENING_SOON)
     if subscription_in_force(role, subject_id):
         raise HTTPException(status_code=409, detail=ALREADY_SUBSCRIBED)
     email = _portal_email(role, subject_id)

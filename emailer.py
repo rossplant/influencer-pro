@@ -91,11 +91,31 @@ TEMPLATES = {
     },
     "sample_due_7": {
         "subject": "Your post about {product} is due in 7 days",
-        "body": "The post for {product} is due on {due}. Add the link in Samples, and label the post #Ad or gifted.",
+        "body": "The post for {product} is due on {due}. Put #Ad at the start of the caption. Gifted samples count as advertising.",
     },
     "sample_due_2": {
         "subject": "Your post about {product} is due in 2 days",
-        "body": "The post for {product} is due on {due}. Add the link in Samples, and label the post #Ad or gifted.",
+        "body": "The post for {product} is due on {due}. Put #Ad at the start of the caption. Gifted samples count as advertising.",
+    },
+    "new_match": {
+        "subject": "A new match is ready",
+        "body": "A match for {product} is ready. Open Matches to see the brief, the link and the code.",
+    },
+    "sample_accepted": {
+        "subject": "Your sample request was accepted",
+        "body": "The supplier accepted your sample request for {product}. The address you gave is now shared with them.",
+    },
+    "statement_ready": {
+        "subject": "Your commission statement is ready",
+        "body": "The statement for {period} is ready. Open Statements to read it or download the CSV. This is new.",
+    },
+    "uat_invite": {
+        "subject": "Your Plantr Collab test invites",
+        "body": (
+            "Supplier invite (homeware supplier): {supplier_url}. "
+            "Creatr invite (45,000 audience): {creatr_url}. "
+            "All users must be 18 or over. Set a password on each link. These are test accounts."
+        ),
     },
     "quality_warning": {
         "subject": "Quality standard missed for {month}",

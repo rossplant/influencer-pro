@@ -18,8 +18,8 @@ from models import SampleRequest, utcnow
 STATUSES = ("requested", "approved", "declined", "shipped", "delivered", "posted", "overdue")
 ADDRESS_VISIBLE = {"approved", "shipped", "delivered", "posted", "overdue"}
 DISCLOSURE_HELP = (
-    "A gifted post has to be clearly labelled, for example with #Ad or the word gifted. "
-    "That is what the ACCC influencer guidance asks for."
+    "Labelled #Ad at the start (gifted samples count as advertising). "
+    "That is what the ACCC guidance asks for."
 )
 
 
@@ -221,7 +221,7 @@ def submit_post(sample_id: str, creator_id: str, *, links: str, disclosure: bool
     if effective_status(row) not in {"delivered", "overdue"}:
         raise HTTPException(status_code=422, detail="Post the link after the sample is delivered.")
     if not disclosure:
-        raise HTTPException(status_code=422, detail="Tick the box to confirm the post is labelled #Ad or gifted.")
+        raise HTTPException(status_code=422, detail="Tick the box to confirm the post is labelled #Ad at the start. All gifted samples count as advertising.")
     if not (links or "").strip():
         raise HTTPException(status_code=422, detail="Add the link to the post.")
     row["post_links"] = links.strip()

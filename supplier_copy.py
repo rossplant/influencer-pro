@@ -11,7 +11,7 @@ BILLING_TIP = (
     "We send reminders, and you can cancel any time."
 )
 PRODUCT_CAP = "No product cap in the pilot."
-TOS_LEAD = "You must be 18+ and authorised to apply for this business."
+TOS_LEAD = "All users must be 18 or over. You must be 18 or over and authorised to apply for this business."
 LEADERBOARD_HELP = "Ranking boards are for Creatrs. Suppliers are not listed by tier."
 SHORTLIST_INTRO = "Each Creatr's tier is a note on their confirmed sales, to help you choose."
 FILTER_LABEL = "Trendsettr or Headlinr"

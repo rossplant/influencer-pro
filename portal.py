@@ -71,8 +71,13 @@ def create_login(
         raise HTTPException(status_code=404, detail="Shop not found")
     if role == "creator" and not _creator_exists(creator_id):
         raise HTTPException(status_code=404, detail="Creator not found")
-    existing = _find_email(cleaned)
-    if existing is not None and (existing.role != role or _subject(existing) != (shop_id if role == "seller" else creator_id)):
+    import uat_mode
+
+    existing = _find_login(role, cleaned)
+    other = _find_login("creator" if role == "seller" else "seller", cleaned)
+    if other is not None and not uat_mode.enabled():
+        raise HTTPException(status_code=409, detail="That email is already used")
+    if existing is not None and _subject(existing) != (shop_id if role == "seller" else creator_id):
         raise HTTPException(status_code=409, detail="That email is already used")
     password_hash = auth.hash_password(password)
     if existing is not None:
@@ -86,7 +91,7 @@ def create_login(
 def authenticate(role: str, email: str, password: str, ip: str) -> Optional[object]:
     if not _login_allowed(ip, role):
         raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": "900"})
-    account = _find_email((email or "").strip().lower())
+    account = _find_login(role, (email or "").strip().lower())
     stored = account.password_hash if account is not None and account.role == role else "invalid"
     password_ok = auth.verify_password(password or "", stored)
     if account is None or account.role != role or not password_ok:
@@ -412,6 +417,7 @@ def creator_profile(creator_id: str) -> dict:
         "active_categories": list(profile.get("active_categories") or []),
         "desired_categories": list(profile.get("desired_categories") or []),
         "founding_number": number,
+        "audience": None if stored is None else getattr(stored, "audience", None),
     }
 
 
@@ -522,6 +528,7 @@ def render_seller(session: Optional[dict], page: str, *, base_url: str = "", **d
       <a href="/dashboard/catalogue/listing-studio">Listing Studio</a>
       <a href="/seller/find">Collabs</a>
       <a href="/seller/samples">Samples</a>
+      <a href="/seller/statements">Statements</a>
       <a href="/seller/profile">Settings</a>
     </nav>
     <p class="pills"><a href="/seller/badges">Pays on time</a> <a href="/seller/badges">Top seller</a></p>
@@ -546,6 +553,7 @@ def render_creator(session: Optional[dict], page: str, *, base_url: str = "", **
       <a href="/creator">Home</a>
       <a href="/creator/offers">Matches</a>
       <a href="/creator/links">Sales</a>
+      <a href="/creator/statements">Statements</a>
       <a href="/creator/profile">Settings</a>
     </nav>
     """
@@ -575,6 +583,15 @@ def _profile_form(shop: dict, csrf: str, error: str) -> str:
       <label>Website <input name="store_url" type="url" value="{html.escape(shop.get('store_url') or '')}" placeholder="https://"></label>
       <label>Shopify domain <input name="shopify_domain" value="{html.escape(shop.get('shopify_domain') or '')}" placeholder="the-store.myshopify.com"></label>
       <button type="submit">Save profile</button>
+    </form>
+    <h2>Invite someone to this supplier</h2>
+    <p>All users must be 18 or over. A teammate needs a date of birth and an 18 or over confirmation.</p>
+    <form method="post" action="/seller/team">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <label>Email <input name="email" type="email" required></label>
+      <label>Date of birth <input name="date_of_birth" type="date" required autocomplete="bday"></label>
+      <label class="check"><input name="age_confirmed" type="checkbox" value="yes" required> They confirm they are 18 or over. All users must be 18 or over.</label>
+      <button type="submit">Invite teammate</button>
     </form>
     """
 
@@ -657,7 +674,8 @@ def _listing_studio_page(shop: dict, csrf: str, data: dict) -> str:
         """
     return f"""
     <h1>Listing Studio</h1>
-    <p>{html.escape(price_line)} Extra images are A$1.50 each, ex GST. No pack price. Product-inaccuracy rejections are free.</p>
+        <p>{html.escape(price_line)} Extra images are A$1.50 each, ex GST. No pack price. Product-inaccuracy rejections are free.</p>
+        <p>Listing Studio drafts positioning a supplier might not write themselves, plus scenes a Creatr can post after approval.</p>
     <table><tr><th>Product</th><th>Listing Studio</th></tr>{''.join(rows) or '<tr><td colspan="2">No products yet.</td></tr>'}</table>
     {detail}
     """
@@ -875,6 +893,8 @@ def save_imported_products(shop_id: str, rows: list[dict], *, as_draft: bool) ->
 
 
 def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "statements":
+        return _statements_page(data.get("statements") or [], data.get("detail"), role="seller")
     if page == "home":
         import quality_standing
 
@@ -886,6 +906,7 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
         return f"""
         <h1>Home</h1>
         <p>{html.escape(supplier_copy.HOME_LINE)}</p>
+        {__import__('usp').block()}
         <p>{html.escape(recognition.momentum_line(int(data.get('confirmed_7d') or 0)))}</p>
         <p>{html.escape(recognition.QUALITY_STANDARD_SUPPLIER)}</p>
         {notice_html}
@@ -1048,6 +1069,10 @@ def _seller_body(page: str, shop: dict, csrf: str, *, base_url: str = "", **data
 
 
 def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **data) -> str:
+    if page == "statements":
+        return _statements_page(data.get("statements") or [], data.get("detail"), role="creator")
+    if page == "kit":
+        return data.get("kit_html") or "<h1>Content kit</h1>"
     if page == "home":
         sales = int(data.get("confirmed_sales") or 0)
         pilot = bool(profile.get("founding_number") or profile.get("signup_campaign") == "founding_curators")
@@ -1063,9 +1088,13 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         if standing.get("demoted"):
             notice = "Earned tier and early access are paused after repeated missed quality months."
         notice_html = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
+        audience = profile.get("audience")
+        audience_html = f"<p>Audience: {int(audience):,}</p>" if audience else ""
         return f"""
         <h1>Home</h1>
         <p>Find products you genuinely rate. Cultivate their story, your way.</p>
+        {audience_html}
+        {__import__('usp').block()}
         <h2>How you move up</h2>
         <p>Your tier: {html.escape(shown['label'])}.</p>
         <p>{html.escape(shown['next_line'])}</p>
@@ -1214,7 +1243,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
             <form method="post" action="/creator/samples/{html.escape(row['id'])}/post">
               <input type="hidden" name="csrf_token" value="{csrf}">
               <label>Post link <input name="links" type="url" required></label>
-              <label><input type="checkbox" name="disclosure" value="yes"> This post is clearly labelled #Ad or gifted</label>
+              <label><input type="checkbox" name="disclosure" value="yes"> Labelled #Ad at the start (gifted samples count as advertising)</label>
               <p><small>{html.escape(sample_flow.DISCLOSURE_HELP)}</small></p>
               <button type="submit">Submit the post</button>
             </form>
@@ -1236,6 +1265,7 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         <ul>{hooks or '<li>No approved positioning yet.</li>'}</ul>
         <ul>{scenes}</ul>
         <p>Link or code: {link} {code}</p>
+        <p><a href="/creator/samples/{html.escape(row.get('id') or '')}/kit">Open the content kit</a></p>
         {delivered}
         {post_form}
         """
@@ -1686,20 +1716,33 @@ def _creator_exists(creator_id: Optional[str]) -> bool:
     return creator_id in db.memory_creators
 
 
+def _account_namespace(row):
+    return SimpleNamespace(
+        id=row.id,
+        role=row.role,
+        email=row.email,
+        password_hash=row.password_hash,
+        shop_id=row.shop_id,
+        creator_id=row.creator_id,
+    )
+
+
+def _find_login(role: str, email: str):
+    cleaned = (email or "").strip().lower()
+    if db.configured():
+        with db.session_scope() as session:
+            row = session.scalar(
+                select(PortalAccount).where(PortalAccount.email == cleaned, PortalAccount.role == role)
+            )
+            return None if row is None else _account_namespace(row)
+    return next((row for row in db.memory_portal_accounts if row.email == cleaned and row.role == role), None)
+
+
 def _find_email(email: str):
     if db.configured():
         with db.session_scope() as session:
             row = session.scalar(select(PortalAccount).where(PortalAccount.email == email))
-            if row is None:
-                return None
-            return SimpleNamespace(
-                id=row.id,
-                role=row.role,
-                email=row.email,
-                password_hash=row.password_hash,
-                shop_id=row.shop_id,
-                creator_id=row.creator_id,
-            )
+            return None if row is None else _account_namespace(row)
     return next((row for row in db.memory_portal_accounts if row.email == email), None)
 
 
@@ -1774,3 +1817,40 @@ def _login_allowed(ip: str, role: str) -> bool:
             return False
         bucket.append(now)
         return True
+
+
+def _statements_page(rows: list, detail: Optional[dict], *, role: str) -> str:
+    items = "".join(
+        f"<li><a href='/{role}/statements/{html.escape(str(row.get('id') or ''))}'>{html.escape(str(row.get('period') or 'Statement'))}</a> "
+        f"{html.escape(str(row.get('status') or ''))}</li>"
+        for row in rows
+    ) or "<li>No statements yet. The monthly run creates them. <small>New</small></li>"
+    extra = ""
+    if detail:
+        extra = (
+            f"<h2>{html.escape(str(detail.get('period') or ''))}</h2>"
+            f"<p>{html.escape(str(detail.get('status') or ''))}</p>"
+            f"<p><a href='/{role}/statements/{html.escape(str(detail.get('id') or ''))}.csv'>Download CSV</a></p>"
+        )
+    return f"<h1>Statements</h1><p>Confirmed sales, listed for the month. <small>New</small></p><ul>{items}</ul>{extra}"
+
+
+def content_kit_page(row: dict, *, base_url: str = "") -> str:
+    product = row.get("product") or {}
+    link = html.escape(f"{base_url.rstrip('/')}/r/{row.get('link_code')}" if row.get("link_code") else "")
+    code = html.escape(row.get("link_code") or "")
+    caption = html.escape(f"#Ad {product.get('title') or 'This product'} — {link or code}")
+    scenes = "".join(
+        f"<li>{html.escape(scene.get('type') or 'Scene')} <a href='{html.escape(scene.get('image') or '#')}'>Download</a></li>"
+        for scene in row.get("scenes") or []
+    ) or "<li>Approved scenes appear here.</li>"
+    hooks = "".join(f"<li>{html.escape(angle.get('hook') or '')}</li>" for angle in row.get("angles") or []) or "<li>No hook yet.</li>"
+    return f"""
+    <h1>Content kit</h1>
+    <h2>Scenes</h2><ul>{scenes}</ul>
+    <h2>Hooks</h2><ul>{hooks}</ul>
+    <h2>Caption</h2>
+    <p id="kit-caption">{caption}</p>
+    <button type="button" data-copy="#kit-caption">Copy caption</button>
+    <p><a href="/creator/samples/{html.escape(row.get('id') or '')}/kit.txt">Download</a></p>
+    """

@@ -40,8 +40,8 @@ SELLER_APPLY = (
     "Privacy Policy and agree that Plantr may use these details to assess my application. Applying does not create "
     "a contract or commit me to pay."
 )
-SELLER_AUTHORITY = "You must be 18+ and authorised to apply for this business."
-CREATOR_AGE = "I am 18 or older."
+SELLER_AUTHORITY = "All users must be 18 or over. You must be 18 or over and authorised to apply for this business."
+CREATOR_AGE = "I confirm I am 18 or over. All users must be 18 or over."
 CREATOR_APPLY = (
     "I understand Creatr plans are paid (from A$15 a month ex GST), and that Foundrs are at no charge only until 20 January "
     "2027. I have read the Privacy Policy. I agree that Plantr may review my application and public social profile "
@@ -58,7 +58,7 @@ SELLER_JOIN_PILOT = (
     "automatically until I cancel. I will not be charged unless I choose a plan and enter payment details."
 )
 CREATOR_JOIN_TERMS = (
-    "I am 18 or older, and I agree to the Platform Terms of Service, Creator and Foundr Terms and Acceptable Use "
+    "I am 18 or over. All users must be 18 or over. I agree to the Platform Terms of Service, Creatr and Foundr Terms and Acceptable Use "
     "Policy. I will clearly disclose every paid or commission-earning promotion (for example with #ad and the "
     "platform's paid-partnership label). I have read the Privacy Policy."
 )
@@ -94,6 +94,21 @@ OPENING_SOON = (
     "once the operator's details can be shown here. Please check back shortly."
 )
 
+DRAFT_NOTICE = "Draft — pending legal review"
+
+# These pages only repeat acceptance wording already stored here. They are not a full legal instrument.
+LEGAL_PAGES = {
+    "platform": ("Terms", "The platform terms are named in the join acceptance. [PLATFORM TERMS PENDING LEGAL REVIEW]"),
+    "seller": ("Seller terms", SELLER_PANEL + " [SELLER TERMS PENDING LEGAL REVIEW]"),
+    "seller-pilot": ("Supplier pilot agreement", SELLER_JOIN_PILOT + " [SUPPLIER PILOT AGREEMENT PENDING LEGAL REVIEW]"),
+    "data-processing": ("Data processing addendum", "[DATA PROCESSING ADDENDUM PENDING LEGAL REVIEW]"),
+    "acceptable-use": ("Acceptable use", "[ACCEPTABLE USE POLICY PENDING LEGAL REVIEW]"),
+    "creatr-foundr": ("Creatr and Foundr terms", CREATOR_PANEL + " " + CREATOR_JOIN_TERMS + " [CREATR AND FOUNDR TERMS PENDING LEGAL REVIEW]"),
+    "fees": ("Fees and plans", SELLER_PANEL + " " + CREATOR_PANEL + " [FEE SCHEDULE PENDING LEGAL REVIEW]"),
+    "integration-data": ("Integration data", "[INTEGRATION DATA TERMS PENDING LEGAL REVIEW]"),
+    "privacy": ("Privacy", ""),
+}
+
 
 def clean_abn(raw: str) -> Optional[str]:
     """Return an 11-digit ABN, None when blank, or raise ValueError when it is not a valid ABN."""
@@ -116,6 +131,20 @@ def checkbox(name: str, text: str, *, required: bool) -> str:
         f"<label class='check'><input name='{html.escape(name)}' type='checkbox' value='yes'{req}> "
         f"{html.escape(text)}{tag}</label>"
     )
+
+
+def legal_page(slug: str, *, privileged: bool = False) -> str:
+    import brand_ui
+
+    title, body = LEGAL_PAGES[slug]
+    if not privileged:
+        content = f"<h1>{html.escape(title)}</h1><p>{html.escape(DRAFT_NOTICE)}</p>"
+    else:
+        content = (
+            f"<p class='banner'>DRAFT — NEEDS LEGAL REVIEW (NOT BINDING)</p>"
+            f"<h1>{html.escape(title)}</h1><p>{html.escape(body)}</p>"
+        )
+    return brand_ui.document(title, content)
 
 
 def record(
@@ -144,6 +173,10 @@ def record(
         "user_agent": (user_agent or "")[:512] or None,
         "accepted_at": utcnow(),
     }
+    if str(TERMS_VERSION).startswith("draft"):
+        row["confirmations"]["binding"] = False
+        row["confirmations"]["acceptance_label"] = "UAT test acceptance"
+        row["text_shown"] = row["text_shown"] + "\nUAT test acceptance. Not a binding acceptance of draft text."
     if db.configured():
         with db.session_scope() as session:
             session.add(TermsAcceptance(**row))

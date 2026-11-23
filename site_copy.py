@@ -49,7 +49,7 @@ SUPPLIER_PAGE = {
         "Headlinr means 40+ confirmed sales in the last 3 months.",
         "Add a card at sign-up. There is no charge before 20 January 2027. We send reminders, and you can cancel any time.",
         "No product cap in the pilot.",
-        "You set the commission and pay it only on tracked sales, settled directly or via TikTok Shop or Shopify Collabs.",
+        "You set the commission and pay it only on tracked sales, settled directly. TikTok Shop and Shopify Collabs settlement: Coming soon.",
         "Growth is at no charge from 20 November 2026 until 20 January 2027 unless cancelled, then A$39.50 a month ex GST for 3 months, then A$79 a month ex GST.",
         "Starter is A$29 a month ex GST. Growth is A$79 ex GST. Scale is A$229 ex GST.",
     ),
@@ -91,14 +91,18 @@ def landing_html(kind: str, *, token: str = "", thanks: str = "", event_id: str 
     operator = billing_config.operator_legal_name()
     if spec["role"] == "creator":
         panel = legal.CREATOR_PANEL
-        role_fields = legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
+        role_fields = (
+            "<label>Date of birth <input name='date_of_birth' type='date' required autocomplete='bday'></label>"
+            + legal.checkbox("age_confirmed", legal.CREATOR_AGE, required=True)
+        )
         paid = legal.checkbox("paid_service_confirmed", legal.CREATOR_APPLY, required=True)
     else:
         panel = legal.SELLER_PANEL
         role_fields = (
             "<label>Business name <input name='business_name' autocomplete='organization' required></label>"
             "<label>ABN (optional, 11 digits) <input name='abn' inputmode='numeric' pattern='[0-9 ]{11,14}'></label>"
-            + legal.checkbox("authority_confirmed", legal.SELLER_AUTHORITY, required=True)
+            + "<label>Date of birth <input name='date_of_birth' type='date' required autocomplete='bday'></label>"
+            + legal.checkbox("age_confirmed", legal.SELLER_AUTHORITY, required=True)
         )
         paid = legal.checkbox("paid_service_confirmed", legal.SELLER_APPLY, required=True)
     email_box = legal.checkbox("email_consent", legal.EMAIL_CONSENT, required=False)

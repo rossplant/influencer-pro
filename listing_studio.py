@@ -198,6 +198,14 @@ def sheet_ready(sheet: dict) -> bool:
     return True
 
 
+def _lead_with_ad(caption: str) -> str:
+    import re
+
+    text = re.sub(r"(?i)#ad\b", "", caption or "")
+    text = re.sub(r"\s+", " ", text).strip(" .,-")
+    return "#Ad" if not text else f"#Ad {text}"
+
+
 def _angles_from_text(raw: str, product: dict) -> list[dict]:
     try:
         parsed = json.loads(raw)
@@ -206,9 +214,7 @@ def _angles_from_text(raw: str, product: dict) -> list[dict]:
         angles = []
     clean = []
     for angle in angles[:4]:
-        caption = str(angle.get("caption") or "").strip()
-        if caption and "#ad" not in caption.lower():
-            caption = f"{caption} #ad"
+        caption = _lead_with_ad(str(angle.get("caption") or ""))
         blob = " ".join(str(angle.get(key) or "") for key in ("name", "insight", "moment", "hook", "caption"))
         if copy_problem(blob):
             continue
@@ -231,7 +237,7 @@ def _angles_from_text(raw: str, product: dict) -> list[dict]:
             "insight": f"{title} earns a place by being used, not displayed.",
             "moment": "A weeknight when the table is already set.",
             "hook": f"{title}, ready when you are.",
-            "caption": f"{title} is on the table for an ordinary night. #ad",
+            "caption": f"#Ad {title} is on the table for an ordinary night.",
             "approved": False,
         },
         {
@@ -239,7 +245,7 @@ def _angles_from_text(raw: str, product: dict) -> list[dict]:
             "insight": "The usual telling adds steps the brief does not.",
             "moment": "The minute before leaving the house.",
             "hook": "Nothing extra to add.",
-            "caption": f"Using {title} as it is. #ad",
+            "caption": f"#Ad Using {title} as it is.",
             "approved": False,
         },
         {
@@ -247,7 +253,7 @@ def _angles_from_text(raw: str, product: dict) -> list[dict]:
             "insight": "Handsome enough to stay in view, ordinary enough for Tuesday.",
             "moment": "After the meal, before the lights go down.",
             "hook": "Leave it where you used it.",
-            "caption": f"{title} stays out after use. #ad",
+            "caption": f"#Ad {title} stays out after use.",
             "approved": False,
         },
     ]
@@ -545,11 +551,31 @@ def review_scene(product_id: str, scene_id: str, *, decision: str, tag: str = ""
     return state
 
 
+def story_frame(scene: dict) -> dict:
+    """A 9:16 frame. Only the background is cropped or extended. The product is not changed."""
+    return {
+        "width": 1080,
+        "height": 1920,
+        "ratio": "9:16",
+        "method": "crop_or_extend_background",
+        "product_changed": False,
+        "source_scene": scene.get("id"),
+        "rules": "Do not change the product. Crop or extend the background only.",
+    }
+
+
 def approved_for_creatr(product_id: str) -> dict:
     state = state_for(product_id)
+    scenes = []
+    for row in state.get("scenes") or []:
+        if not row.get("approved"):
+            continue
+        item = dict(row)
+        item["story_frame"] = story_frame(row)
+        scenes.append(item)
     return {
         "angles": [row for row in state.get("angles") or [] if row.get("approved")],
-        "scenes": [row for row in state.get("scenes") or [] if row.get("approved")],
+        "scenes": scenes,
     }
 
 

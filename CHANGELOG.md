@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.26.0
+
+Terms pages, commission statements, transactional match and sample emails, story frames, content kits, an 18 or over check for every account, and a staging-only UAT walkthrough. Stripe stays sandbox only. This does not merge.
+
+- Logged-out legal pages say Draft — pending legal review. Logged-in UAT and admin readers see the draft under DRAFT — NEEDS LEGAL REVIEW (NOT BINDING). Draft acceptances are labelled UAT test acceptance and are not binding.
+- Staging sends X-Robots-Tag: noindex and robots.txt Disallow: /. Production is unchanged.
+- All users must be 18 or over. Sign-up, invites, seller teammates, and UAT accounts need a date of birth and a confirmation.
+- Statements are listed for suppliers and Creatrs, with CSV download. The monthly run is idempotent and can be triggered by an admin. A statement-ready email is transactional.
+- Captions put #Ad at the start. The post tick says Labelled #Ad at the start (gifted samples count as advertising).
+- UAT_MODE is staging only. An admin enters one email, creates both accounts, and presses Send invite before any email goes out.
+
 ## 0.25.0
 
 Creatrs can request a product sample, and suppliers approve, ship, and track the post. Depends on the Listing Studio pull request. Stripe stays sandbox only. This does not merge.

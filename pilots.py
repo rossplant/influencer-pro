@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
+from datetime import date
 from types import SimpleNamespace
 from typing import Optional
 
@@ -74,6 +75,7 @@ def apply(
     categories: str,
     contact: str,
     age_confirmed: bool,
+    date_of_birth: Optional[date] = None,
     touch_state: Optional[dict],
     consent: bool,
     event_id: str,
@@ -94,10 +96,13 @@ def apply(
     spec = billing_config.PILOT_COHORTS.get(slug)
     if spec is None:
         raise HTTPException(status_code=404, detail="Unknown cohort")
-    if spec["role"] == "creator" and not age_confirmed:
-        raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+    import creatr_age
+
+    blocked = creatr_age.check_signup(born=date_of_birth, attested=bool(age_confirmed))
+    if blocked:
+        raise HTTPException(status_code=422, detail=blocked)
     if spec["role"] == "seller" and not authority_confirmed:
-        raise HTTPException(status_code=422, detail="Sellers must confirm they are 18 or older and authorised to act for the business")
+        raise HTTPException(status_code=422, detail="You must be 18 or over and authorised to apply for this business. All users must be 18 or over.")
     if not paid_service_confirmed:
         raise HTTPException(status_code=422, detail="Please confirm you understand Plantr Collab is a paid service after the pilot")
     clean_abn = None
@@ -299,6 +304,7 @@ def join_with_invite(
     password: str,
     categories: str,
     age_confirmed: bool,
+    date_of_birth: Optional[date] = None,
     touch_state: Optional[dict],
     consent: bool,
     terms_accepted: bool = False,
@@ -311,8 +317,11 @@ def join_with_invite(
     import legal
 
     opened = open_invite(code)
-    if opened["role"] == "creator" and not age_confirmed:
-        raise HTTPException(status_code=422, detail="Creators must confirm they are 18 or older")
+    import creatr_age
+
+    blocked = creatr_age.check_signup(born=date_of_birth, attested=bool(age_confirmed))
+    if blocked:
+        raise HTTPException(status_code=422, detail=blocked)
     if not terms_accepted or not pilot_terms_accepted:
         raise HTTPException(status_code=422, detail="Please tick both required boxes to continue")
     invite = _invite_by_code(code)
@@ -340,7 +349,7 @@ def join_with_invite(
             password_confirm=password,
             shop_id=subject_id,
         )
-        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=False, marketing_consent=consent, email_consent=email_consent)
+        _stamp_account("seller", subject_id, touch_state, code, opened, age_confirmed=True, marketing_consent=consent, email_consent=email_consent)
     else:
         creator_id = str(uuid.uuid4())
         active = [part.strip().lower() for part in categories.split(",") if part.strip()] or ["other"]
