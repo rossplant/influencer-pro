@@ -3,6 +3,7 @@
 from sqlalchemy import func, select
 
 import db
+import mailer
 import main
 import uat_mode
 from models import Creator, EmailMessage, PortalAccount, Product, Shop, UatSet
@@ -41,10 +42,19 @@ def test_create_from_an_empty_database_is_idempotent(tmp_path, monkeypatch):
         assert session.scalar(select(func.count()).select_from(UatSet)) == 1
 
 
-def test_create_then_send_once(tmp_path, monkeypatch):
+def _deliver(monkeypatch, provider_id="re_test_123"):
+    class Ok:
+        def send(self, **kwargs):
+            return {"status": mailer.SENT, "id": provider_id}
+
+    monkeypatch.setattr(mailer, "default", lambda: Ok())
+
+
+def test_create_then_send_stores_the_resend_id(tmp_path, monkeypatch):
     use_database(tmp_path, monkeypatch)
     monkeypatch.setenv("UAT_MODE", "1")
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    _deliver(monkeypatch)
     uat_mode.create_set("partner@example.com")
     sent = uat_mode.send_invite("press-1", "https://staging.example")
     assert sent["sent"] is True
@@ -55,12 +65,17 @@ def test_create_then_send_once(tmp_path, monkeypatch):
     assert emails[0]["body"].count("/uat/invite/") == 2
     current = uat_mode.current_set()
     assert current["invite_sent_at"]
+    assert current["invite_provider_id"] == "re_test_123"
+    with db.session_scope() as session:
+        row = session.scalar(select(UatSet))
+        assert row.invite_provider_id == "re_test_123"
 
 
 def test_the_same_press_does_not_send_twice(tmp_path, monkeypatch):
     use_database(tmp_path, monkeypatch)
     monkeypatch.setenv("UAT_MODE", "1")
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    _deliver(monkeypatch)
     uat_mode.create_and_send("partner@example.com", "press-1", "https://staging.example")
     again = uat_mode.create_and_send("partner@example.com", "press-1", "https://staging.example")
     assert again["duplicate"] is True
@@ -68,3 +83,24 @@ def test_the_same_press_does_not_send_twice(tmp_path, monkeypatch):
     fresh = uat_mode.send_invite("press-2", "https://staging.example")
     assert fresh["sent"] is True
     assert len(_emails()) == 2
+
+
+def test_a_failed_send_is_not_marked_sent_and_a_fresh_press_can_retry(tmp_path, monkeypatch):
+    use_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("UAT_MODE", "1")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    class Failed:
+        def send(self, **kwargs):
+            return {"status": mailer.FAILED, "id": None, "reason": "HTTP 403"}
+
+    monkeypatch.setattr(mailer, "default", lambda: Failed())
+    failed = uat_mode.create_and_send("partner@example.com", "press-fail", "https://staging.example")
+    assert failed["sent"] is False
+    assert failed["reason"] == "HTTP 403"
+    assert uat_mode.current_set()["invite_sent_at"] is None
+    assert uat_mode.current_set().get("invite_provider_id") in (None, "")
+    _deliver(monkeypatch, "re_retry")
+    retried = uat_mode.send_invite("press-retry", "https://staging.example")
+    assert retried["sent"] is True
+    assert uat_mode.current_set()["invite_provider_id"] == "re_retry"

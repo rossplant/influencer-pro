@@ -1101,5 +1101,6 @@ class UatSet(Base):
     creator_id: Mapped[str] = mapped_column(String(36), nullable=False)
     audience: Mapped[int] = mapped_column(Integer, nullable=False, default=45000, server_default="45000")
     invite_sent_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    invite_provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
