@@ -252,6 +252,10 @@ def register(app, require_admin) -> None:
         banner = f"<p class='banner'>{html.escape(notice)}</p>" if notice else ""
         problem = f"<p class='error'>{html.escape(error)}</p>" if error else ""
         email_value = html.escape(str(current.get("email") or ""))
+        creatr_email_value = str(current.get("creatr_email") or "")
+        if creatr_email_value == str(current.get("email") or ""):
+            creatr_email_value = ""
+        creatr_email_value = html.escape(creatr_email_value)
         send_disabled = "" if current else " disabled"
         links = ""
         if current:
@@ -264,12 +268,15 @@ def register(app, require_admin) -> None:
         <h1>UAT</h1>
         {banner}{problem}
         {status}
-        <p>One email owns the homeware supplier and the Creatr. Audience 45,000. The catalogue is uploaded in the supplier journey, not in the invite.</p>
+        <p>One email can own both the supplier and the Creatr. Add a Creatr email only when the test uses two addresses. Audience 45,000. The catalogue is uploaded in the supplier journey, not in the invite.</p>
         <p>Invites are sent from {html.escape(emailer.invite_from_name())}. Replies go to {html.escape(emailer.invite_reply_to())}.</p>
         {links}
         <form method="post" action="/admin/uat/create-set">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
           <label>Email <input name="email" type="email" value="{email_value}" required></label>
+          <label>First name <input name="first_name" value="{html.escape(str(current.get('first_name') or ''))}"></label>
+          <label>Brand / shop name <input name="brand_name" value="{html.escape(str(current.get('brand_name') or ''))}"></label>
+          <label>Creatr email (if different) <input name="creatr_email" type="email" value="{creatr_email_value}"></label>
           <button type="submit">Create set (no email)</button>
         </form>
         <form method="post" action="/admin/uat/send">
@@ -296,7 +303,12 @@ def register(app, require_admin) -> None:
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
             return _uat_message("The form expired. Open the UAT screen and try again.")
         try:
-            result = uat_mode.create_set(str(form.get("email") or ""))
+            result = uat_mode.create_set(
+                str(form.get("email") or ""),
+                first_name=str(form.get("first_name") or ""),
+                brand_name=str(form.get("brand_name") or ""),
+                creatr_email=str(form.get("creatr_email") or ""),
+            )
         except Exception as exc:
             detail = getattr(exc, "detail", None) or str(exc)
             text = "The supplier shop could not be created." if str(detail) == "Shop not found" else str(detail)
@@ -318,6 +330,9 @@ def register(app, require_admin) -> None:
                 str(form.get("email") or ""),
                 str(form.get("press_id") or ""),
                 billing_config.public_base_url(request),
+                first_name=str(form.get("first_name") or ""),
+                brand_name=str(form.get("brand_name") or ""),
+                creatr_email=str(form.get("creatr_email") or ""),
             )
         except Exception as exc:
             detail = getattr(exc, "detail", None) or str(exc)

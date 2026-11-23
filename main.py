@@ -59,7 +59,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.27.1"
+APP_VERSION = "0.27.2"
 
 PromotionStyle = Literal[
     "educational",
@@ -593,6 +593,9 @@ async def _closed_receive():
 async def lifespan(_app: FastAPI):
     configure_logging()
     init_storage()
+    import admin_data
+
+    admin_data.ensure_staging_test_admin()
     import asyncio
 
     import reminders
@@ -712,6 +715,7 @@ def _attach_grok_obs(request: Request, grok: Dict[str, Any]) -> None:
 
 
 @app.get("/")
+@app.get("/health")
 def root():
     return {
         "status": "Plantr Collab API running",

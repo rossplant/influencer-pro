@@ -211,8 +211,6 @@ def _without_staging(html_body: str, text: str) -> tuple[str, str]:
         trimmed = text.rstrip("\n")
         trimmed = trimmed[: -len(_STAGING_LINE)].rstrip("\n")
         text = trimmed + ("\n" if text.endswith("\n") else "")
-    elif suffix in text:
-        text = text.replace(suffix, "")
     return html_body, text
 
 
@@ -231,16 +229,22 @@ def render_invite(
         show_banner = show_test_banner()
     if not show_banner:
         html_body, text = _without_staging(html_body, text)
-    name = (first_name or "").strip() or "there"
+    given = (first_name or "").strip()
+    if given:
+        subject = subject.replace("{{first_name}}", given)
+    else:
+        subject = subject.replace("{{first_name}}, your ", "Your ")
+        subject = subject.replace("{{first_name}}, ", "")
+        subject = subject.replace("{{first_name}}", "")
+    greeting = given or "there"
     brand = (brand_name or "").strip() or "your shop"
     fields = {
-        "first_name": name,
+        "first_name": greeting,
         "brand_name": brand,
         "invite_link": url,
         "unsubscribe_url": unsubscribe_url,
     }
     for key, value in fields.items():
-        subject = subject.replace("{{" + key + "}}", value)
         text = text.replace("{{" + key + "}}", value)
         html_body = html_body.replace("{{" + key + "}}", html.escape(value, quote=True))
     return subject, text, html_body

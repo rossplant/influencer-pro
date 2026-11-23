@@ -91,7 +91,7 @@ def test_approved_invites_fill_every_placeholder(monkeypatch, tmp_path):
         (
             "creatr_invite",
             "https://influencer-pro-staging.up.railway.app/uat/invite/c/def",
-            "there, your Plantr Collab invite",
+            "Your Plantr Collab invite",
             "Two months on us, and you start at Influencr today.",
             "Set up my Creatr profile",
             "creatr-invite-email.html",
@@ -113,6 +113,7 @@ def test_approved_invites_fill_every_placeholder(monkeypatch, tmp_path):
         assert button in html_body
         assert url in text.splitlines()
         assert "Hi there," in html_body
+        assert "there, your Plantr Collab invite" not in rendered_subject
         assert "Test environment" in html_body
         assert "Test environment" in text
         assert "#C2127F" in html_body
@@ -129,6 +130,18 @@ def test_approved_invites_fill_every_placeholder(monkeypatch, tmp_path):
     )
     assert "Test environment" not in html_body
     assert "Test environment" not in text
+    named_subject, named_text, named_html = emailer.render_invite(
+        "creatr_invite",
+        url="https://example.com/uat/invite/c/def",
+        first_name="Ada",
+        brand_name="Oak & Co",
+        unsubscribe_url="https://example.com/invite/opt-out/token",
+        show_banner=False,
+    )
+    assert named_subject == "Ada, your Plantr Collab invite"
+    assert "Hi Ada," in named_html
+    assert "Hi Ada," in named_text
+    assert "there, your" not in named_subject
 
 
 def test_invite_from_and_reply_to_go_on_the_resend_payload(monkeypatch):

@@ -32,6 +32,9 @@ def test_browser_journey_without_sending_email(monkeypatch):
     page = client.get("/admin/uat", headers={**admin, **HTML})
     assert page.status_code == 200
     assert "Create set (no email)" in page.text
+    assert "First name" in page.text
+    assert "Brand / shop name" in page.text
+    assert "Creatr email (if different)" in page.text
     assert "disabled" in page.text
     token = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     created = client.post(
