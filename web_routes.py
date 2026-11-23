@@ -27,7 +27,7 @@ def _draft_reader(request: Request) -> bool:
         return True
     if not uat_mode.enabled() or not portal.portal_enabled():
         return False
-    ids = getattr(db, "memory_uat_ids", {}) or {}
+    ids = uat_mode.current_set() or {}
     seller = portal.seller_context(request)
     creator = portal.creator_context(request)
     if seller and seller.get("subject_id") == ids.get("shop_id"):

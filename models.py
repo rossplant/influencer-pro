@@ -1088,3 +1088,18 @@ class UatFeedback(Base):
     result: Mapped[str] = mapped_column(String(8), nullable=False, default="")
     comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
+
+
+class UatSet(Base):
+    """The staging UAT supplier and Creatr. One row, kept in the database."""
+
+    __tablename__ = "uat_sets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    shop_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    creator_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    audience: Mapped[int] = mapped_column(Integer, nullable=False, default=45000, server_default="45000")
+    invite_sent_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime(), nullable=True)
+    last_press_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, default=utcnow)
