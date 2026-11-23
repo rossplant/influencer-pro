@@ -110,6 +110,8 @@ memory_listing_failures: list = []
 memory_listing_rules: list = []
 memory_listing_holds: list = []
 memory_listing_spend: list = []
+memory_samples: list = []
+memory_sample_settings: dict = {}
 
 
 def configured() -> bool:
@@ -165,6 +167,8 @@ def reset_memory() -> None:
     memory_listing_rules.clear()
     memory_listing_holds.clear()
     memory_listing_spend.clear()
+    memory_samples.clear()
+    memory_sample_settings.clear()
 
 
 def close() -> None:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.0
+
+Creatrs can request a product sample, and suppliers approve, ship, and track the post. Depends on the Listing Studio pull request. Stripe stays sandbox only. This does not merge.
+
+- The address is hidden until the supplier approves, and it is removed 30 days after delivery.
+- The post is due 14 days after delivery, or 7 to 30 days if the supplier sets that. The portal reminds the Creatr at 7 days and 2 days, and shows overdue. A gifted post needs a tick for #Ad or gifted.
+- Approved Listing Studio scenes, hooks, and the supplier's link or code sit on the sample page.
+
 ## 0.24.0
 
 Listing Studio can draft positioning and scenes, check the product, and wait for supplier approval. Stripe stays sandbox only. This does not merge.

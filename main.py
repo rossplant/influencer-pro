@@ -42,7 +42,7 @@ HTML_PAGES = (
     "plantr_onboarding.html",
     "onboarding_form.html",
 )
-APP_VERSION = "0.24.0"
+APP_VERSION = "0.25.0"
 
 PromotionStyle = Literal[
     "educational",
@@ -1075,6 +1075,7 @@ async def seller_save_product(request: Request, _: None = Depends(rate_limit_por
         fact_what=str(form.get("fact_what") or ""),
         fact_who=str(form.get("fact_who") or ""),
         selling_fast=str(form.get("selling_fast") or "") == "yes",
+        samples_enabled=str(form.get("samples_enabled") or "") == "yes",
     )
     return RedirectResponse("/seller/products", status_code=303)
 
@@ -1289,6 +1290,25 @@ def listing_studio_download(scene_id: str, request: Request, product: str = ""):
     return Response(str(scene.get("image") or "").encode(), media_type="text/plain")
 
 
+@app.get("/admin/samples")
+def admin_samples(request: Request, status: str = "", _: str = Depends(require_admin)):
+    import brand_ui
+    import samples as sample_flow
+
+    rows = sample_flow.list_all(status)
+    body = ["<h1>Sample requests</h1>", "<p>"]
+    for name in ("", *sample_flow.STATUSES):
+        label = name or "All"
+        body.append(f"<a href='/admin/samples?status={html.escape(name)}'>{html.escape(label)}</a> ")
+    body.append("</p><ul>")
+    for row in rows:
+        body.append(
+            f"<li>{html.escape(sample_flow.effective_status(row))} · {html.escape(row.get('product_title') or row.get('product_id') or '')}</li>"
+        )
+    body.append("</ul>")
+    return HTMLResponse(brand_ui.document("Samples", "".join(body)))
+
+
 @app.get("/admin/listing-studio")
 def admin_listing_studio(request: Request, _: str = Depends(require_admin)):
     import brand_ui
@@ -1439,6 +1459,175 @@ def creator_offers_page(request: Request, _: None = Depends(rate_limit_portal)):
     session = portal.creator_context(request)
     offers = portal.creator_offers(session["subject_id"]) if session else []
     return portal.render_creator(session, "offers", base_url=billing_config.public_base_url(request), offers=offers)
+
+
+@app.get("/creator/samples/request")
+def creator_sample_request(request: Request, product: str = "", _: None = Depends(rate_limit_portal)):
+    session = portal.creator_context(request)
+    found = _sample_product(session["subject_id"], product) if session else {}
+    return portal.render_creator(session, "sample-request", base_url=billing_config.public_base_url(request), product=found)
+
+
+@app.post("/creator/samples")
+async def creator_sample_create(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    product = _sample_product(session["subject_id"], str(form.get("product_id") or ""))
+    row = sample_flow.request_sample(
+        shop_id=product["shop_id"],
+        creator_id=session["subject_id"],
+        product=product,
+        note=str(form.get("note") or ""),
+        address={
+            "address_line": str(form.get("address_line") or ""),
+            "suburb": str(form.get("suburb") or ""),
+            "region": str(form.get("region") or ""),
+            "postcode": str(form.get("postcode") or ""),
+        },
+    )
+    return RedirectResponse(f"/creator/samples/{row['id']}", status_code=303)
+
+
+@app.get("/creator/samples/{sample_id}")
+def creator_sample_page(request: Request, sample_id: str, _: None = Depends(rate_limit_portal)):
+    session = portal.creator_context(request)
+    import samples as sample_flow
+
+    row = {}
+    kit = {}
+    code = ""
+    link = ""
+    if session:
+        row = next((item for item in sample_flow.list_for_creator(session["subject_id"]) if item["id"] == sample_id), {})
+        if not row:
+            raise HTTPException(status_code=404, detail="Sample request not found")
+        row = sample_flow.refresh(row)
+        import listing_studio
+
+        kit = listing_studio.approved_for_creatr(row["product_id"])
+        offer = next((item for item in portal.creator_offers(session["subject_id"]) if item.get("product_id") == row["product_id"]), {})
+        code = offer.get("discount_code") or ""
+        link = offer.get("tracking_path") or ""
+    return portal.render_creator(session, "sample", base_url=billing_config.public_base_url(request), sample=row, kit=kit, code=code, link=link)
+
+
+@app.post("/creator/samples/{sample_id}/delivered")
+async def creator_sample_delivered(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.mark_delivered(sample_id, actor_creator=session["subject_id"])
+    return RedirectResponse(f"/creator/samples/{sample_id}", status_code=303)
+
+
+@app.post("/creator/samples/{sample_id}/post")
+async def creator_sample_post(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_creator(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.submit_post(
+        sample_id,
+        session["subject_id"],
+        links=str(form.get("links") or ""),
+        disclosure=str(form.get("disclosure") or "") == "yes",
+    )
+    return RedirectResponse(f"/creator/samples/{sample_id}", status_code=303)
+
+
+@app.get("/seller/samples")
+def seller_samples(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.seller_context(request)
+    import samples as sample_flow
+
+    rows = sample_flow.list_for_shop(session["subject_id"]) if session else []
+    settings = sample_flow.settings_for(session["subject_id"]) if session else {}
+    return portal.render_seller(session, "samples", base_url=billing_config.public_base_url(request), samples=rows, sample_settings=settings)
+
+
+@app.post("/seller/samples/settings")
+async def seller_sample_settings(request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.save_settings(
+        session["subject_id"],
+        max_per_month=int(str(form.get("max_per_month") or "5") or "5"),
+        post_due_days=int(str(form.get("post_due_days") or "14") or "14"),
+    )
+    return RedirectResponse("/seller/samples", status_code=303)
+
+
+@app.post("/seller/samples/{sample_id}/approve")
+async def seller_sample_approve(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.decide(sample_id, session["subject_id"], approved=True)
+    return RedirectResponse("/seller/samples", status_code=303)
+
+
+@app.post("/seller/samples/{sample_id}/decline")
+async def seller_sample_decline(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.decide(sample_id, session["subject_id"], approved=False, reason=str(form.get("reason") or ""))
+    return RedirectResponse("/seller/samples", status_code=303)
+
+
+@app.post("/seller/samples/{sample_id}/ship")
+async def seller_sample_ship(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.ship(sample_id, session["subject_id"], tracking=str(form.get("tracking") or ""))
+    return RedirectResponse("/seller/samples", status_code=303)
+
+
+@app.post("/seller/samples/{sample_id}/delivered")
+async def seller_sample_delivered(sample_id: str, request: Request, _: None = Depends(rate_limit_portal)):
+    session = portal.require_seller(request)
+    form = await request.form()
+    portal.check_session_csrf(session, str(form.get("csrf_token") or ""))
+    import samples as sample_flow
+
+    sample_flow.mark_delivered(sample_id, actor_shop=session["subject_id"])
+    return RedirectResponse("/seller/samples", status_code=303)
+
+
+def _sample_product(creator_id: str, product_id: str) -> dict:
+    offer = next((item for item in portal.creator_offers(creator_id) if item.get("product_id") == product_id), None)
+    if offer is None:
+        raise HTTPException(status_code=404, detail="That product is not in your matches")
+    stored = db.memory_products.get(product_id)
+    attributes = dict(getattr(stored, "attributes", None) or {}) if stored is not None else {}
+    if db.configured():
+        from models import Product
+
+        with db.session_scope() as session:
+            product = session.get(Product, product_id)
+            attributes = dict(product.attributes or {}) if product is not None else attributes
+            title = product.title if product is not None else offer.get("product_title")
+            shop_id = product.shop_id if product is not None else offer.get("shop_id")
+    else:
+        title = getattr(stored, "title", None) or offer.get("product_title")
+        shop_id = getattr(stored, "shop_id", None) or offer.get("shop_id")
+    return {"id": product_id, "title": title or "", "attributes": attributes, "shop_id": shop_id or ""}
 
 
 @app.get("/seller/billing")
