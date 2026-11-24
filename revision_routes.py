@@ -240,10 +240,12 @@ def register(app, require_admin) -> None:
             f"<li>{html.escape(row['step'])}: {html.escape(row['result'])} {html.escape(row['comment'])}</li>"
             for row in uat_mode.feedback_rows()
         )
-        return HTMLResponse(brand_ui.document("UAT feedback", _uat_admin_body(rows, notice="", error="")))
+        return HTMLResponse(brand_ui.document("UAT feedback", _uat_admin_body(rows, notice="", error="", email=str(request.query_params.get("email") or ""))))
 
-    def _uat_admin_body(rows: str, *, notice: str, error: str) -> str:
-        current = uat_mode.current_set() or {}
+    def _uat_admin_body(rows: str, *, notice: str, error: str, email: str = "") -> str:
+        selected = (email or "").strip().lower()
+        current = uat_mode.current_set(selected) if selected else (uat_mode.current_set() or {})
+        current = current or {}
         if current:
             states = uat_mode.invite_states(current["id"])
             status = _invite_status_html(states)
@@ -261,8 +263,9 @@ def register(app, require_admin) -> None:
         if current:
             paths = uat_mode._issue_invites(current)
             links = (
-                f"<p><a href=\"{html.escape(paths['seller'])}\">Open the supplier invite</a></p>"
-                f"<p><a href=\"{html.escape(paths['creator'])}\">Open the Creatr invite</a></p>"
+                f"<p>Showing the set for {html.escape(str(current.get('email') or ''))}.</p>"
+                f"<p><a href=\"{html.escape(paths['seller'])}\">Open the supplier invite</a> <code>{html.escape(paths['seller'])}</code></p>"
+                f"<p><a href=\"{html.escape(paths['creator'])}\">Open the Creatr invite</a> <code>{html.escape(paths['creator'])}</code></p>"
             )
         return f"""
         <h1>UAT</h1>
@@ -271,13 +274,19 @@ def register(app, require_admin) -> None:
         <p>One email can own both the supplier and the Creatr. Add a Creatr email only when the test uses two addresses. Audience 45,000. The catalogue is uploaded in the supplier journey, not in the invite.</p>
         <p>Invites are sent from {html.escape(emailer.invite_from_name())}. Replies go to {html.escape(emailer.invite_reply_to())}.</p>
         {links}
+        <form method="get" action="/admin/uat">
+          <label>View set by email <input name="email" type="email" value="{email_value}"></label>
+          <button type="submit">Show this set</button>
+        </form>
         <form method="post" action="/admin/uat/create-set">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
           <label>Email <input name="email" type="email" value="{email_value}" required></label>
           <label>First name <input name="first_name" value="{html.escape(str(current.get('first_name') or ''))}"></label>
           <label>Brand / shop name <input name="brand_name" value="{html.escape(str(current.get('brand_name') or ''))}"></label>
+          <label>Creatr name <input name="creatr_name" value="{html.escape(str(current.get('creatr_name') or ''))}"></label>
           <label>Creatr email (if different) <input name="creatr_email" type="email" value="{creatr_email_value}"></label>
           <button type="submit">Create set (no email)</button>
+          <button type="submit" formaction="/admin/uat/reset-set">Reset UAT set</button>
         </form>
         <form method="post" action="/admin/uat/send">
           <input type="hidden" name="csrf_token" value="{html.escape(auth.issue_form_token('admin-uat'))}">
@@ -308,15 +317,16 @@ def register(app, require_admin) -> None:
                 first_name=str(form.get("first_name") or ""),
                 brand_name=str(form.get("brand_name") or ""),
                 creatr_email=str(form.get("creatr_email") or ""),
+                creatr_name=str(form.get("creatr_name") or ""),
             )
         except Exception as exc:
             detail = getattr(exc, "detail", None) or str(exc)
             text = "The supplier shop could not be created." if str(detail) == "Shop not found" else str(detail)
-            return _uat_message(text)
+            return _uat_message(text, email=str(form.get("email") or ""))
         note = "UAT set ready. No email was sent."
         if result.get("reused"):
             note = "That email already has a UAT set. No email was sent."
-        return _uat_message(note, error=False)
+        return _uat_message(note, error=False, email=result.get("email") or "")
 
     @app.post("/admin/uat/create")
     async def admin_uat_create(request: Request, _: str = Depends(require_admin)):
@@ -326,31 +336,29 @@ def register(app, require_admin) -> None:
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
             return _uat_message("The form expired. Open the UAT screen and try again.")
         try:
-            result = uat_mode.create_and_send(
+            result = uat_mode.create_set(
                 str(form.get("email") or ""),
-                str(form.get("press_id") or ""),
-                billing_config.public_base_url(request),
                 first_name=str(form.get("first_name") or ""),
                 brand_name=str(form.get("brand_name") or ""),
                 creatr_email=str(form.get("creatr_email") or ""),
+                creatr_name=str(form.get("creatr_name") or ""),
             )
         except Exception as exc:
             detail = getattr(exc, "detail", None) or str(exc)
             text = str(detail)
             if text == "Shop not found":
                 text = "The supplier shop could not be created. Nothing was emailed."
-            return _uat_message(text)
-        text, failed = _invite_flash(result)
-        return _uat_message(text, error=failed)
+            return _uat_message(text, email=str(form.get("email") or ""))
+        return _uat_message("UAT set ready. No email was sent.", error=False, email=result.get("email") or "")
 
-    def _uat_message(text: str, *, error: bool = True):
+    def _uat_message(text: str, *, error: bool = True, email: str = ""):
         rows = "".join(
             f"<li>{html.escape(row['step'])}: {html.escape(row['result'])} {html.escape(row['comment'])}</li>"
             for row in uat_mode.feedback_rows()
         )
         notice = "" if error else text
         problem = text if error else ""
-        return HTMLResponse(brand_ui.document("UAT", _uat_admin_body(rows, notice=notice, error=problem)))
+        return HTMLResponse(brand_ui.document("UAT", _uat_admin_body(rows, notice=notice, error=problem, email=email)))
 
     @app.post("/admin/uat/send")
     async def admin_uat_send(request: Request, _: str = Depends(require_admin)):
@@ -359,19 +367,20 @@ def register(app, require_admin) -> None:
         form = await request.form()
         if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
             return _uat_message("The form expired. Open the UAT screen and try again.")
-        if uat_mode.current_set() is None:
-            return _uat_message("Create a UAT set before sending the invite. Nothing was emailed.")
+        target = str(form.get("email") or "")
+        if (uat_mode.current_set(target) if target else uat_mode.current_set()) is None:
+            return _uat_message("Create a UAT set before sending the invite. Nothing was emailed.", email=target)
         try:
             result = uat_mode.send_invite(
                 str(form.get("press_id") or ""),
                 billing_config.public_base_url(request),
-                email=str(form.get("email") or ""),
+                email=target,
                 role=str(form.get("role") or ""),
             )
         except Exception as exc:
-            return _uat_message(str(getattr(exc, "detail", None) or exc))
+            return _uat_message(str(getattr(exc, "detail", None) or exc), email=target)
         text, failed = _invite_flash(result)
-        return _uat_message(text, error=failed)
+        return _uat_message(text, error=failed, email=target or result.get("email") or "")
 
     def _invite_problem(text: str) -> HTMLResponse:
         body = f"<h1>Invite link</h1><p>{html.escape(text)}</p>"
@@ -492,6 +501,27 @@ def register(app, require_admin) -> None:
             raise HTTPException(status_code=403, detail="CSRF check failed")
         uat_mode.reset()
         return RedirectResponse("/admin/uat", status_code=303)
+
+    @app.post("/admin/uat/reset-set")
+    async def admin_uat_reset_set(request: Request, _: str = Depends(require_admin)):
+        if not uat_mode.enabled():
+            return _uat_message("UAT mode is off.")
+        form = await request.form()
+        if not auth.form_token_ok(str(form.get("csrf_token") or ""), "admin-uat"):
+            return _uat_message("The form expired. Open the UAT screen and try again.")
+        email = str(form.get("email") or "")
+        try:
+            result = uat_mode.reset_set(
+                email,
+                first_name=str(form.get("first_name") or ""),
+                brand_name=str(form.get("brand_name") or ""),
+                creatr_email=str(form.get("creatr_email") or ""),
+                creatr_name=str(form.get("creatr_name") or ""),
+            )
+        except Exception as exc:
+            detail = getattr(exc, "detail", None) or str(exc)
+            return _uat_message(str(detail), email=email)
+        return _uat_message("UAT set reset. No email was sent.", error=False, email=result.get("email") or email)
 
     @app.get("/admin/uat.csv")
     def admin_uat_csv(_: str = Depends(require_admin)):

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.4
+
+Each UAT email keeps its own set, and a reset rebuilds that set. Stripe stays sandbox only. This does not merge.
+
+- `/admin/uat?email=` shows that set, including the invite links before anything is sent. Create never sends. Send invite is a separate click.
+- Reset UAT set deletes that email's shop products, Creatr, and test data, then creates a fresh set with the new first name, brand, and Creatr name. The catalogue starts empty.
+- The Creatr profile heading uses the Creatr name. That name is stored on the Creatr and in the profile.
+
 ## 0.27.3
 
 The staging test admin can sign in. Stripe stays sandbox only. This does not merge.
