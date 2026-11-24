@@ -177,3 +177,129 @@ def test_send_invite_delivers_two_emails_and_a_failed_one_retries_alone(monkeypa
     assert "re_creatr" in retried.text
     assert len(calls) == 3
     assert "Set up my Creatr profile" in (calls[-1].get("html") or "")
+
+
+def _csrf(page: str) -> str:
+    return page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+
+def _invite_path(page: str, slug: str) -> str:
+    marker = f'href="/uat/invite/{slug}/'
+    return "/uat/invite/" + slug + "/" + page.split(marker, 1)[1].split('"', 1)[0]
+
+
+def test_uat_sets_stay_with_their_email_and_reset_rebuilds(monkeypatch):
+    _setup(monkeypatch)
+    monkeypatch.setenv("UAT_MODE", "1")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://influencer-pro-staging.up.railway.app")
+    calls = []
+
+    class Record:
+        def send(self, **kwargs):
+            calls.append(kwargs)
+            return {"status": mailer.SENT, "id": "re_batch"}
+
+    monkeypatch.setattr(mailer, "default", lambda: Record())
+    admin = _cookie_header(_login())
+    page = client.get("/admin/uat", headers={**admin, **HTML})
+    token = _csrf(page.text)
+
+    def post_set(path: str, email: str, **fields):
+        data = {"csrf_token": token, "email": email, "first_name": "", "brand_name": "", "creatr_name": "", "creatr_email": ""}
+        data.update(fields)
+        return client.post(path, data=data, headers={**admin, **HTML})
+
+    alpha = post_set("/admin/uat/create-set", "alpha@example.com", first_name="Ada", brand_name="Alpha Home", creatr_name="Alpha Creatr")
+    assert alpha.status_code == 200
+    assert "No email was sent" in alpha.text
+    assert "Showing the set for alpha@example.com." in alpha.text
+    assert calls == []
+    alpha_supplier = _invite_path(alpha.text, "s")
+    alpha_creatr = _invite_path(alpha.text, "c")
+    beta = post_set("/admin/uat/create-set", "beta@example.com", first_name="Bea", brand_name="Beta Home", creatr_name="Beta Creatr")
+    beta_supplier = _invite_path(beta.text, "s")
+    assert alpha_supplier != beta_supplier
+    viewed = client.get("/admin/uat?email=alpha@example.com", headers={**admin, **HTML})
+    assert viewed.status_code == 200
+    assert alpha_supplier in viewed.text
+    assert beta_supplier not in viewed.text
+    assert "not sent yet" in viewed.text
+    silent = post_set("/admin/uat/create", "alpha@example.com")
+    assert "No email was sent" in silent.text
+    assert calls == []
+
+    supplier_page = client.get(alpha_supplier, headers=HTML)
+    joined = client.post(
+        alpha_supplier,
+        data={"csrf_token": _csrf(supplier_page.text), "date_of_birth": "1990-01-01", "age_confirmed": "yes", "password": "a-long-password-1"},
+        follow_redirects=False,
+    )
+    seller = {"Cookie": joined.headers["set-cookie"].split(";", 1)[0]}
+    products = client.get("/seller/products", headers={**seller, **HTML})
+    drafted = client.post(
+        "/seller/products/import/drafts",
+        data={
+            "csrf_token": _csrf(products.text),
+            "row_count": "1",
+            "pick": "0",
+            "title_0": "Stoneware bowl",
+            "url_0": "https://example.com/bowl",
+            "price_0": "42",
+            "category_0": "home",
+            "image_url_0": "https://example.com/bowl.jpg",
+            "commission_0": "15",
+        },
+        headers=seller,
+        follow_redirects=False,
+    )
+    assert drafted.status_code == 303
+    listed = client.get("/seller/products", headers={**seller, **HTML})
+    assert "Stoneware bowl" in listed.text
+
+    reset = post_set(
+        "/admin/uat/reset-set",
+        "alpha@example.com",
+        first_name="Stew",
+        brand_name="Stewart Home",
+        creatr_name="Influencer Stew",
+    )
+    assert "UAT set reset. No email was sent." in reset.text
+    assert "Showing the set for alpha@example.com." in reset.text
+    assert 'value="Stewart Home"' in reset.text
+    assert 'value="Influencer Stew"' in reset.text
+    assert calls == []
+    fresh_supplier = _invite_path(reset.text, "s")
+    fresh_creatr = _invite_path(reset.text, "c")
+    assert fresh_supplier != alpha_supplier
+    assert client.get(alpha_supplier, headers=HTML).status_code == 404
+    assert client.get(alpha_creatr, headers=HTML).status_code == 404
+    fresh_page = client.get(fresh_supplier, headers=HTML)
+    fresh_join = client.post(
+        fresh_supplier,
+        data={"csrf_token": _csrf(fresh_page.text), "date_of_birth": "1990-01-01", "age_confirmed": "yes", "password": "a-long-password-1"},
+        follow_redirects=False,
+    )
+    fresh_seller = {"Cookie": fresh_join.headers["set-cookie"].split(";", 1)[0]}
+    fresh_products = client.get("/seller/products", headers={**fresh_seller, **HTML})
+    assert fresh_products.status_code == 200
+    assert "Stoneware bowl" not in fresh_products.text
+    creatr_page = client.get(fresh_creatr, headers=HTML)
+    creatr_join = client.post(
+        fresh_creatr,
+        data={"csrf_token": _csrf(creatr_page.text), "date_of_birth": "1991-02-02", "age_confirmed": "yes", "password": "a-long-password-1"},
+        follow_redirects=False,
+    )
+    creatr_cookie = {"Cookie": creatr_join.headers["set-cookie"].split(";", 1)[0]}
+    profile = client.get("/creator/profile", headers={**creatr_cookie, **HTML})
+    assert "<h1>Influencer Stew</h1>" in profile.text
+    assert "<h1>@" not in profile.text
+    press = reset.text.split('name="press_id" value="', 1)[1].split('"', 1)[0]
+    sent = client.post(
+        "/admin/uat/send",
+        data={"csrf_token": token, "email": "alpha@example.com", "press_id": press},
+        headers={**admin, **HTML},
+    )
+    assert sent.status_code == 200
+    assert len(calls) == 2
+    assert "Hi Stew," in (calls[0].get("text") or "") + (calls[1].get("text") or "")
+

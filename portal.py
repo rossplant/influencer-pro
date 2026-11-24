@@ -1118,8 +1118,9 @@ def _creator_body(page: str, profile: dict, csrf: str, *, base_url: str = "", **
         badge = f"<p>Foundr #{html.escape(str(number))}</p>" if number else ""
         audience = profile.get("audience")
         audience_html = f"<p>Audience: {int(audience):,}</p>" if audience else ""
+        heading = (profile.get("name") or "").strip() or "Creatr"
         return badge + audience_html + f"""
-        <h1>{html.escape(profile.get('handle') or '')}</h1>
+        <h1>{html.escape(heading)}</h1>
         <form method="post" action="/creator/profile">
           <input type="hidden" name="csrf_token" value="{csrf}">
           <label>Active categories <input name="active_categories" value="{html.escape(active)}"></label>

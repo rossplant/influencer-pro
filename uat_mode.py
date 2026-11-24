@@ -170,6 +170,7 @@ def current_set(email: str | None = None) -> dict | None:
                 "first_name": row.first_name or "",
                 "brand_name": row.brand_name or "",
                 "creatr_email": row.creatr_email or row.email,
+                "creatr_name": _creator_name(row.creator_id),
                 "invite_sent_at": None if row.invite_sent_at is None else row.invite_sent_at.isoformat(),
                 "invite_provider_id": row.invite_provider_id or "",
                 "last_press_id": row.last_press_id or "",
@@ -180,9 +181,13 @@ def current_set(email: str | None = None) -> dict | None:
     if wanted:
         found = store.get(wanted)
         if found:
+            if not found.get("creatr_name"):
+                found["creatr_name"] = _creator_name(found.get("creator_id") or "")
             return found
         for row in store.values():
             if row.get("creatr_email") == wanted:
+                if not row.get("creatr_name"):
+                    row["creatr_name"] = _creator_name(row.get("creator_id") or "")
                 return row
         return None
     found = getattr(db, "memory_uat_ids", None) or {}
@@ -230,6 +235,27 @@ def _identity(first_name: str, brand_name: str, creatr_email: str, supplier_emai
     return first, brand, creatr or supplier_email
 
 
+def _creator_name(creator_id: str) -> str:
+    if not creator_id:
+        return ""
+    if db.configured():
+        from models import Creator
+
+        with db.session_scope() as session:
+            row = session.get(Creator, creator_id)
+            if row is None:
+                return ""
+            return str(row.name or (row.profile or {}).get("name") or "")
+    record = db.memory_creators.get(creator_id)
+    if isinstance(record, dict):
+        return str(record.get("name") or "")
+    return ""
+
+
+def _display_name(creatr_name: str, first: str) -> str:
+    return (creatr_name or "").strip()[:120] or first or "UAT Creatr"
+
+
 def _rename_shop(shop_id: str, brand: str) -> None:
     shop = db.memory_shops.get(shop_id)
     if shop is not None:
@@ -251,14 +277,27 @@ def _rename_creator(creator_id: str, name: str) -> None:
     stored = db.memory_creators.get(creator_id)
     if isinstance(stored, dict):
         stored["name"] = name
+    obj = db.memory_creator_objects.get(creator_id)
+    if obj is not None:
+        profile = dict(getattr(obj, "profile", None) or {})
+        profile["name"] = name
+        obj.profile = profile
+        obj.name = name
     if not db.configured():
         return
+    from sqlalchemy.orm.attributes import flag_modified
+
     from models import Creator
 
     with db.session_scope() as session:
         row = session.get(Creator, creator_id)
-        if row is not None:
-            row.name = name
+        if row is None:
+            return
+        row.name = name
+        profile = dict(row.profile or {})
+        profile["name"] = name
+        row.profile = profile
+        flag_modified(row, "profile")
 
 
 def _save_identity(row: dict) -> None:
@@ -286,7 +325,7 @@ def _index_set(row: dict) -> None:
     _sync(row)
 
 
-def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "", creatr_email: str = "") -> dict:
+def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "", creatr_email: str = "", creatr_name: str = "") -> dict:
     """Create the supplier and Creatr. The same supplier email is reused. A different email is a new set."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
@@ -296,14 +335,16 @@ def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "",
     if "@" not in email:
         raise ValueError("Enter an email address for the password link")
     first, brand, creatr_address = _identity(first_name, brand_name, creatr_email, email)
+    display = _display_name(creatr_name, first)
     existing = current_set(email)
     if existing and existing.get("email") == email:
         existing["reused"] = True
         existing["first_name"] = first
         existing["brand_name"] = brand
         existing["creatr_email"] = creatr_address
+        existing["creatr_name"] = display
         _rename_shop(existing["shop_id"], brand)
-        _rename_creator(existing["creator_id"], first or "UAT Creatr")
+        _rename_creator(existing["creator_id"], display)
         _save_identity(existing)
         _issue_invites(existing)
         return existing
@@ -341,7 +382,7 @@ def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "",
         {
             "influencer_id": creator_id,
             "handle": f"@uat{creator_id.replace('-', '')[:8]}",
-            "name": first or "UAT Creatr",
+            "name": display,
             "areas_of_interest": ["home"],
             "preferred_promotion_styles": ["educational"],
             "active_categories": ["home"],
@@ -362,6 +403,7 @@ def create_set(notify_email: str, *, first_name: str = "", brand_name: str = "",
         "creatr_email": creatr_address,
         "first_name": first,
         "brand_name": brand,
+        "creatr_name": display,
         "shop_id": shop_id,
         "creator_id": creator_id,
         "audience": 45000,
@@ -551,7 +593,7 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
     """Send the supplier invite and the Creatr invite. Pass role to retry one of them."""
     if not enabled():
         raise RuntimeError("UAT mode is off")
-    ids = current_set(email) or current_set()
+    ids = current_set(email) if (email or "").strip() else current_set()
     if not ids or "@" not in str(ids.get("email") or ""):
         raise ValueError("Create a UAT set before sending the invite.")
     press = (press_id or "").strip()
@@ -633,8 +675,85 @@ def send_invite(press_id: str = "", base_url: str = "", email: str = "", role: s
     }
 
 
-def create_and_send(email: str, press_id: str, base_url: str = "", *, first_name: str = "", brand_name: str = "", creatr_email: str = "") -> dict:
-    created = create_set(email, first_name=first_name, brand_name=brand_name, creatr_email=creatr_email)
+def _product_shop(product) -> str:
+    if isinstance(product, dict):
+        return str(product.get("shop_id") or "")
+    return str(getattr(product, "shop_id", "") or "")
+
+
+def _purge_set(row: dict) -> None:
+    """Remove one UAT set, its shop products, and its Creatr. Other sets stay."""
+    shop_id = row.get("shop_id")
+    creator_id = row.get("creator_id")
+    emails = {row.get("email"), row.get("creatr_email")}
+    emails.discard(None)
+    emails.discard("")
+    if hasattr(db, "memory_portal_accounts"):
+        db.memory_portal_accounts = [item for item in db.memory_portal_accounts if getattr(item, "email", None) not in emails]
+    db.memory_products = {key: item for key, item in db.memory_products.items() if _product_shop(item) != shop_id}
+    if shop_id:
+        db.memory_shops.pop(shop_id, None)
+        db.memory_shortlists = [item for item in db.memory_shortlists if getattr(item, "shop_id", None) != shop_id]
+        kept = []
+        for item in db.memory_shortlist_items:
+            shortlist = next((entry for entry in db.memory_shortlists if entry.id == getattr(item, "shortlist_id", None)), None)
+            if shortlist is not None:
+                kept.append(item)
+        db.memory_shortlist_items = kept
+    if creator_id:
+        db.memory_creators.pop(creator_id, None)
+        db.memory_creator_objects.pop(creator_id, None)
+    db.memory_uat_invites = [item for item in _invite_rows() if item.get("set_id") != row.get("id")]
+    store = getattr(db, "memory_uat_by_email", None) or {}
+    for key, item in list(store.items()):
+        if item.get("id") == row.get("id"):
+            store.pop(key, None)
+    if getattr(db, "memory_uat_ids", {}).get("id") == row.get("id"):
+        db.memory_uat_ids = {}
+    if not db.configured():
+        return
+    from sqlalchemy import delete, select
+    from sqlalchemy.exc import IntegrityError
+
+    from models import Creator, PortalAccount, Product, Shop, Shortlist, ShortlistExclusion, ShortlistItem, UatInvite, UatSet
+
+    with db.session_scope() as session:
+        session.execute(delete(UatInvite).where(UatInvite.set_id == row["id"]))
+        if shop_id:
+            shortlist_ids = list(session.scalars(select(Shortlist.id).where(Shortlist.shop_id == shop_id)))
+            if shortlist_ids:
+                session.execute(delete(ShortlistItem).where(ShortlistItem.shortlist_id.in_(shortlist_ids)))
+                session.execute(delete(ShortlistExclusion).where(ShortlistExclusion.shortlist_id.in_(shortlist_ids)))
+            session.execute(delete(Shortlist).where(Shortlist.shop_id == shop_id))
+            session.execute(delete(Product).where(Product.shop_id == shop_id))
+            session.execute(delete(PortalAccount).where(PortalAccount.shop_id == shop_id))
+        if creator_id:
+            session.execute(delete(PortalAccount).where(PortalAccount.creator_id == creator_id))
+        session.execute(delete(UatSet).where(UatSet.id == row["id"]))
+    try:
+        with db.session_scope() as session:
+            if creator_id:
+                session.execute(delete(Creator).where(Creator.id == creator_id))
+            if shop_id:
+                session.execute(delete(Shop).where(Shop.id == shop_id))
+    except IntegrityError:
+        return
+
+
+def reset_set(notify_email: str, *, first_name: str = "", brand_name: str = "", creatr_email: str = "", creatr_name: str = "") -> dict:
+    """Delete one email's UAT set and create a fresh one. Nothing is emailed."""
+    email = (notify_email or "").strip().lower()
+    existing = current_set(email)
+    if existing and existing.get("email") == email:
+        _purge_set(existing)
+    created = create_set(email, first_name=first_name, brand_name=brand_name, creatr_email=creatr_email, creatr_name=creatr_name)
+    created["reset"] = True
+    created["reused"] = False
+    return created
+
+
+def create_and_send(email: str, press_id: str, base_url: str = "", *, first_name: str = "", brand_name: str = "", creatr_email: str = "", creatr_name: str = "") -> dict:
+    created = create_set(email, first_name=first_name, brand_name=brand_name, creatr_email=creatr_email, creatr_name=creatr_name)
     sent = send_invite(press_id, base_url, email=created["email"])
     return {**created, **sent}
 
